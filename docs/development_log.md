@@ -136,3 +136,52 @@ Close the visible UI rough edges before starting larger architecture work.
   - move pure scope display algorithms out of `MainWindow`
   - prepare a serial controller split so new tools do not continue to bloat `gui.py`
   - add a no-hardware fake transport probe for future Keil and replay work
+
+## Stage 3 - Architecture Foundation Batch 1
+
+### Goal
+
+Start reducing backend coupling so Keil, pyOCD, serial, and future replay/protocol tools can share stable acquisition boundaries.
+
+### Completed
+
+- Added `src/core/transports/` capability protocols:
+  - `VariableReadTransport`
+  - `SampleSeriesTransport`
+  - `SampleRowsTransport`
+  - `TargetControl`
+  - `VariableWriteTransport`
+  - `DebugTransport`
+- Changed `DataCollector` typing from concrete `SWDBackend` to `VariableReadTransport`.
+- Added `tools/collector_fake_transport_probe.py`, a no-hardware probe that starts the real collector thread against a fake transport.
+- Moved serial protocol parsing into `src/core/decoders/serial.py`.
+- Added `src/core/decoders/__init__.py` as the public decoder entry.
+- Kept `src/core/serial_backend.py` compatibility exports so existing serial tools still import `SerialProtocolParser` and `JUSTFLOAT_TAIL` from the old path.
+
+### Verified
+
+- `python -m py_compile main.py src\core\collector.py src\core\serial_backend.py src\core\decoders\serial.py src\core\transports\base.py src\ui\gui.py src\ui\serial_tab.py tools\collector_fake_transport_probe.py`
+- `python -m py_compile src\core\collector.py src\core\transports\base.py src\core\transports\__init__.py src\core\decoders\__init__.py src\core\decoders\serial.py src\core\serial_backend.py tools\collector_fake_transport_probe.py`
+- `python tools\collector_fake_transport_probe.py`
+  - PASS, collected two fake variable series without hardware.
+  - Latest run: `samples=56`, `actual_rate=248.6Hz`.
+- `python tools\serial_parser_probe.py`
+  - PASS for CSV, FireWater, JustFloat, raw text, and hex lines after decoder extraction.
+- `python tools\ui_serial_integration_probe.py --output-dir %TEMP%\loopmaster-stage3\serial`
+  - PASS, serial UI still renders after decoder extraction.
+- `python tools\ui_close_process_probe.py --scenario sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `784.9ms`.
+
+### Notes
+
+- This stage intentionally does not add Keil control yet. It creates the capability vocabulary needed for a Keil transport to fit cleanly beside pyOCD.
+- `DataCollector` still uses duck-typed optional methods (`read_batch_rows`, `read_batch_samples`) for high-rate paths; the new protocols document those capabilities so later refactors can become stricter.
+- Keil is installed under `D:\Keil`; a separate read-only discovery pass is in progress for UVSOCK/debug command integration.
+
+### Next Target
+
+- Continue architecture foundation:
+  - inspect `D:\Keil` and document the most realistic Keil bridge path
+  - extract pure scope display algorithms from `MainWindow`
+  - start moving serial worker lifecycle into a controller object
+  - keep UI and close-process probes green after each slice

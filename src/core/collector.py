@@ -7,8 +7,8 @@ from typing import Optional
 
 import numpy as np
 
-from src.core.models import Variable, TypeInfo
-from src.core.mem_backend import SWDBackend
+from src.core.models import TypeInfo
+from src.core.transports import VariableReadTransport
 
 
 class RingBuffer:
@@ -107,7 +107,7 @@ class RingBuffer:
 
 class DataCollector:
     def __init__(self):
-        self._backend: Optional[SWDBackend] = None
+        self._backend: Optional[VariableReadTransport] = None
         self._variables: list[tuple[str, int, TypeInfo]] = []
         self._buffers: dict[str, RingBuffer] = {}
         self._timestamps: Optional[RingBuffer] = None
@@ -122,7 +122,7 @@ class DataCollector:
         self._t0 = 0.0
         self._timer_precision_active = False
 
-    def set_backend(self, backend: SWDBackend):
+    def set_backend(self, backend: VariableReadTransport):
         self._backend = backend
 
     def configure(self, sample_rate: int, buffer_seconds: float = 10.0):
