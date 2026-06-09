@@ -41,6 +41,43 @@ class SourceTreeNode:
 
 
 @dataclass(frozen=True)
+class CodeLine:
+    number: int
+    text: str
+
+
+@dataclass(frozen=True)
+class CodeDocument:
+    path: Path
+    language: str
+    lines: tuple[CodeLine, ...]
+
+    @property
+    def line_count(self) -> int:
+        return len(self.lines)
+
+    def line_text(self, number: int) -> str:
+        if number < 1 or number > len(self.lines):
+            return ""
+        return self.lines[number - 1].text
+
+
+@dataclass(frozen=True)
+class SearchMatch:
+    line: int
+    column: int
+    text: str
+
+
+@dataclass(frozen=True)
+class LineDecoration:
+    line: int
+    kind: str
+    label: str = ""
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class Breakpoint:
     path: Path
     line: int
@@ -164,6 +201,77 @@ def source_tree_from_entries(entries: tuple[SourceEntry, ...]) -> SourceTreeNode
         for name, nodes in sorted(group_map.items(), key=lambda item: item[0].lower())
     )
     return SourceTreeNode(name="Sources", children=groups)
+
+
+def load_code_document(path: str | Path, max_bytes: int = 2_000_000) -> CodeDocument:
+    source_path = Path(path).expanduser().resolve()
+    size = source_path.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"source file is too large: {size} bytes")
+    text = source_path.read_text(encoding="utf-8-sig", errors="replace")
+    raw_lines = text.splitlines()
+    if text.endswith(("\n", "\r")):
+        raw_lines.append("")
+    lines = tuple(CodeLine(index + 1, line) for index, line in enumerate(raw_lines))
+    return CodeDocument(
+        path=source_path,
+        language=SOURCE_LANGUAGES.get(source_path.suffix.lower(), "text"),
+        lines=lines,
+    )
+
+
+def search_document(
+    document: CodeDocument,
+    query: str,
+    *,
+    case_sensitive: bool = False,
+    max_matches: int = 500,
+) -> tuple[SearchMatch, ...]:
+    query = str(query)
+    if not query:
+        return ()
+    needle = query if case_sensitive else query.lower()
+    matches: list[SearchMatch] = []
+    for line in document.lines:
+        haystack = line.text if case_sensitive else line.text.lower()
+        start = 0
+        while True:
+            column = haystack.find(needle, start)
+            if column < 0:
+                break
+            matches.append(SearchMatch(line.number, column + 1, line.text[column:column + len(query)]))
+            if len(matches) >= max_matches:
+                return tuple(matches)
+            start = column + max(1, len(needle))
+    return tuple(matches)
+
+
+def line_decorations(
+    document: CodeDocument,
+    breakpoints: BreakpointStore | None = None,
+    *,
+    current_pc_line: int | None = None,
+    run_line: int | None = None,
+    search_query: str = "",
+) -> tuple[LineDecoration, ...]:
+    decorations: list[LineDecoration] = []
+    if breakpoints is not None:
+        for breakpoint in breakpoints.for_file(document.path):
+            decorations.append(
+                LineDecoration(
+                    line=breakpoint.line,
+                    kind="breakpoint",
+                    label=breakpoint.condition,
+                    enabled=breakpoint.enabled,
+                )
+            )
+    if current_pc_line is not None and 1 <= int(current_pc_line) <= document.line_count:
+        decorations.append(LineDecoration(line=int(current_pc_line), kind="pc", label="PC"))
+    if run_line is not None and 1 <= int(run_line) <= document.line_count:
+        decorations.append(LineDecoration(line=int(run_line), kind="run", label="Run"))
+    for match in search_document(document, search_query):
+        decorations.append(LineDecoration(line=match.line, kind="search", label=match.text))
+    return tuple(sorted(decorations, key=lambda item: (item.line, item.kind, item.label)))
 
 
 def _select_target(project: KeilProject, target_name: str | None) -> KeilTarget | None:

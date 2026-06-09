@@ -12,6 +12,9 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_workbench import (  # noqa: E402
     BreakpointStore,
+    line_decorations,
+    load_code_document,
+    search_document,
     source_entries_from_keil_project,
     source_tree_from_entries,
 )
@@ -64,13 +67,17 @@ def main() -> int:
         (root / "Core" / "Src").mkdir(parents=True)
         (root / "Core" / "Inc").mkdir(parents=True)
         project_dir.mkdir(parents=True)
-        for path in (
-            root / "Core" / "Src" / "main.c",
-            root / "Core" / "Src" / "pid.c",
-            root / "Core" / "Inc" / "pid.h",
-            project_dir / "startup.s",
-        ):
-            path.write_text("// fixture\n", encoding="utf-8")
+        (root / "Core" / "Src" / "main.c").write_text(
+            "int main(void) {\n"
+            "    int speed = 0;\n"
+            "    speed += 60;\n"
+            "    return speed;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "Core" / "Src" / "pid.c").write_text("// pid fixture\n", encoding="utf-8")
+        (root / "Core" / "Inc" / "pid.h").write_text("// pid header\n", encoding="utf-8")
+        (project_dir / "startup.s").write_text("; startup\n", encoding="utf-8")
         project_path = project_dir / "DebugDemo.uvprojx"
         project_path.write_text(PROJECT, encoding="utf-8")
 
@@ -100,6 +107,25 @@ def main() -> int:
         _assert(store.toggle(pid_path, 21) is not None, "toggle should add new breakpoint")
         _assert(store.remove(main_path, 12), "remove should return true for existing breakpoint")
         _assert(len(store.all()) == 1, "final breakpoint count mismatch")
+
+        store.add(main_path, 3, condition="speed > 50")
+        document = load_code_document(main_path)
+        _assert(document.line_count == 6, "document line count mismatch")
+        _assert(document.language == "c", "document language mismatch")
+        matches = search_document(document, "speed")
+        _assert(len(matches) == 3, f"expected 3 speed matches, got {len(matches)}")
+        decorations = line_decorations(
+            document,
+            store,
+            current_pc_line=2,
+            run_line=4,
+            search_query="speed",
+        )
+        kinds = {(item.line, item.kind) for item in decorations}
+        _assert((3, "breakpoint") in kinds, "breakpoint decoration missing")
+        _assert((2, "pc") in kinds, "pc decoration missing")
+        _assert((4, "run") in kinds, "run decoration missing")
+        _assert(sum(1 for item in decorations if item.kind == "search") == 3, "search decoration count mismatch")
 
     print("PASS debug workbench model probe")
     return 0

@@ -658,3 +658,55 @@ Create pure core models for the future modern Keil debugger frontend so the code
   - map line numbers to breakpoint decorations
   - provide search/current-PC/run-line decoration state
   - add probes with synthetic files before building the visual editor
+
+## Stage 13 - Code Document And Line Decoration Model
+
+### Goal
+
+Add a Qt-free code document layer that can feed a future modern source editor with line text, search matches, breakpoint decorations, current-PC highlights, and run-line highlights.
+
+### Completed
+
+- Extended `src/core/debug_workbench.py`.
+- Added code document models:
+  - `CodeLine`
+  - `CodeDocument`
+  - `SearchMatch`
+  - `LineDecoration`
+- Added `load_code_document()`:
+  - only loads an explicitly selected file
+  - enforces a max file size
+  - decodes UTF-8 with BOM support and replacement for invalid bytes
+  - classifies language by suffix
+- Added `search_document()` for case-insensitive/case-sensitive search with a match limit.
+- Added `line_decorations()`:
+  - breakpoint decorations from `BreakpointStore`
+  - current PC line
+  - run line
+  - search result decorations
+- Expanded `tools/debug_workbench_model_probe.py` to cover document loading, search, and line decoration behavior.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py tools\debug_workbench_model_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS, source tree, breakpoint store, document load, search, and line decorations all passed.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, real project metadata still parses.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works.
+- `git diff --check -- src/core/debug_workbench.py tools/debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage reads only synthetic source files in the probe. It still does not launch Keil, access ST-Link/F401CCU6, or call UVSOCK debug commands.
+- The future visual editor can now render from stable core state instead of inventing breakpoint/search/PC semantics inside Qt widgets.
+
+### Next Target
+
+- Add a first read-only debug workbench UI surface:
+  - show a source tree from a Keil project
+  - show a source preview with line numbers
+  - render breakpoint/current-PC/search decorations from the core model
+  - keep it disconnected from Keil runtime until UVSOCK smoke is verified
