@@ -442,3 +442,61 @@ Add the first UVSOCK connection attempt path, but keep it opt-in and read-only: 
   - provide the exact command needed to start uVision with a UVSOCK port
   - keep automatic launch disabled by default
   - when the user explicitly opts in, start Keil with UVSOCK enabled and run the open/status/close probe
+
+## Stage 9 - Keil UVSOCK Launch Planning
+
+### Goal
+
+Make the next real UVSOCK connection test repeatable by generating the exact uVision launch command for a chosen port and optional project, while keeping automatic launch disabled by default.
+
+### Completed
+
+- Added `UvscLaunchPlan` and `UvscLaunchResult`.
+- Added `build_uvision_uvsock_command()`:
+  - selects `UV4.exe` from the discovered Keil installation
+  - validates the UVSOCK port
+  - accepts an optional Keil project and target
+  - generates a `UV4.exe <project> -s <port>` command
+  - returns `ready=False` when no project is supplied, so the command remains guidance-only
+- Added `start_uvision_uvsock()` for explicit future use; it is not called unless a probe/user passes `--launch-uvsock`.
+- Extended `tools/keil_uvsock_preflight_probe.py`:
+  - `--plan-launch --port <port>` prints a guidance command without launching Keil
+  - `--plan-launch --project <uvprojx>` verifies a project-backed command is ready
+  - `--launch-uvsock` requires an explicit project before starting uVision
+- Updated `docs/debug_workbench_plan.md` with the larger modern Keil debugger frontend goal:
+  - VSCode/CubeIDE-like code view
+  - visual breakpoints/gutter decorations
+  - Watch/local/global variables
+  - registers, call stack, RTOS/fault views
+  - run-control integration
+  - waveform timeline linkage
+  - open-source reference and license tracking requirements
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\uvsock.py tools\keil_uvsock_preflight_probe.py`
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --plan-launch --port 4827`
+  - PASS, generated guidance-only command and `ready=False`.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --plan-launch --port 4827 --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, generated project-backed command and `ready=True`.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --attempt-existing --port 4827 --status`
+  - PASS, did not attempt connection because uVision was not running.
+- `git diff --check -- docs/debug_workbench_plan.md src/core/keil/__init__.py src/core/keil/uvsock.py tools/keil_uvsock_preflight_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage still did not launch Keil, access ST-Link/F401CCU6, or call UVSOCK debug commands.
+- Local Keil projects were only listed/used by path for command planning; source/project content was not read.
+- The modern debugger frontend is now explicitly documented as a major future phase, not an accidental side feature.
+
+### Next Target
+
+- Add a user-controlled real UVSOCK smoke path:
+  - launch a selected Keil project with `--launch-uvsock`
+  - wait for uVision process detection
+  - run the opt-in open/status/close probe
+  - capture failures as actionable guidance
+  - keep all memory/variable writes disabled

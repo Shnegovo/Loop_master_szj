@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,26 @@ class UvscConnectionResult:
         if self.error:
             parts.append(f"error={self.error}")
         return "UVSOCK connection " + " ".join(parts)
+
+
+@dataclass(frozen=True)
+class UvscLaunchPlan:
+    command: tuple[str, ...]
+    cwd: Path | None
+    ready: bool
+    reasons: tuple[str, ...]
+
+    @property
+    def display_command(self) -> str:
+        return " ".join(shlex.quote(part) for part in self.command)
+
+
+@dataclass(frozen=True)
+class UvscLaunchResult:
+    plan: UvscLaunchPlan
+    launched: bool
+    pid: int | None = None
+    error: str = ""
 
 
 UVSC_STATUS_NAMES = {
@@ -234,6 +256,79 @@ def attempt_existing_uvsock_connection(
         status_name=uvsc_status_name(status_code) if status_code is not None else "",
         target_running=target_running,
     )
+
+
+def build_uvision_uvsock_command(
+    root: str | os.PathLike[str] | None,
+    port: int,
+    project: str | os.PathLike[str] | None = None,
+    target: str | None = None,
+    use_console: bool = False,
+) -> UvscLaunchPlan:
+    discovery = discover_keil(root)
+    reasons = []
+
+    if not discovery.installed or discovery.uv4_dir is None:
+        reasons.append("Keil/uVision was not discovered")
+        return UvscLaunchPlan(command=(), cwd=None, ready=False, reasons=tuple(reasons))
+
+    if not (1 <= int(port) <= 65535):
+        reasons.append("UVSOCK port must be in range 1..65535")
+
+    executable = discovery.uvision_com if use_console else discovery.uv4_exe
+    if executable is None or not executable.exists:
+        reasons.append("uVision executable is missing")
+        exe_path = ""
+    else:
+        exe_path = str(executable.path)
+
+    command: list[str] = [exe_path] if exe_path else []
+    if project:
+        project_path = Path(project).expanduser()
+        if not project_path.exists():
+            reasons.append(f"Keil project does not exist: {project_path}")
+        command.append(str(project_path))
+    else:
+        reasons.append("No Keil project was provided; launch is guidance-only")
+
+    command.extend(["-s", str(int(port))])
+    if target:
+        command.extend(["-t", str(target)])
+
+    return UvscLaunchPlan(
+        command=tuple(command),
+        cwd=discovery.uv4_dir,
+        ready=bool(command and not reasons),
+        reasons=tuple(reasons),
+    )
+
+
+def start_uvision_uvsock(
+    root: str | os.PathLike[str] | None,
+    port: int,
+    project: str | os.PathLike[str],
+    target: str | None = None,
+    use_console: bool = False,
+) -> UvscLaunchResult:
+    plan = build_uvision_uvsock_command(
+        root=root,
+        port=port,
+        project=project,
+        target=target,
+        use_console=use_console,
+    )
+    if not plan.ready:
+        return UvscLaunchResult(plan=plan, launched=False, error="; ".join(plan.reasons))
+
+    try:
+        process = subprocess.Popen(
+            list(plan.command),
+            cwd=str(plan.cwd) if plan.cwd else None,
+            close_fds=True,
+        )
+    except Exception as exc:
+        return UvscLaunchResult(plan=plan, launched=False, error=str(exc))
+    return UvscLaunchResult(plan=plan, launched=True, pid=int(process.pid))
 
 
 def load_uvsc_library(discovery: KeilDiscovery) -> UvscLoadResult:

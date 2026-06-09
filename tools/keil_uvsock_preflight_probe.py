@@ -14,7 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.core.keil.uvsock import attempt_existing_uvsock_connection, check_uvsock_preflight  # noqa: E402
+from src.core.keil.uvsock import (  # noqa: E402
+    attempt_existing_uvsock_connection,
+    build_uvision_uvsock_command,
+    check_uvsock_preflight,
+    start_uvision_uvsock,
+)
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -29,7 +34,45 @@ def main() -> int:
     parser.add_argument("--attempt-existing", action="store_true")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--project", default="")
+    parser.add_argument("--target", default="")
+    parser.add_argument("--plan-launch", action="store_true")
+    parser.add_argument("--launch-uvsock", action="store_true")
     args = parser.parse_args()
+
+    if args.plan_launch or args.launch_uvsock:
+        _assert(args.port is not None, "--port is required for UVSOCK launch planning")
+        if args.launch_uvsock:
+            _assert(args.project, "--project is required when actually launching uVision")
+            result = start_uvision_uvsock(
+                root=args.keil_root,
+                port=args.port,
+                project=args.project,
+                target=args.target or None,
+            )
+            print(f"UVSOCK launch command: {result.plan.display_command}")
+            if result.plan.reasons:
+                print(f"UVSOCK launch reasons: {'; '.join(result.plan.reasons)}")
+            _assert(result.launched, result.error or "uVision was not launched")
+            print(f"PASS keil uvsock launch pid={result.pid} port={args.port}")
+            return 0
+
+        plan = build_uvision_uvsock_command(
+            root=args.keil_root,
+            port=args.port,
+            project=args.project or None,
+            target=args.target or None,
+        )
+        print(f"UVSOCK launch command: {plan.display_command}")
+        if plan.reasons:
+            print(f"UVSOCK launch reasons: {'; '.join(plan.reasons)}")
+        _assert(plan.command, "launch command was not generated")
+        if args.project:
+            _assert(plan.ready, "launch plan should be ready when a valid project is provided")
+        else:
+            _assert(not plan.ready, "launch plan without a project must remain guidance-only")
+        print(f"PASS keil uvsock launch plan ready={plan.ready} port={args.port}")
+        return 0
 
     if args.attempt_existing:
         preflight, connection = attempt_existing_uvsock_connection(
