@@ -1992,7 +1992,7 @@ class MainWindow(QMainWindow):
                 root=self._keil_root,
                 port=self._debug_uvsock_port,
                 project=previous.project_path,
-                target=previous.target_name or None,
+                target=tab.debug_status.target_name or None,
             )
             diagnostics = self._debug_workbench_preflight_diagnostics(preflight, launch_plan)
         except Exception as exc:
@@ -2041,6 +2041,7 @@ class MainWindow(QMainWindow):
             ("可尝试连接", "是" if preflight.can_attempt_connection else "否"),
             ("预检原因", reasons),
             ("启动预览", plan_status),
+            ("UVSOCK 端口", str(self._debug_uvsock_port)),
             ("Keil 根目录", str(discovery.root or self._keil_root)),
             ("UVSOCK DLL", str(dll)),
             ("DLL 加载", "已加载" if preflight.load_result.loaded else preflight.load_result.error or "失败"),

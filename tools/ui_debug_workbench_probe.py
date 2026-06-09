@@ -224,12 +224,29 @@ def run(output_dir: Path, width: int, height: int) -> int:
             for row in range(tab.diagnostics_table.rowCount())
             if tab.diagnostics_table.item(row, 0) is not None
         }
-        for key in ("Keil 根目录", "UVSOCK DLL", "启动命令"):
+        for key in ("Keil 根目录", "UVSOCK DLL", "UVSOCK 端口", "启动命令"):
             if key not in diagnostic_keys:
                 issues.append(f"diagnostics table missing {key}: {sorted(diagnostic_keys)!r}")
         tab.search_edit.setText("speed")
+        if not tab.search_next_button.isEnabled():
+            issues.append("search next button should be enabled after a query with matches")
+        tab.search_next_button.click()
+        _pump(app, 0.1)
+        if getattr(tab, "_active_search_line", None) is None:
+            issues.append("search navigation did not activate a match")
+        if "搜索 1/" not in tab.marker_label.text():
+            issues.append(f"search navigation did not show active index: {tab.marker_label.text()!r}")
+        if tab.source_tree.currentItem() is None or "main.c" not in tab.source_tree.currentItem().text(0):
+            issues.append("source tree did not select the current source file")
         tab.add_breakpoint(12)
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
+        tab.breakpoint_table.setCurrentCell(1, 0)
+        tab.breakpoint_table.cellClicked.emit(1, 0)
+        _pump(app, 0.1)
+        if tab.editor.textCursor().blockNumber() + 1 != 24:
+            issues.append(f"breakpoint table did not navigate to line 24: {tab.editor.textCursor().blockNumber() + 1}")
+        tab.search_next_button.click()
+        _pump(app, 0.1)
         tab.set_debug_status(
             make_debug_status(
                 state=DebugRuntimeState.RUNNING,

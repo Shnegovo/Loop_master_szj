@@ -37,6 +37,7 @@ from src.core.debug_workbench import (
     DebugWorkbenchStatus,
     line_decorations,
     load_code_document,
+    search_document,
     source_entries_from_keil_project,
     source_tree_from_entries,
 )
@@ -179,6 +180,8 @@ class SourceCodeEditor(QPlainTextEdit):
                 selections.append(self._line_selection(line, QColor("#dbeafe")))
             elif "run" in kinds:
                 selections.append(self._line_selection(line, QColor("#dcfce7")))
+            elif "search_active" in kinds:
+                selections.append(self._line_selection(line, QColor("#ffe8a3")))
             elif "search" in kinds:
                 selections.append(self._line_selection(line, QColor("#fff7cc")))
             elif "breakpoint" in kinds:
@@ -228,6 +231,9 @@ class SourceCodeEditor(QPlainTextEdit):
         if "search" in kinds:
             painter.setPen(QPen(QColor("#f59e0b"), 2))
             painter.drawLine(width - 7, top + 4, width - 7, bottom - 4)
+        if "search_active" in kinds:
+            painter.setPen(QPen(QColor("#d97706"), 3))
+            painter.drawLine(width - 11, top + 4, width - 11, bottom - 4)
 
 class DebugWorkbenchTab(QWidget):
     """Modern Keil project source browser, disconnected from runtime control."""
@@ -243,6 +249,10 @@ class DebugWorkbenchTab(QWidget):
         self._current_document: CodeDocument | None = None
         self._current_pc_line: int | None = None
         self._run_line: int | None = None
+        self._active_search_line: int | None = None
+        self._search_matches = ()
+        self._search_index = -1
+        self._breakpoint_rows = ()
         self._diagnostics: tuple[tuple[str, str], ...] = ()
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
@@ -393,15 +403,29 @@ class DebugWorkbenchTab(QWidget):
         self.target_combo = PclComboBox()
         self.target_combo.setObjectName("debugCombo")
         self.target_combo.setMinimumWidth(180)
-        self.target_combo.currentTextChanged.connect(self._rebuild_source_tree)
+        self.target_combo.currentTextChanged.connect(self._on_target_changed)
         layout.addWidget(self.target_combo, 0, 2)
 
         self.search_edit = QLineEdit()
         self.search_edit.setObjectName("debugSearch")
         self.search_edit.setPlaceholderText("搜索当前文件")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.textChanged.connect(self._refresh_decorations)
-        layout.addWidget(self.search_edit, 0, 3)
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        search_box = QHBoxLayout()
+        search_box.setContentsMargins(0, 0, 0, 0)
+        search_box.setSpacing(6)
+        search_box.addWidget(self.search_edit, 1)
+        self.search_prev_button = QPushButton("上一处")
+        self.search_prev_button.setObjectName("debugSearchNavButton")
+        self.search_prev_button.setToolTip("跳到上一处搜索结果")
+        self.search_prev_button.clicked.connect(lambda: self._navigate_search(-1))
+        search_box.addWidget(self.search_prev_button)
+        self.search_next_button = QPushButton("下一处")
+        self.search_next_button.setObjectName("debugSearchNavButton")
+        self.search_next_button.setToolTip("跳到下一处搜索结果")
+        self.search_next_button.clicked.connect(lambda: self._navigate_search(1))
+        search_box.addWidget(self.search_next_button)
+        layout.addLayout(search_box, 0, 3)
 
         self.summary_label = QLabel("未打开工程")
         self.summary_label.setObjectName("debugSummary")
@@ -493,6 +517,7 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.breakpoint_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.breakpoint_table.setAlternatingRowColors(True)
+        self.breakpoint_table.cellClicked.connect(self._on_breakpoint_table_clicked)
         self.breakpoint_table.setMinimumHeight(118)
         layout.addWidget(self.breakpoint_table, 1)
         self._refresh_diagnostics_table()
@@ -540,6 +565,9 @@ class DebugWorkbenchTab(QWidget):
             self.source_tree.addTopLevelItem(placeholder)
             return
         target_name = self.target_combo.currentData() or self.target_combo.currentText() or None
+        if self._project is not None and target_name:
+            self._session.set_project(self._project, str(target_name))
+            self._apply_debug_status(self._session.status)
         entries = source_entries_from_keil_project(self._project, str(target_name) if target_name else None)
         self._source_tree = source_tree_from_entries(entries)
         for group in self._source_tree.children:
@@ -555,6 +583,11 @@ class DebugWorkbenchTab(QWidget):
                         file_item.setDisabled(True)
                 group_item.addChild(file_item)
         self.source_tree.expandToDepth(0)
+
+    def _on_target_changed(self) -> None:
+        self._rebuild_source_tree()
+        self._load_first_existing_source()
+        self._refresh_summary()
 
     def _load_first_existing_source(self) -> None:
         if self._source_tree is None:
@@ -583,6 +616,9 @@ class DebugWorkbenchTab(QWidget):
             return
         self._current_document = document
         self.file_label.setText(f"{document.path.name}  ·  {document.line_count} 行")
+        self._select_source_tree_path(document.path)
+        self._active_search_line = None
+        self._search_index = -1
         self._refresh_decorations()
         self._refresh_summary()
 
@@ -605,16 +641,100 @@ class DebugWorkbenchTab(QWidget):
             run_line=self._run_line,
             search_query=self.search_edit.text(),
         )
+        self._refresh_search_matches()
+        if self._active_search_line is not None:
+            decorations = tuple(decorations) + (
+                LineDecoration(line=self._active_search_line, kind="search_active", label="当前搜索"),
+            )
         self.editor.set_code_document(self._current_document, decorations)
         self.marker_label.setText(self._marker_text(decorations))
 
     def _refresh_breakpoint_table(self) -> None:
         breakpoints = self._breakpoints.all()
+        self._breakpoint_rows = breakpoints
         self.breakpoint_table.setRowCount(len(breakpoints))
         for row, breakpoint in enumerate(breakpoints):
             self._set_table_item(row, 0, "启用" if breakpoint.enabled else "停用")
             self._set_table_item(row, 1, breakpoint.path.name)
             self._set_table_item(row, 2, str(breakpoint.line))
+
+    def _on_search_changed(self) -> None:
+        self._active_search_line = None
+        self._search_index = -1
+        self._refresh_decorations()
+
+    def _refresh_search_matches(self) -> None:
+        if self._current_document is None:
+            self._search_matches = ()
+        else:
+            self._search_matches = search_document(self._current_document, self.search_edit.text())
+        if not self._search_matches:
+            self._search_index = -1
+            self._active_search_line = None
+        elif self._search_index >= len(self._search_matches):
+            self._search_index = len(self._search_matches) - 1
+        self._refresh_search_buttons()
+
+    def _refresh_search_buttons(self) -> None:
+        enabled = bool(self._search_matches)
+        for button in (getattr(self, "search_prev_button", None), getattr(self, "search_next_button", None)):
+            if button is not None:
+                button.setEnabled(enabled)
+
+    def _navigate_search(self, delta: int) -> None:
+        if self._current_document is None:
+            return
+        self._refresh_search_matches()
+        if not self._search_matches:
+            return
+        if self._search_index < 0:
+            self._search_index = 0 if delta >= 0 else len(self._search_matches) - 1
+        else:
+            self._search_index = (self._search_index + int(delta)) % len(self._search_matches)
+        match = self._search_matches[self._search_index]
+        self._active_search_line = match.line
+        self._scroll_editor_to_line(match.line)
+        self._refresh_decorations()
+
+    def _on_breakpoint_table_clicked(self, row: int, _column: int) -> None:
+        if not (0 <= int(row) < len(self._breakpoint_rows)):
+            return
+        breakpoint = self._breakpoint_rows[int(row)]
+        self._load_source(breakpoint.path)
+        self._scroll_editor_to_line(breakpoint.line)
+
+    def _scroll_editor_to_line(self, line: int) -> None:
+        block = self.editor.document().findBlockByNumber(max(0, int(line) - 1))
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        self.editor.setTextCursor(cursor)
+        self.editor.centerCursor()
+
+    def _select_source_tree_path(self, path: Path) -> None:
+        target = str(path.resolve()).lower()
+        found = self._find_source_item(self.source_tree.invisibleRootItem(), target)
+        if found is None:
+            return
+        self.source_tree.blockSignals(True)
+        self.source_tree.setCurrentItem(found)
+        found.setSelected(True)
+        parent = found.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        self.source_tree.blockSignals(False)
+
+    def _find_source_item(self, parent: QTreeWidgetItem, target: str) -> QTreeWidgetItem | None:
+        for index in range(parent.childCount()):
+            child = parent.child(index)
+            path_text = child.data(0, ROLE_PATH)
+            if path_text and str(Path(path_text).resolve()).lower() == target:
+                return child
+            found = self._find_source_item(child, target)
+            if found is not None:
+                return found
+        return None
 
     def _set_table_item(self, row: int, column: int, text: str) -> None:
         item = QTableWidgetItem(text)
@@ -679,7 +799,10 @@ class DebugWorkbenchTab(QWidget):
         if counts.get("run"):
             parts.append("运行行")
         if counts.get("search"):
-            parts.append(f"{counts['search']} 个搜索命中")
+            if self._search_matches and self._search_index >= 0:
+                parts.append(f"搜索 {self._search_index + 1}/{len(self._search_matches)}")
+            else:
+                parts.append(f"{counts['search']} 个搜索命中")
         if counts.get("breakpoint"):
             parts.append(f"{counts['breakpoint']} 个断点")
         return " / ".join(parts) if parts else "未连接运行时"
@@ -764,6 +887,26 @@ class DebugWorkbenchTab(QWidget):
                 background: #f3f6fa;
                 border-color: #dce6f0;
                 color: #9aa6b4;
+            }
+            QPushButton#debugSearchNavButton {
+                min-height: 34px;
+                min-width: 58px;
+                border-radius: 7px;
+                padding: 4px 8px;
+                font-weight: 560;
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                color: #334155;
+            }
+            QPushButton#debugSearchNavButton:hover {
+                background: #eef6ff;
+                border-color: #9fb8d4;
+                color: #1d4ed8;
+            }
+            QPushButton#debugSearchNavButton:disabled {
+                background: #f3f6fa;
+                border-color: #dce6f0;
+                color: #a8b3c0;
             }
             QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable,
             QTableWidget#debugDiagnosticsTable, QPlainTextEdit#debugCodeEditor {

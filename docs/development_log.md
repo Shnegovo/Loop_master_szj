@@ -938,3 +938,60 @@ Give the new debug workbench a compact, readable diagnostics panel that explains
   - breakpoint table click-to-source navigation
   - clearer selected-source state in the source tree
   - keep everything local/read-only until Keil breakpoint synchronization is deliberately introduced
+
+## Stage 18 - Debug Workbench Source Navigation Polish
+
+### Goal
+
+Make the debug workbench source view feel closer to a modern IDE by improving local search and breakpoint navigation, while keeping all behavior local/read-only and away from Keil runtime control.
+
+### Completed
+
+- Added `上一处` / `下一处` search navigation buttons beside the source search box.
+- Added current search-hit state with:
+  - highlighted active search line
+  - gutter marker for the active result
+  - marker text such as `搜索 1/28`
+- Added breakpoint-table click navigation back to the matching source line.
+- Added source-tree selection sync when a file is opened programmatically.
+- Added target-combo handling so switching a Keil target refreshes the source tree, loads the first source, updates the summary, and keeps the debug session target name current.
+- Fixed the no-hardware launch preview target risk noted during review: future `-t` preview now follows the selected target instead of stale project state.
+- Added `UVSOCK 端口` as a first-class diagnostics row.
+- Extended `tools/ui_debug_workbench_probe.py` to verify:
+  - search navigation activates a match
+  - marker text shows the active search index
+  - source tree selects the current source file
+  - breakpoint table navigation jumps to the expected line
+  - diagnostics include the UVSOCK port row
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The improvements are intentionally local UI behavior so later Keil synchronization can reuse the same interactions rather than replacing them.
+
+### Next Target
+
+- Add a safe debug command planning layer:
+  - model future Keil actions as explicit plans before execution
+  - render attach/halt/run/step/sync-breakpoint/write-variable plans as disabled previews
+  - include safety notes and required opt-in conditions per action
+  - keep execution disabled until a separate UVSOCK smoke stage is deliberately started
