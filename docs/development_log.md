@@ -500,3 +500,45 @@ Make the next real UVSOCK connection test repeatable by generating the exact uVi
   - run the opt-in open/status/close probe
   - capture failures as actionable guidance
   - keep all memory/variable writes disabled
+
+## Stage 10 - UVSOCK Smoke Orchestration
+
+### Goal
+
+Prepare the real UVSOCK smoke flow without making it automatic: the code can now launch/wait/connect/status/close as one orchestrated path, but probe defaults still avoid launching Keil unless `--launch-uvsock` is explicitly provided.
+
+### Completed
+
+- Added `UvscSmokeResult`.
+- Added `run_uvsock_smoke()`:
+  - optionally launches uVision with the selected project and UVSOCK port
+  - waits for a uVision process after launch
+  - reuses the existing opt-in open/status/close connection path
+  - refuses to launch without a project
+  - keeps all memory/variable writes disabled
+- Extended `tools/keil_uvsock_preflight_probe.py` with `--smoke` and `--wait-seconds`.
+- The smoke path can now be used in three tiers:
+  - dry preflight only
+  - smoke against an already running UVSOCK Keil
+  - explicit launch + smoke with `--launch-uvsock --project <uvprojx>`
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\uvsock.py tools\keil_uvsock_preflight_probe.py`
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --smoke --port 4827 --status`
+  - PASS, did not launch Keil and did not attempt connection because uVision was not running.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --plan-launch --port 4827 --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, launch plan remains ready for an explicit future smoke run.
+
+### Notes
+
+- This stage still did not launch Keil, use ST-Link/F401CCU6, or call any memory/variable APIs.
+- A real smoke run should be performed intentionally with a known project and port, then followed by UI integration only after the backend behavior is stable.
+
+### Next Target
+
+- Run a real UVSOCK smoke only when explicitly opted in:
+  - choose a known project
+  - launch uVision with UVSOCK
+  - verify open/status/close behavior
+  - document exact failure modes if UVSOCK or Keil project setup needs adjustment

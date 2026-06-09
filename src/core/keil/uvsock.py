@@ -11,6 +11,7 @@ import ctypes
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,24 @@ class UvscLaunchResult:
     launched: bool
     pid: int | None = None
     error: str = ""
+
+
+@dataclass(frozen=True)
+class UvscSmokeResult:
+    launch: UvscLaunchResult | None
+    preflight: UvscPreflight
+    connection: UvscConnectionResult
+    error: str = ""
+
+    def summary(self) -> str:
+        launched = self.launch.launched if self.launch else False
+        return (
+            "UVSOCK smoke "
+            f"launched={launched} "
+            f"attempted={self.connection.attempted} "
+            f"connected={self.connection.connected} "
+            f"error={self.error or self.connection.error or '--'}"
+        )
 
 
 UVSC_STATUS_NAMES = {
@@ -331,6 +350,64 @@ def start_uvision_uvsock(
     return UvscLaunchResult(plan=plan, launched=True, pid=int(process.pid))
 
 
+def run_uvsock_smoke(
+    root: str | os.PathLike[str] | None,
+    port: int,
+    project: str | os.PathLike[str] | None = None,
+    target: str | None = None,
+    launch: bool = False,
+    wait_seconds: float = 8.0,
+    query_status: bool = True,
+) -> UvscSmokeResult:
+    launch_result: UvscLaunchResult | None = None
+    if launch:
+        if not project:
+            preflight = check_uvsock_preflight(root=root, require_running=True)
+            return UvscSmokeResult(
+                launch=None,
+                preflight=preflight,
+                connection=UvscConnectionResult(
+                    attempted=False,
+                    connected=False,
+                    port=int(port),
+                    error="A Keil project is required to launch uVision",
+                ),
+                error="A Keil project is required to launch uVision",
+            )
+        launch_result = start_uvision_uvsock(
+            root=root,
+            port=port,
+            project=project,
+            target=target,
+        )
+        if not launch_result.launched:
+            preflight = check_uvsock_preflight(root=root, require_running=True)
+            return UvscSmokeResult(
+                launch=launch_result,
+                preflight=preflight,
+                connection=UvscConnectionResult(
+                    attempted=False,
+                    connected=False,
+                    port=int(port),
+                    error=launch_result.error,
+                ),
+                error=launch_result.error,
+            )
+        _wait_for_uvision(wait_seconds)
+
+    preflight, connection = attempt_existing_uvsock_connection(
+        root=root,
+        port=port,
+        query_status=query_status,
+    )
+    return UvscSmokeResult(
+        launch=launch_result,
+        preflight=preflight,
+        connection=connection,
+        error=connection.error,
+    )
+
+
 def load_uvsc_library(discovery: KeilDiscovery) -> UvscLoadResult:
     dll = discovery.preferred_uvsc
     if dll is None or not dll.exists:
@@ -429,3 +506,12 @@ def _safe_uvsc_uninit(library) -> None:
         library.UVSC_UnInit()
     except Exception:
         pass
+
+
+def _wait_for_uvision(timeout: float) -> bool:
+    deadline = time.perf_counter() + max(0.0, float(timeout))
+    while time.perf_counter() < deadline:
+        if list_running_uvision():
+            return True
+        time.sleep(0.1)
+    return bool(list_running_uvision())

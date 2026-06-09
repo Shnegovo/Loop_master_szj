@@ -18,6 +18,7 @@ from src.core.keil.uvsock import (  # noqa: E402
     attempt_existing_uvsock_connection,
     build_uvision_uvsock_command,
     check_uvsock_preflight,
+    run_uvsock_smoke,
     start_uvision_uvsock,
 )
 
@@ -38,7 +39,39 @@ def main() -> int:
     parser.add_argument("--target", default="")
     parser.add_argument("--plan-launch", action="store_true")
     parser.add_argument("--launch-uvsock", action="store_true")
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--wait-seconds", type=float, default=8.0)
     args = parser.parse_args()
+
+    if args.smoke:
+        _assert(args.port is not None, "--port is required for UVSOCK smoke")
+        result = run_uvsock_smoke(
+            root=args.keil_root,
+            port=args.port,
+            project=args.project or None,
+            target=args.target or None,
+            launch=args.launch_uvsock,
+            wait_seconds=args.wait_seconds,
+            query_status=args.status,
+        )
+        print(result.preflight.summary())
+        print(result.connection.summary())
+        if result.launch is not None:
+            print(f"UVSOCK launch command: {result.launch.plan.display_command}")
+            if result.launch.error:
+                print(f"UVSOCK launch error: {result.launch.error}")
+        if result.preflight.can_attempt_connection:
+            _assert(result.connection.attempted, "smoke should attempt connection after a clean preflight")
+            _assert(result.connection.connected, result.connection.error or "UVSOCK smoke failed")
+        else:
+            _assert(not result.connection.connected, "smoke connected despite failed preflight")
+        print(
+            "PASS keil uvsock smoke "
+            f"launched={result.launch.launched if result.launch else False} "
+            f"attempted={result.connection.attempted} "
+            f"connected={result.connection.connected}"
+        )
+        return 0
 
     if args.plan_launch or args.launch_uvsock:
         _assert(args.port is not None, "--port is required for UVSOCK launch planning")
