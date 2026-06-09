@@ -32,6 +32,8 @@ from src.parser.variable_inventory import VariableInventory
 from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
+from src.core.debug_workbench import DebugRuntimeState, make_debug_status, status_from_uvsock_preflight
+from src.core.keil.uvsock import check_uvsock_preflight
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -410,8 +412,12 @@ class MainWindow(QMainWindow):
         self._hero_roxy_frames: list[QPixmap] = []
         self._hero_roxy_index = 0
         self._shutdown_complete = False
+        self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
         cfg = self._load_config()
         if cfg:
+            keil_root = cfg.get("keil_root", "")
+            if keil_root:
+                self._keil_root = Path(str(keil_root))
             elf = cfg.get("elf_path", "")
             if elf and Path(elf).exists():
                 self._recent_elf_path = Path(elf)
@@ -1940,6 +1946,7 @@ class MainWindow(QMainWindow):
 
         self._tab_debug_workbench = DebugWorkbenchTab()
         self._tab_debug_workbench.summaryChanged.connect(self._refresh_hero)
+        self._setup_debug_workbench_connections()
         self._register_workspace_page("debug_sources", "源码", self._tab_debug_workbench, domain="debug")
 
         self._tab_serial = SerialTab()
@@ -1950,6 +1957,50 @@ class MainWindow(QMainWindow):
         self._refresh_nav_buttons()
         self._bind_button_motion(*self.findChildren(QPushButton))
         self._refresh_debug_buttons()
+
+    # ================================================================
+    #  Debug Workbench
+    # ================================================================
+
+    def _setup_debug_workbench_connections(self):
+        self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
+        self._tab_debug_workbench.set_debug_controls_ready(True)
+
+    def _on_debug_workbench_action(self, action_key: str):
+        if action_key == "discover":
+            self._discover_keil_for_debug_workbench()
+            return
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("该调试动作尚未接入后端。")
+
+    def _discover_keil_for_debug_workbench(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        previous = tab.debug_status
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在发现 Keil/UVSOCK...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            preflight = check_uvsock_preflight(root=self._keil_root, require_running=False)
+            status = status_from_uvsock_preflight(preflight, previous)
+        except Exception as exc:
+            message = f"Keil 预检失败：{exc}"
+            status = make_debug_status(
+                state=DebugRuntimeState.ERROR,
+                backend="keil",
+                detail=message,
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+                error=message,
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+        tab.set_debug_status(status, controls_ready=True)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(status.detail)
+        self._refresh_hero()
 
     # ================================================================
     #  Serial Assistant
@@ -4212,6 +4263,7 @@ class MainWindow(QMainWindow):
             "curve_colors": self._curve_color_overrides,
             "hidden_displayed_variables": sorted(self._hidden_displayed_variables),
             "monitored_variables": remembered_variables,
+            "keil_root": str(getattr(self, "_keil_root", Path("D:\\Keil"))),
             "serial_port": self._tab_serial.port_combo.currentData() if hasattr(self, "_tab_serial") else "",
             "serial_baudrate": int(self._tab_serial.baud_combo.currentText()) if hasattr(self, "_tab_serial") else 115200,
             "serial_protocol": self._tab_serial.protocol_combo.currentText() if hasattr(self, "_tab_serial") else "FireWater CSV",

@@ -454,7 +454,7 @@ def status_from_uvsock_preflight(
     discovery = getattr(preflight, "discovery", None)
     installed = bool(getattr(discovery, "installed", False))
     can_attempt = bool(getattr(preflight, "can_attempt_connection", False))
-    reasons = tuple(str(reason) for reason in getattr(preflight, "reasons", ()) if reason)
+    reasons = tuple(_debug_reason_text(str(reason)) for reason in getattr(preflight, "reasons", ()) if reason)
     running = bool(getattr(preflight, "uvision_running", False))
 
     if not installed:
@@ -706,6 +706,16 @@ def _optional_positive_int(value: int | None) -> int | None:
         return None
     value = int(value)
     return value if value > 0 else None
+
+
+def _debug_reason_text(reason: str) -> str:
+    translations = {
+        "Keil/uVision was not discovered": "未发现 Keil/uVision",
+        "UVSOCK DLL could not be loaded": "UVSOCK DLL 加载失败",
+        "uVision is not running": "uVision 未运行",
+        "preflight failed": "预检失败",
+    }
+    return translations.get(reason, reason)
 
 
 def _disabled_reason(enabled: bool, status: DebugWorkbenchStatus) -> str:

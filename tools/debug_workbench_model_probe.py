@@ -181,7 +181,7 @@ def main() -> int:
         )
         status = session.apply_uvsock_preflight(missing_preflight)
         _assert(status.state == DebugRuntimeState.ERROR, "missing Keil preflight should map to error")
-        _assert("not discovered" in status.error, "preflight error should retain reason")
+        _assert("未发现" in status.error, "preflight error should retain translated reason")
 
         idle_preflight = SimpleNamespace(
             discovery=SimpleNamespace(installed=True),

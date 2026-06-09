@@ -829,3 +829,55 @@ Add a pure, no-hardware debug workbench state layer so the new Keil-facing UI ca
   - feed the existing Keil bridge/preflight result into `DebugWorkbenchSession`
   - show Chinese success/error details in the debug workbench
   - keep attach, halt, run, breakpoint sync, and variable writes disabled until a later hardware/smoke stage
+
+## Stage 16 - No-Hardware Keil Discovery Wiring
+
+### Goal
+
+Wire the debug workbench `发现 Keil` action to the existing safe Keil/UVSOCK preflight path, so the UI can report real local Keil installation/preflight state without launching Keil, connecting UVSOCK, or touching the attached ST-Link/F401CCU6 target.
+
+### Completed
+
+- Added `debugActionRequested` signaling to `DebugWorkbenchTab`.
+- Added a controller-ready gate so debug action buttons can be enabled only when a UI controller is intentionally wired.
+- Connected `MainWindow` to the debug workbench action signal.
+- Implemented `_discover_keil_for_debug_workbench()` using the existing `check_uvsock_preflight()` helper.
+- Preserved the current project/target context when preflight status is applied.
+- Added `LOOPMASTER_KEIL_ROOT`/config-backed Keil root storage, defaulting to `D:\Keil`.
+- Translated common Keil/UVSOCK preflight reasons into Chinese before they reach the debug workbench status line.
+- Extended the debug UI probe so it verifies:
+  - the discover action is enabled when the controller is wired
+  - the no-hardware preflight leaves the UI in a non-busy state
+  - the synthetic runtime-control state still keeps real control buttons disabled when no backend controller is attached
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS, translated preflight reasons and state reducers remain valid.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS, workspace navigation still renders.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS, serial assistant integration still renders.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still finds `UVSC64.dll`.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, real Keil project metadata still parses.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The `发现 Keil` button now performs a real local preflight, but `连接`/`暂停`/`运行` remain guarded for a later explicit hardware or UVSOCK smoke stage.
+- The current PowerShell permission issue was environmental: the previous restricted sandbox path failed around `PwshShim`, while the full-access environment runs `pwsh 7.6.2` normally.
+
+### Next Target
+
+- Add a read-only debug session diagnostics panel:
+  - show Keil root, selected UVSOCK DLL, uVision running state, process count, and preflight reasons
+  - expose a safe launch-plan preview for UVSOCK without starting Keil
+  - keep actual attach/halt/run behind a later opt-in smoke stage

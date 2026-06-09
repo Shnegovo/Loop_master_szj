@@ -210,6 +210,15 @@ def run(output_dir: Path, width: int, height: int) -> int:
         window._show_workspace_page("debug_sources")
         tab = window._tab_debug_workbench
         tab.load_project(project_path)
+        discover_button = getattr(tab, "_action_buttons", {}).get("discover")
+        if discover_button is None or not discover_button.isEnabled():
+            issues.append("discover action should be enabled when debug workbench controller is wired")
+        window._discover_keil_for_debug_workbench()
+        _pump(app, 0.15)
+        if "正在发现" in tab.status_text.text():
+            issues.append(f"discover preflight left the UI busy: {tab.status_text.text()!r}")
+        if discover_button is None or not discover_button.isEnabled():
+            issues.append("discover action should remain available after no-hardware preflight")
         tab.search_edit.setText("speed")
         tab.add_breakpoint(12)
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")

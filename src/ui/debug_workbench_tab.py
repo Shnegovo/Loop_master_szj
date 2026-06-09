@@ -233,6 +233,7 @@ class DebugWorkbenchTab(QWidget):
     """Modern Keil project source browser, disconnected from runtime control."""
 
     summaryChanged = Signal()
+    debugActionRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -268,6 +269,10 @@ class DebugWorkbenchTab(QWidget):
     @property
     def current_document(self) -> CodeDocument | None:
         return self._current_document
+
+    @property
+    def debug_status(self) -> DebugWorkbenchStatus:
+        return self._session.status
 
     def hero_summary(self) -> tuple[str, str, str]:
         if self._project is None:
@@ -314,6 +319,10 @@ class DebugWorkbenchTab(QWidget):
         self._apply_debug_status(status)
         self._refresh_decorations()
         self._refresh_summary()
+
+    def set_debug_controls_ready(self, ready: bool) -> None:
+        self._backend_controls_ready = bool(ready)
+        self._apply_debug_status(self._session.status)
 
     def add_breakpoint(
         self,
@@ -415,6 +424,7 @@ class DebugWorkbenchTab(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumWidth(58)
             button.setEnabled(False)
+            button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
             self._action_buttons[key] = button
             layout.addWidget(button)
         layout.addStretch(1)
