@@ -295,3 +295,51 @@ Stop `MainWindow` from owning serial worker, timer, and shutdown details so futu
   - expose safe capability/discovery functions before any variable writes
   - add a no-hardware Keil discovery probe
   - document the UVSOCK/debug-command path so later work can add read/write variable integration without turning the UI into a monolith
+
+## Stage 6 - Keil Bridge Discovery Foundation
+
+### Goal
+
+Create the first safe Keil bridge layer: locate the installed uVision/UVSOCK components and describe available capabilities without launching Keil, connecting to ST-Link, halting the MCU, or writing variables.
+
+### Completed
+
+- Added `src/core/keil/`.
+- Added `src/core/keil/discovery.py` for read-only Keil discovery:
+  - finds `UV4.exe`, `uVision.com`, `UVSC.dll`, `UVSC64.dll`, and `UVSCWrapper.dll`
+  - selects the UVSOCK DLL that matches Python bitness
+  - reads PE machine type for DLL/EXE files
+  - parses PE export names without `dumpbin` or extra dependencies
+  - reports capability flags for open connection, debug enter, command execution, expression evaluation, memory read/write, variable enumeration, and target control
+- Added `tools/keil_bridge_probe.py`, a no-launch/no-hardware probe.
+- Added missing-root probe mode so explicit invalid Keil roots fail gracefully instead of silently falling back to `D:\Keil`.
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\discovery.py tools\keil_bridge_probe.py src\core\transports\base.py src\core\transports\__init__.py tools\collector_fake_transport_probe.py`
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, discovered `D:\Keil\Keil_v5\UV4`.
+  - Selected `UVSC64.dll` for 64-bit Python.
+  - Parsed `103` exports.
+  - Confirmed all `13` important UVSOCK/debug exports.
+- `python tools\keil_bridge_probe.py --keil-root D:\__missing_keil_root__ --expect-missing`
+  - PASS, missing explicit root returns a clean missing discovery result.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS, existing transport foundation still works after adding the Keil package.
+- `git diff --check -- src/core/keil/__init__.py src/core/keil/discovery.py tools/keil_bridge_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage intentionally does not start `UV4.exe`, call UVSOCK, read Keil project files, touch `TOOLS.INI`, use ST-Link, or access the connected F401CCU6 board.
+- The connected ST-Link/F401CCU6 can be used in a later hardware-facing Keil verification stage after the read-only connection layer exists.
+- `discover_keil(root=...)` now treats an explicit root as strict. Calling `discover_keil()` without a root still searches environment/default locations.
+
+### Next Target
+
+- Add a read-only Keil UVSOCK connection skeleton:
+  - load the selected `UVSC64.dll` with `ctypes`
+  - expose typed bindings for open/close and harmless status/debug command calls
+  - detect whether uVision is running before attempting connection
+  - add a probe that can run in dry-run mode and, when Keil is open, try a non-mutating connection/status check
+  - still avoid variable writes until RAM/type/readback safety is implemented
