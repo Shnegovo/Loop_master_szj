@@ -343,3 +343,53 @@ Create the first safe Keil bridge layer: locate the installed uVision/UVSOCK com
   - detect whether uVision is running before attempting connection
   - add a probe that can run in dry-run mode and, when Keil is open, try a non-mutating connection/status check
   - still avoid variable writes until RAM/type/readback safety is implemented
+
+## Stage 7 - Keil UVSOCK Preflight
+
+### Goal
+
+Move from static Keil discovery to a safe runtime preflight: load the selected UVSOCK DLL and detect whether uVision is running, while still avoiding any UVSOCK command, target halt/run, memory access, or variable write.
+
+### Completed
+
+- Added `src/core/keil/uvsock.py`.
+- Added `UvscPreflight`, `UvscLoadResult`, and `KeilProcess`.
+- Added `load_uvsc_library()`:
+  - uses the discovery-selected DLL
+  - adds the UV4 directory to the DLL search path during load
+  - rejects obvious Python/DLL bitness mismatches
+  - loads `UVSC64.dll` with `ctypes.WinDLL`
+- Added `list_running_uvision()` using `psutil` when available.
+- Added `check_uvsock_preflight()`:
+  - reports whether Keil is discovered
+  - reports whether the UVSOCK DLL loads
+  - reports whether uVision appears to be running
+  - returns `can_attempt_connection=False` unless both the DLL is loaded and uVision is running
+- Added `tools/keil_uvsock_preflight_probe.py`, a dry-run probe that does not connect to UVSOCK.
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\discovery.py src\core\keil\uvsock.py tools\keil_bridge_probe.py tools\keil_uvsock_preflight_probe.py`
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, discovery still selects `UVSC64.dll` and confirms `103` exports.
+- `python tools\keil_bridge_probe.py --keil-root D:\__missing_keil_root__ --expect-missing`
+  - PASS, strict missing-root behavior still works.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS, `UVSC64.dll` loaded successfully.
+  - No uVision process was running, so `can_attempt_connection=False`.
+- `git diff --check -- src/core/keil/__init__.py src/core/keil/discovery.py src/core/keil/uvsock.py tools/keil_bridge_probe.py tools/keil_uvsock_preflight_probe.py`
+  - PASS.
+
+### Notes
+
+- The connected ST-Link/F401CCU6 board was not accessed in this stage.
+- This stage does not call `UVSC_OpenConnection`, `UVSC_DBG_STATUS`, Halt/Run, memory read/write, or variable APIs. It only proves that the local Python process can load the correct UVSOCK DLL.
+- Current machine state during verification: uVision was not running.
+
+### Next Target
+
+- Add the first explicit UVSOCK connection attempt path behind an opt-in probe flag:
+  - require uVision to already be running with UVSOCK enabled
+  - use only open/close and status-style non-mutating calls after signatures are verified
+  - never write memory or variables
+  - log clear guidance when Keil is closed or UVSOCK is not enabled
