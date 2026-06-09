@@ -1068,3 +1068,92 @@ Introduce an explicit plan layer between "the backend says this action is possib
   - add a controller-level execution gate distinct from UI button readiness
   - persist a lightweight debug audit log for planned commands and future execution results
   - keep all hardware-facing execution disabled until an explicit UVSOCK smoke stage is started
+
+## Stage 20 - Dry-Run Keil Command Transactions
+
+### Goal
+
+Create a typed dry-run transaction layer between the human-readable debug plans and any future UVSOCK executor, so LoopMaster can preview exact Keil command intent, guard state, and audit records without launching Keil, opening UVSOCK, or touching the target MCU.
+
+### Completed
+
+- Added `src/core/keil/commands.py` as a data-only transaction layer.
+- Added typed objects for:
+  - command kind
+  - guard state
+  - command guard
+  - breakpoint intent
+  - variable write intent
+  - command transaction
+- Added `build_keil_debug_transactions()` to turn the current debug status plus Stage 19 plans into dry-run transactions.
+- Forced Stage 20 transactions to stay dry-run:
+  - `dry_run=True`
+  - `execution_enabled=False`
+  - `ready=False`
+  - even if a future `execution_gate` value is passed
+- Added explicit guards for:
+  - action preconditions
+  - execution gate
+  - data-only payload
+  - no Keil launch
+  - UVSOCK port validity
+  - project and target context
+  - attached-session requirement
+  - breakpoint batch and line/path validation
+  - variable write batch, type check, RAM whitelist, range check, and write-after-readback
+- Added command previews for future UVSOCK-facing operations:
+  - `UVSC_OpenConnection`
+  - `UVSC_DBG_STOP_EXECUTION`
+  - `UVSC_DBG_START_EXECUTION`
+  - `UVSC_DBG_EXEC_CMD`
+  - `UVSC_DBG_VARIABLE_SET`
+  - `UVSC_DBG_EVAL_EXPRESSION_TO_STR`
+- Added JSONL audit-record output with `append_keil_audit_log()`.
+- Exported the new transaction objects from `src/core/keil/__init__.py`.
+- Reused the existing top `动作计划` strip for UI display:
+  - short visible text shows `干跑` and audit state
+  - full command intent, transaction id, project, target, port, guards, and audit summary live in the tooltip
+  - no new left-column table was added
+- Wired `MainWindow` to refresh command transaction previews after debug workbench setup and Keil discovery.
+- Extended the debug workbench screenshot probe to assert:
+  - running state previews a dry-run halt transaction
+  - paused state previews dry-run run/step intent
+  - tooltip includes UVSOCK command text, project, target, port, transaction id, guard text, and audit text
+  - real action buttons remain disabled without a backend controller
+- Added `tools/keil_command_transaction_probe.py` to verify the transaction layer without Qt, Keil launch, UVSOCK attach, or hardware access.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS, all transactions remain dry-run, JSON-auditable, and data-only.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- Transaction previews intentionally use strings and primitives only. They do not carry DLL handles, subprocess objects, callbacks, or UVSOCK executor references.
+- Screenshot review kept the UI light: the dry-run transaction preview lives in the existing top plan strip, while the left column remains source tree, diagnostics, and local breakpoints.
+
+### Next Target
+
+- Add a debug audit/command history surface:
+  - keep a bounded in-memory history of dry-run transactions
+  - expose a small command-history drawer or compact bottom strip without crowding the source editor
+  - include filtering by action/risk/blocked state
+  - persist only explicit audit records, not raw handles or sensitive Keil config
+  - continue staying no-hardware until a deliberately scoped UVSOCK smoke stage is selected

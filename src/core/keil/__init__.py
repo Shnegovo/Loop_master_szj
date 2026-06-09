@@ -16,6 +16,17 @@ from src.core.keil.project import (
     parse_keil_project,
     project_summary_lines,
 )
+from src.core.keil.commands import (
+    KeilBreakpointIntent,
+    KeilCommandGuard,
+    KeilCommandGuardState,
+    KeilCommandKind,
+    KeilCommandTransaction,
+    KeilVariableWriteIntent,
+    append_keil_audit_log,
+    build_keil_debug_transactions,
+    transaction_by_key,
+)
 from src.core.keil.uvsock import (
     KeilProcess,
     UvscConnectionResult,
@@ -37,6 +48,11 @@ from src.core.keil.uvsock import (
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
     "KeilDiscovery",
+    "KeilBreakpointIntent",
+    "KeilCommandGuard",
+    "KeilCommandGuardState",
+    "KeilCommandKind",
+    "KeilCommandTransaction",
     "KeilFile",
     "KeilGroup",
     "KeilProcess",
@@ -49,7 +65,10 @@ __all__ = [
     "UvscLoadResult",
     "UvscPreflight",
     "UvscSmokeResult",
+    "KeilVariableWriteIntent",
+    "append_keil_audit_log",
     "attempt_existing_uvsock_connection",
+    "build_keil_debug_transactions",
     "build_uvision_uvsock_command",
     "check_uvsock_preflight",
     "discover_keil",
@@ -61,5 +80,6 @@ __all__ = [
     "read_pe_exports",
     "run_uvsock_smoke",
     "start_uvision_uvsock",
+    "transaction_by_key",
     "uvsc_status_name",
 ]

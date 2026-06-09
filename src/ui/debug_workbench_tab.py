@@ -42,6 +42,7 @@ from src.core.debug_workbench import (
     source_entries_from_keil_project,
     source_tree_from_entries,
 )
+from src.core.keil.commands import KeilCommandTransaction
 from src.core.keil.project import KeilProject, parse_keil_project
 from src.ui.pcl_theme import PclComboBox, polish_combo_popup
 
@@ -256,6 +257,7 @@ class DebugWorkbenchTab(QWidget):
         self._breakpoint_rows = ()
         self._diagnostics: tuple[tuple[str, str], ...] = ()
         self._plan_rows: tuple[DebugCommandPlan, ...] = ()
+        self._command_transactions: tuple[KeilCommandTransaction, ...] = ()
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -340,6 +342,13 @@ class DebugWorkbenchTab(QWidget):
     def set_backend_diagnostics(self, items: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> None:
         self._diagnostics = tuple((str(key), str(value)) for key, value in items)
         self._refresh_diagnostics_table()
+
+    def set_command_transactions(
+        self,
+        transactions: tuple[KeilCommandTransaction, ...] | list[KeilCommandTransaction],
+    ) -> None:
+        self._command_transactions = tuple(transactions)
+        self._refresh_command_plan_preview()
 
     def add_breakpoint(
         self,
@@ -798,7 +807,10 @@ class DebugWorkbenchTab(QWidget):
             return
         self._plan_rows = self._session.command_plans()
         plan = self._focused_command_plan()
+        transaction = self._focused_command_transaction(plan)
         tooltip = self._all_plan_tooltip()
+        if transaction is not None:
+            tooltip = tooltip + "\n\n" + self._transaction_tooltip(transaction)
         if plan is None:
             self.plan_focus_label.setText("等待状态")
             self.plan_state_label.setText("等待条件")
@@ -808,7 +820,9 @@ class DebugWorkbenchTab(QWidget):
             self.plan_focus_label.setText(plan.title)
             self.plan_state_label.setText(plan.status)
             self.plan_risk_label.setText(self._risk_label(plan))
-            if plan.execution_enabled:
+            if transaction is not None:
+                guard_text = self._transaction_guard_text(transaction)
+            elif plan.execution_enabled:
                 guard_text = "可执行"
             elif plan.preconditions_met:
                 guard_text = "条件满足，但仍等待 UVSOCK 烟测阶段"
@@ -841,6 +855,14 @@ class DebugWorkbenchTab(QWidget):
                 return ready[key]
         return self._plan_rows[0] if self._plan_rows else None
 
+    def _focused_command_transaction(self, plan: DebugCommandPlan | None) -> KeilCommandTransaction | None:
+        if plan is None:
+            return None
+        for transaction in self._command_transactions:
+            if transaction.kind.value == plan.key:
+                return transaction
+        return None
+
     def _all_plan_tooltip(self) -> str:
         if not self._plan_rows:
             return "等待调试状态"
@@ -869,6 +891,35 @@ class DebugWorkbenchTab(QWidget):
             "high": "高",
         }
         return labels.get(plan.risk.value, plan.risk.value)
+
+    def _transaction_guard_text(self, transaction: KeilCommandTransaction) -> str:
+        if transaction.execution_enabled:
+            return f"执行: {transaction.title} · 审计: 待记录"
+        if transaction.preconditions_met:
+            return f"干跑: {transaction.title} · 审计: 未执行"
+        blocked = transaction.blocked_reasons[0] if transaction.blocked_reasons else "等待条件"
+        return f"干跑: {transaction.title} · 审计: 已阻止 · {blocked}"
+
+    def _transaction_tooltip(self, transaction: KeilCommandTransaction) -> str:
+        guard_lines = [
+            f"- {guard.label}: {guard.state.value} {guard.detail}".rstrip()
+            for guard in transaction.guards
+        ]
+        command_lines = [f"- {line}" for line in transaction.command_preview]
+        sections = [
+            f"交易 ID: {transaction.transaction_id}",
+            f"动作: {transaction.title}",
+            f"模式: {'干跑' if transaction.dry_run else '执行'}",
+            f"端口: {transaction.port if transaction.port is not None else '--'}",
+            f"工程: {transaction.project_path or '--'}",
+            f"Target: {transaction.target_name or '--'}",
+            "未来命令:",
+            *command_lines,
+            "Guard:",
+            *guard_lines,
+            f"审计: {transaction.audit_summary}",
+        ]
+        return "\n".join(sections)
 
     def _refresh_summary(self) -> None:
         project, source_count, breakpoints = self.hero_summary()

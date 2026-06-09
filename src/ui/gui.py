@@ -32,7 +32,13 @@ from src.parser.variable_inventory import VariableInventory
 from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
-from src.core.debug_workbench import DebugRuntimeState, make_debug_status, status_from_uvsock_preflight
+from src.core.debug_workbench import (
+    DebugRuntimeState,
+    debug_command_plans_for_status,
+    make_debug_status,
+    status_from_uvsock_preflight,
+)
+from src.core.keil.commands import build_keil_debug_transactions
 from src.core.keil.uvsock import build_uvision_uvsock_command, check_uvsock_preflight
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
@@ -1967,6 +1973,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        self._sync_debug_command_preview()
 
     def _on_debug_workbench_action(self, action_key: str):
         if action_key == "discover":
@@ -2010,9 +2017,25 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
         tab.set_backend_diagnostics(diagnostics)
+        self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
         self._refresh_hero()
+
+    def _sync_debug_command_preview(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        transactions = build_keil_debug_transactions(
+            status,
+            debug_command_plans_for_status(status),
+            port=self._debug_uvsock_port,
+            project_path=status.project_path,
+            target_name=status.target_name,
+            execution_gate=False,
+        )
+        tab.set_command_transactions(transactions)
 
     def _debug_workbench_idle_diagnostics(self) -> tuple[tuple[str, str], ...]:
         return (

@@ -19,9 +19,11 @@ if str(ROOT) not in sys.path:
 from src.core.debug_workbench import (  # noqa: E402
     DebugRuntimeState,
     default_debug_capabilities,
+    debug_command_plans_for_status,
     make_debug_status,
     search_document,
 )
+from src.core.keil.commands import build_keil_debug_transactions  # noqa: E402
 from src.ui.gui import MainWindow  # noqa: E402
 from src.ui.pcl_theme import apply_pcl_theme  # noqa: E402
 
@@ -189,6 +191,20 @@ def _plan_rows(tab) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _sync_command_transactions(tab, port: int = 4827) -> None:
+    status = tab.debug_status
+    tab.set_command_transactions(
+        build_keil_debug_transactions(
+            status,
+            debug_command_plans_for_status(status),
+            port=port,
+            project_path=status.project_path,
+            target_name=status.target_name,
+            execution_gate=False,
+        )
+    )
+
+
 def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
     QApplication.processEvents()
     path = output_dir / f"{name}.png"
@@ -274,6 +290,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ),
             controls_ready=False,
         )
+        _sync_command_transactions(tab)
         running_plans = _plan_rows(tab)
         required_plan_titles = {
             "连接调试会话",
@@ -291,6 +308,12 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"halt plan should be ready but disabled while running: {running_plans.get('暂停目标')!r}")
         if running_plans.get("继续运行", {}).get("status") != "等待条件":
             issues.append(f"run plan should wait while already running: {running_plans.get('继续运行')!r}")
+        if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():
+            issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
+        running_tooltip = tab.plan_guard_label.toolTip()
+        for phrase in ("UVSC_DBG_STOP_EXECUTION", "DebugDemo.uvprojx", "DebugDemo", "4827"):
+            if phrase not in running_tooltip:
+                issues.append(f"running transaction tooltip missing {phrase}: {running_tooltip!r}")
         write_tip = running_plans.get("写变量", {}).get("tooltip", "")
         for phrase in ("RAM", "类型", "回读", "范围"):
             if phrase not in write_tip:
@@ -315,6 +338,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ),
             controls_ready=False,
         )
+        _sync_command_transactions(tab)
         paused_plans = _plan_rows(tab)
         if paused_plans.get("继续运行", {}).get("status") != "计划就绪":
             issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
@@ -326,8 +350,12 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append("write variable plan tooltip should mention smoke-stage execution guard")
         if "继续运行" not in tab.plan_focus_label.text():
             issues.append(f"top plan strip should focus run while paused: {tab.plan_focus_label.text()!r}")
-        if "烟测" not in tab.plan_guard_label.text():
-            issues.append(f"top plan strip should show execution guard: {tab.plan_guard_label.text()!r}")
+        if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():
+            issues.append(f"top plan strip should show dry-run guard: {tab.plan_guard_label.text()!r}")
+        paused_tooltip = tab.plan_guard_label.toolTip()
+        for phrase in ("UVSC_DBG_START_EXECUTION", "交易 ID", "Guard", "审计"):
+            if phrase not in paused_tooltip:
+                issues.append(f"paused transaction tooltip missing {phrase}: {paused_tooltip!r}")
         enabled_actions = [
             key
             for key, button in getattr(tab, "_action_buttons", {}).items()
