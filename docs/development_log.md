@@ -185,3 +185,59 @@ Start reducing backend coupling so Keil, pyOCD, serial, and future replay/protoc
   - extract pure scope display algorithms from `MainWindow`
   - start moving serial worker lifecycle into a controller object
   - keep UI and close-process probes green after each slice
+
+## Stage 4 - Scope Display Algorithm Extraction
+
+### Goal
+
+Move scope display math out of `MainWindow` so later UI/controller refactors can keep waveform behavior stable and testable.
+
+### Completed
+
+- Added `src/ui/scope_algorithms.py` for pure scope display algorithms:
+  - adaptive plot FPS caps
+  - display point budget
+  - interpolation and peak-preserving decimation
+  - display thinning
+  - PID-friendly Y range calculation and stabilization
+- Updated `MainWindow` to delegate display processing and Y-range decisions to the new module.
+- Removed the old private interpolation/decimation/thinning/Y-stabilization helpers from `MainWindow`.
+- Added `tools/scope_algorithms_probe.py`, a fast no-Qt regression probe for:
+  - step response and overshoot readability
+  - micro jitter that should not be over-zoomed
+  - high-frequency small jitter around a setpoint
+  - single-sample overshoot preservation
+  - absurd read-glitch clipping
+  - high-rate decimation and low-rate interpolation
+- Kept the existing full Qt PID waveform probe green after extraction.
+
+### Verified
+
+- `python -m py_compile main.py src\ui\gui.py src\ui\scope_algorithms.py tools\scope_algorithms_probe.py`
+- `python tools\scope_algorithms_probe.py`
+  - PASS.
+- `python tools\ui_pid_waveform_probe.py --output-dir %TEMP%\loopmaster-stage4\pid`
+  - PASS, generated six PID-oriented screenshots.
+- `python tools\ui_scope_splitter_perf_probe.py --output-dir %TEMP%\loopmaster-stage4\splitter --iterations 240`
+  - PASS, avg `6.02ms`, p95 `8.43ms`, p99 `12.66ms`, max `13.87ms`, slow>24ms `0`.
+- `python tools\ui_human_flow_probe.py --output-dir %TEMP%\loopmaster-stage4\human-rerun`
+  - PASS, covered live data, Halt, Run, splitter drag, sidebar hide/show, narrow window, axis toggles, stop, and close.
+- `git diff --check -- src/ui/gui.py src/ui/scope_algorithms.py tools/scope_algorithms_probe.py`
+  - PASS.
+- `rg -n '_interpolate_data|_decimate_data|_thin_display_series|_peak_preserving_thin|_stabilize_y_range' src tools`
+  - No stale old-helper references.
+- `python tools\ui_close_process_probe.py --scenario sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `510.9ms`.
+
+### Notes
+
+- Keil discovery found `D:\Keil\Keil_v5\UV4\UV4.exe`, `uVision.com`, and UVSOCK DLLs including `UVSC64.dll`. The realistic path is a Keil transport/bridge around UVSOCK/debug commands, not a direct UI monolith.
+- A read-only architecture pass recommends the next extraction be a serial lifecycle controller so serial worker/timer/config logic stops living in `MainWindow`.
+
+### Next Target
+
+- Extract a `SerialController` slice:
+  - own `SerialCollector`, serial timer, connect/send/disconnect workers, and shutdown
+  - expose Qt signals for logs, connection state, ports, busy state, and scope data
+  - leave `SerialTab` as the UI surface and `MainWindow` as the workspace/page coordinator
+  - keep serial integration and close-process probes green
