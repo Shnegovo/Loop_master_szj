@@ -881,3 +881,60 @@ Wire the debug workbench `发现 Keil` action to the existing safe Keil/UVSOCK p
   - show Keil root, selected UVSOCK DLL, uVision running state, process count, and preflight reasons
   - expose a safe launch-plan preview for UVSOCK without starting Keil
   - keep actual attach/halt/run behind a later opt-in smoke stage
+
+## Stage 17 - Debug Workbench Diagnostics Panel
+
+### Goal
+
+Give the new debug workbench a compact, readable diagnostics panel that explains what the Keil bridge found and what a future UVSOCK launch would look like, while staying strictly no-hardware and no-launch.
+
+### Completed
+
+- Added a `后端诊断` table to `DebugWorkbenchTab`.
+- Added `set_backend_diagnostics()` so the UI can receive backend diagnostics without knowing Keil internals.
+- Kept the useful rows visible first:
+  - uVision process state/count
+  - whether a connection could be attempted
+  - preflight reasons
+  - launch preview status
+  - Keil root and selected UVSOCK DLL
+- Added tooltips for long diagnostic values such as DLL paths and launch commands.
+- Added MainWindow diagnostics assembly from:
+  - `check_uvsock_preflight()`
+  - `build_uvision_uvsock_command()`
+- Added Chinese translation for common launch/preflight reasons in the UI diagnostics path.
+- Extended the UI probe to assert that the diagnostics table includes Keil root, UVSOCK DLL, and launch command rows.
+- Iterated screenshot layout so the first visible diagnostic rows are operationally useful, not just path metadata.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The launch command is preview-only. It is generated to make future behavior visible and reviewable before any opt-in smoke stage.
+- The diagnostics panel intentionally lives beside source/breakpoint state so future Keil sessions can show both code context and backend health without opening a separate tool window.
+
+### Next Target
+
+- Add source navigation polish for the debug workbench:
+  - search result next/previous controls
+  - breakpoint table click-to-source navigation
+  - clearer selected-source state in the source tree
+  - keep everything local/read-only until Keil breakpoint synchronization is deliberately introduced

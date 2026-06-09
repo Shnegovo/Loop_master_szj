@@ -219,6 +219,14 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"discover preflight left the UI busy: {tab.status_text.text()!r}")
         if discover_button is None or not discover_button.isEnabled():
             issues.append("discover action should remain available after no-hardware preflight")
+        diagnostic_keys = {
+            tab.diagnostics_table.item(row, 0).text()
+            for row in range(tab.diagnostics_table.rowCount())
+            if tab.diagnostics_table.item(row, 0) is not None
+        }
+        for key in ("Keil 根目录", "UVSOCK DLL", "启动命令"):
+            if key not in diagnostic_keys:
+                issues.append(f"diagnostics table missing {key}: {sorted(diagnostic_keys)!r}")
         tab.search_edit.setText("speed")
         tab.add_breakpoint(12)
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")

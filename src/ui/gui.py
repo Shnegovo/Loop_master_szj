@@ -33,7 +33,7 @@ from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
 from src.core.debug_workbench import DebugRuntimeState, make_debug_status, status_from_uvsock_preflight
-from src.core.keil.uvsock import check_uvsock_preflight
+from src.core.keil.uvsock import build_uvision_uvsock_command, check_uvsock_preflight
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -413,6 +413,7 @@ class MainWindow(QMainWindow):
         self._hero_roxy_index = 0
         self._shutdown_complete = False
         self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
+        self._debug_uvsock_port = 4827
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -1965,6 +1966,7 @@ class MainWindow(QMainWindow):
     def _setup_debug_workbench_connections(self):
         self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
         self._tab_debug_workbench.set_debug_controls_ready(True)
+        self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
 
     def _on_debug_workbench_action(self, action_key: str):
         if action_key == "discover":
@@ -1982,9 +1984,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_sb_label"):
             self._sb_label.setText("正在发现 Keil/UVSOCK...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        diagnostics = []
         try:
             preflight = check_uvsock_preflight(root=self._keil_root, require_running=False)
             status = status_from_uvsock_preflight(preflight, previous)
+            launch_plan = build_uvision_uvsock_command(
+                root=self._keil_root,
+                port=self._debug_uvsock_port,
+                project=previous.project_path,
+                target=previous.target_name or None,
+            )
+            diagnostics = self._debug_workbench_preflight_diagnostics(preflight, launch_plan)
         except Exception as exc:
             message = f"Keil 预检失败：{exc}"
             status = make_debug_status(
@@ -1995,12 +2005,62 @@ class MainWindow(QMainWindow):
                 target_name=previous.target_name,
                 error=message,
             )
+            diagnostics = self._debug_workbench_error_diagnostics(message)
         finally:
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
+        tab.set_backend_diagnostics(diagnostics)
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
         self._refresh_hero()
+
+    def _debug_workbench_idle_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("Keil 根目录", str(self._keil_root)),
+            ("UVSOCK 端口", str(self._debug_uvsock_port)),
+            ("状态", "等待发现 Keil"),
+        )
+
+    def _debug_workbench_error_diagnostics(self, message: str) -> tuple[tuple[str, str], ...]:
+        return (
+            ("Keil 根目录", str(self._keil_root)),
+            ("UVSOCK 端口", str(self._debug_uvsock_port)),
+            ("错误", message),
+        )
+
+    def _debug_workbench_preflight_diagnostics(self, preflight, launch_plan) -> tuple[tuple[str, str], ...]:
+        discovery = preflight.discovery
+        dll = preflight.load_result.dll.path if preflight.load_result.dll else "--"
+        reasons = "；".join(self._debug_workbench_reason_text(str(reason)) for reason in preflight.reasons) if preflight.reasons else "OK"
+        command = launch_plan.display_command if launch_plan.command else "--"
+        plan_status = "可预览" if launch_plan.command else "不可用"
+        if launch_plan.reasons:
+            plan_status = "；".join(self._debug_workbench_reason_text(str(reason)) for reason in launch_plan.reasons)
+        return (
+            ("uVision 进程", f"{len(preflight.processes)} 个" if preflight.processes else "未运行"),
+            ("可尝试连接", "是" if preflight.can_attempt_connection else "否"),
+            ("预检原因", reasons),
+            ("启动预览", plan_status),
+            ("Keil 根目录", str(discovery.root or self._keil_root)),
+            ("UVSOCK DLL", str(dll)),
+            ("DLL 加载", "已加载" if preflight.load_result.loaded else preflight.load_result.error or "失败"),
+            ("UV4 目录", str(discovery.uv4_dir or "--")),
+            ("启动命令", command),
+        )
+
+    @staticmethod
+    def _debug_workbench_reason_text(reason: str) -> str:
+        translations = {
+            "Keil/uVision was not discovered": "未发现 Keil/uVision",
+            "UVSOCK DLL could not be loaded": "UVSOCK DLL 加载失败",
+            "uVision is not running": "uVision 未运行",
+            "UVSOCK port must be in range 1..65535": "UVSOCK 端口必须在 1..65535 范围内",
+            "uVision executable is missing": "uVision 可执行文件缺失",
+            "No Keil project was provided; launch is guidance-only": "未选择 Keil 工程，启动命令仅作预览",
+        }
+        if reason.startswith("Keil project does not exist:"):
+            return "Keil 工程不存在：" + reason.split(":", 1)[1].strip()
+        return translations.get(reason, reason)
 
     # ================================================================
     #  Serial Assistant

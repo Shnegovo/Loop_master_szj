@@ -243,6 +243,7 @@ class DebugWorkbenchTab(QWidget):
         self._current_document: CodeDocument | None = None
         self._current_pc_line: int | None = None
         self._run_line: int | None = None
+        self._diagnostics: tuple[tuple[str, str], ...] = ()
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -323,6 +324,10 @@ class DebugWorkbenchTab(QWidget):
     def set_debug_controls_ready(self, ready: bool) -> None:
         self._backend_controls_ready = bool(ready)
         self._apply_debug_status(self._session.status)
+
+    def set_backend_diagnostics(self, items: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> None:
+        self._diagnostics = tuple((str(key), str(value)) for key, value in items)
+        self._refresh_diagnostics_table()
 
     def add_breakpoint(
         self,
@@ -451,6 +456,26 @@ class DebugWorkbenchTab(QWidget):
         self.source_tree.itemClicked.connect(self._on_source_item_clicked)
         layout.addWidget(self.source_tree, 3)
 
+        diag_title = QLabel("后端诊断")
+        diag_title.setObjectName("debugSectionTitle")
+        layout.addWidget(diag_title)
+
+        self.diagnostics_table = QTableWidget()
+        self.diagnostics_table.setObjectName("debugDiagnosticsTable")
+        self.diagnostics_table.setColumnCount(2)
+        self.diagnostics_table.setHorizontalHeaderLabels(["项目", "状态"])
+        self.diagnostics_table.horizontalHeader().setStretchLastSection(False)
+        self.diagnostics_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.diagnostics_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.diagnostics_table.verticalHeader().setVisible(False)
+        self.diagnostics_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.diagnostics_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.diagnostics_table.setAlternatingRowColors(True)
+        self.diagnostics_table.verticalHeader().setDefaultSectionSize(24)
+        self.diagnostics_table.verticalHeader().setMinimumSectionSize(22)
+        self.diagnostics_table.setMinimumHeight(166)
+        layout.addWidget(self.diagnostics_table, 1)
+
         bp_title = QLabel("本地断点")
         bp_title.setObjectName("debugSectionTitle")
         layout.addWidget(bp_title)
@@ -470,6 +495,7 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_table.setAlternatingRowColors(True)
         self.breakpoint_table.setMinimumHeight(118)
         layout.addWidget(self.breakpoint_table, 1)
+        self._refresh_diagnostics_table()
         return panel
 
     def _build_editor_panel(self) -> QFrame:
@@ -594,6 +620,25 @@ class DebugWorkbenchTab(QWidget):
         item = QTableWidgetItem(text)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         self.breakpoint_table.setItem(row, column, item)
+
+    def _refresh_diagnostics_table(self) -> None:
+        if not hasattr(self, "diagnostics_table"):
+            return
+        items = self._diagnostics or (
+            ("Keil 根目录", "等待发现"),
+            ("UVSOCK", "等待发现"),
+            ("uVision", "未检测"),
+        )
+        self.diagnostics_table.setRowCount(len(items))
+        for row, (key, value) in enumerate(items):
+            self._set_diagnostics_item(row, 0, key)
+            self._set_diagnostics_item(row, 1, value)
+
+    def _set_diagnostics_item(self, row: int, column: int, text: str) -> None:
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setToolTip(text)
+        self.diagnostics_table.setItem(row, column, item)
 
     def _refresh_summary(self) -> None:
         project, source_count, breakpoints = self.hero_summary()
@@ -720,7 +765,8 @@ class DebugWorkbenchTab(QWidget):
                 border-color: #dce6f0;
                 color: #9aa6b4;
             }
-            QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable, QPlainTextEdit#debugCodeEditor {
+            QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable,
+            QTableWidget#debugDiagnosticsTable, QPlainTextEdit#debugCodeEditor {
                 background: #fbfdff;
                 border: 1px solid #d2deea;
                 border-radius: 7px;
@@ -748,6 +794,9 @@ class DebugWorkbenchTab(QWidget):
                 border-left: 3px solid #2563eb;
             }
             QTableWidget#debugBreakpointTable::item {
+                padding: 3px 6px;
+            }
+            QTableWidget#debugDiagnosticsTable::item {
                 padding: 3px 6px;
             }
             QHeaderView::section {
