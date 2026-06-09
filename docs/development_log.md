@@ -241,3 +241,57 @@ Move scope display math out of `MainWindow` so later UI/controller refactors can
   - expose Qt signals for logs, connection state, ports, busy state, and scope data
   - leave `SerialTab` as the UI surface and `MainWindow` as the workspace/page coordinator
   - keep serial integration and close-process probes green
+
+## Stage 5 - Serial Lifecycle Controller
+
+### Goal
+
+Stop `MainWindow` from owning serial worker, timer, and shutdown details so future serial/Keil/protocol features can be added through controllers instead of growing the main UI class.
+
+### Completed
+
+- Added `src/ui/serial_controller.py`.
+- Moved serial assistant lifecycle state into `SerialController`:
+  - `SerialCollector` ownership
+  - connect/send/disconnect worker threads
+  - runtime polling timer
+  - log forwarding
+  - scope data forwarding
+  - busy/connected/send-enabled signals
+  - shutdown and worker join handling
+- Rewired `MainWindow` so `SerialTab` talks to `SerialController` through Qt signals.
+- Kept compatibility wrappers in `MainWindow` for existing probes that call `_start_serial_worker()` and related serial helpers.
+- Added `tools/serial_controller_probe.py`, a no-hardware lifecycle probe covering refresh, connect, runtime log/scope poll, send, disconnect, clear, reconnect, and shutdown.
+- Cleaned `tools/ui_serial_integration_probe.py` so the visual screenshot probe exits normally; process-lifecycle behavior remains covered by close probes.
+
+### Verified
+
+- `python -m py_compile main.py src\ui\gui.py src\ui\serial_controller.py src\ui\serial_tab.py src\core\serial_backend.py tools\serial_controller_probe.py tools\ui_close_scenario_entry.py`
+- `python tools\serial_controller_probe.py`
+  - PASS, `ports=1`, `starts=2`, `stops=2`, `sends=1`.
+- `python tools\serial_parser_probe.py`
+  - PASS for CSV, FireWater, JustFloat, raw text, and hex lines.
+- `python tools\ui_serial_integration_probe.py --output-dir %TEMP%\loopmaster-stage5\serial-final-clean`
+  - PASS, serial UI screenshot rendered cleanly.
+- `python tools\ui_workspace_nav_probe.py --output-dir %TEMP%\loopmaster-stage5\nav-final`
+  - PASS, LoopMaster variables, LoopMaster scope, and serial assistant pages rendered.
+- `python tools\ui_close_process_probe.py --scenario serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `268.7ms`.
+- `python tools\ui_close_process_probe.py --entry main.py --exit-timeout 10`
+  - PASS, close-to-exit about `212.3ms`.
+- `git diff --check -- src/ui/gui.py src/ui/serial_controller.py tools/serial_controller_probe.py`
+  - PASS.
+
+### Notes
+
+- A read-only review found no clear controller extraction regressions. It confirmed the existing `ui_close_scenario_entry.py` serial-worker scenario still works because `MainWindow._start_serial_worker()` delegates to the controller.
+- The no-hardware controller probe covers the controller unit lifecycle. `ui_serial_integration_probe.py` and `ui_close_process_probe.py` cover the `MainWindow + SerialTab` wiring and process-level shutdown.
+- Real pyserial hardware loopback remains a later hardware-facing verification pass; this stage intentionally kept the architecture slice small and deterministic.
+
+### Next Target
+
+- Start the Keil bridge foundation:
+  - add a small `src/core/keil/` bridge module that locates `D:\Keil\Keil_v5\UV4` and UVSOCK DLLs
+  - expose safe capability/discovery functions before any variable writes
+  - add a no-hardware Keil discovery probe
+  - document the UVSOCK/debug-command path so later work can add read/write variable integration without turning the UI into a monolith

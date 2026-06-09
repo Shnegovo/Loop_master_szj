@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
-import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -76,12 +73,10 @@ def run(output_dir: Path) -> None:
     window.grab().save(str(screenshot))
     print(f"PASS serial integration screenshot={screenshot}", flush=True)
 
-    # This is a visual probe, not the lifecycle probe. ui_close_process_probe.py
-    # owns close/WM_CLOSE behavior; exiting here avoids Qt teardown flakiness in
-    # screenshot-only runs.
-    if os.name == "nt":
-        ctypes.windll.kernel32.ExitProcess(0)
-    os._exit(0)
+    # This is a visual probe; ui_close_process_probe.py owns lifecycle checks.
+    window.close()
+    app.processEvents()
+    app.quit()
 
 
 def main() -> None:

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QStyledItemDelegate, QStyle,
     QGraphicsView,
 )
-from PySide6.QtCore import Qt, QTimer, QEvent, QRect, Signal
+from PySide6.QtCore import Qt, QTimer, QEvent, QRect
 from PySide6.QtGui import QAction, QFont, QPalette, QColor, QPainter, QPen, QBrush, QIcon, QPixmap
 
 import pyqtgraph as pg
@@ -33,7 +33,6 @@ from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
-from src.core.serial_backend import SerialCollector, SerialConfig, list_serial_ports
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
     PointerType, EnumType, TypedefType, FuncType,
@@ -55,6 +54,12 @@ from src.ui.scope_algorithms import (
     point_budget_for_fps,
     process_display_data,
     thin_display_series,
+)
+from src.ui.serial_controller import (
+    SerialController,
+    escape_serial_log_text,
+    serial_payload_display,
+    serial_protocol_key,
 )
 from src.ui.serial_tab import SerialTab
 
@@ -366,10 +371,6 @@ class ScopePane:
 # ---- Main Window ----
 
 class MainWindow(QMainWindow):
-    _serial_connect_finished = Signal(bool, object, str)
-    _serial_disconnect_finished = Signal(str)
-    _serial_send_finished = Signal(bool, str, str)
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LoopMaster v2.1 - MCU 变量示波器")
@@ -388,10 +389,7 @@ class MainWindow(QMainWindow):
         self._backend = SWDBackend()
         self._collector = DataCollector()
         self._collector.set_backend(self._backend)
-        self._serial_collector = SerialCollector()
-        self._serial_log_sequence = 0
-        self._serial_busy = False
-        self._serial_workers: list[threading.Thread] = []
+        self._serial_controller = SerialController(self)
         self._unlimited_mode = False
         self._frame_rate = FRAME_RATE_DEFAULT
         self._probe_list: list[dict] = []
@@ -469,9 +467,6 @@ class MainWindow(QMainWindow):
         self._debug_state_timer = QTimer(self)
         self._debug_state_timer.timeout.connect(self._refresh_debug_state)
 
-        self._serial_timer = QTimer(self)
-        self._serial_timer.timeout.connect(self._refresh_serial_tab)
-
         self._resize_pause_reasons: set[str] = set()
         self._scope_resize_active = False
         self._scope_render_suspended = False
@@ -502,9 +497,6 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_statusbar()
         self._setup_motion()
-        self._serial_connect_finished.connect(self._finish_serial_connect)
-        self._serial_disconnect_finished.connect(self._finish_serial_disconnect)
-        self._serial_send_finished.connect(self._finish_serial_send)
 
         self._idle_timer.start(250)  # 绌洪棽璇诲彇淇濇寔 4Hz 鍥哄畾
         self._debug_state_timer.start(750)
@@ -871,11 +863,7 @@ class MainWindow(QMainWindow):
                     port_text = str(current_port)
                 baud_text = f"{self._tab_serial.baud_combo.currentText()} 波特"
                 connected = bool(self._tab_serial.is_connected)
-            channel_count = 0
-            try:
-                channel_count = len(self._serial_collector.get_data(tail_seconds=10.0))
-            except Exception:
-                channel_count = 0
+            channel_count = self._serial_controller.channel_count(10.0)
             self._hero_file.setText(port_text)
             self._hero_probe.setText("串口已连接" if connected else "串口空闲")
             self._hero_vars.setText(f"{baud_text} / {channel_count} 路波形")
@@ -1954,131 +1942,57 @@ class MainWindow(QMainWindow):
 
     def _setup_serial_connections(self):
         self._tab_serial.set_ports_managed(True)
-        self._tab_serial.connectRequested.connect(self._on_serial_connect)
-        self._tab_serial.disconnectRequested.connect(self._on_serial_disconnect)
-        self._tab_serial.refreshPortsRequested.connect(self._refresh_serial_ports)
-        self._tab_serial.clearRequested.connect(self._on_serial_clear)
-        self._tab_serial.sendRequested.connect(self._on_serial_send)
-        self._refresh_serial_ports()
+        self._tab_serial.connectRequested.connect(self._serial_controller.connect_serial)
+        self._tab_serial.disconnectRequested.connect(self._serial_controller.disconnect_serial)
+        self._tab_serial.refreshPortsRequested.connect(self._serial_controller.refresh_ports)
+        self._tab_serial.clearRequested.connect(self._serial_controller.clear)
+        self._tab_serial.sendRequested.connect(self._serial_controller.send)
+
+        self._serial_controller.portsChanged.connect(self._tab_serial.set_ports)
+        self._serial_controller.logReceived.connect(self._tab_serial.append_log)
+        self._serial_controller.connectedChanged.connect(self._tab_serial.set_connected)
+        self._serial_controller.connectedChanged.connect(lambda _connected: self._refresh_hero())
+        self._serial_controller.busyChanged.connect(self._set_serial_busy)
+        self._serial_controller.sendEnabledChanged.connect(self._tab_serial.send_button.setEnabled)
+        self._serial_controller.sendAccepted.connect(self._tab_serial.send_edit.clear)
+        self._serial_controller.scopeDataChanged.connect(self._tab_serial.set_scope_data)
+        self._serial_controller.refresh_ports()
 
     def _refresh_serial_ports(self):
-        if getattr(self, "_shutting_down", False) or not hasattr(self, "_tab_serial"):
-            return
-        try:
-            self._tab_serial.set_ports(list_serial_ports())
-        except Exception as exc:
-            self._tab_serial.append_log(str(exc), "rx")
+        self._serial_controller.refresh_ports()
 
     def _on_serial_connect(self, options):
-        if getattr(self, "_shutting_down", False):
-            return
-        if getattr(self, "_serial_busy", False):
-            self._tab_serial.append_log("串口操作尚未完成。", "rx")
-            return
-        port = str(getattr(options, "port", "") or "").strip()
-        if not port or port.lower().startswith("no serial"):
-            self._tab_serial.append_log("未选择串口。", "rx")
-            return
-        if self._serial_collector.is_running:
-            self._serial_collector.stop()
-        config = SerialConfig(
-            port=port,
-            baudrate=int(getattr(options, "baudrate", 115200) or 115200),
-            protocol=self._serial_protocol_key(getattr(options, "protocol", "FireWater CSV")),
-            buffer_seconds=60.0,
-        )
-        self._set_serial_busy(True, "正在打开…")
-
-        def worker():
-            try:
-                self._serial_collector.start(config)
-            except Exception as exc:
-                self._serial_connect_finished.emit(False, config, str(exc))
-                return
-            self._serial_connect_finished.emit(True, config, "")
-
-        self._start_serial_worker(worker, "LoopMaster-serial-connect")
+        self._serial_controller.connect_serial(options)
 
     def _finish_serial_connect(self, ok: bool, config: object, error: str):
-        if getattr(self, "_shutting_down", False):
-            if ok:
-                self._serial_collector.stop()
-            return
-        self._set_serial_busy(False)
-        if not ok:
+        if ok:
+            self._tab_serial.set_connected(True)
+            self._tab_serial.append_log(
+                f"已打开 {config.port} @ {config.baudrate}, {config.protocol}",
+                "rx",
+            )
+        else:
             self._tab_serial.set_connected(False)
             self._tab_serial.append_log(f"连接失败：{error}", "rx")
-            return
-        self._serial_log_sequence = 0
-        self._tab_serial.set_connected(True)
-        self._tab_serial.append_log(
-            f"已打开 {config.port} @ {config.baudrate}, {config.protocol}",
-            "rx",
-        )
-        self._serial_timer.start(33)
         self._refresh_hero()
 
     def _on_serial_disconnect(self, sync: bool = False):
-        self._serial_timer.stop()
-        if sync:
-            self._serial_collector.stop()
-            if hasattr(self, "_tab_serial"):
-                self._tab_serial.set_connected(False)
-            return
-        if getattr(self, "_serial_busy", False):
-            self._tab_serial.append_log("串口操作尚未完成。", "rx")
-            return
-        self._set_serial_busy(True, "正在关闭…")
-
-        def worker():
-            error = ""
-            try:
-                self._serial_collector.stop()
-            except Exception as exc:
-                error = str(exc)
-            self._serial_disconnect_finished.emit(error)
-
-        self._start_serial_worker(worker, "LoopMaster-serial-disconnect")
+        self._serial_controller.disconnect_serial(sync=sync)
 
     def _finish_serial_disconnect(self, error: str):
-        if getattr(self, "_shutting_down", False):
-            return
-        self._set_serial_busy(False)
-        if hasattr(self, "_tab_serial"):
-            self._tab_serial.set_connected(False)
-            if error:
-                self._tab_serial.append_log(f"断开失败：{error}", "rx")
-            self._tab_serial.append_log("串口已断开。", "rx")
+        self._tab_serial.set_connected(False)
+        if error:
+            self._tab_serial.append_log(f"断开失败：{error}", "rx")
+        self._tab_serial.append_log("串口已断开。", "rx")
         self._refresh_hero()
 
     def _on_serial_clear(self):
-        self._serial_collector.clear()
-        self._serial_log_sequence = 0
+        self._serial_controller.clear()
 
     def _on_serial_send(self, payload, mode: str):
-        if getattr(self, "_shutting_down", False):
-            return
-        if not self._serial_collector.is_running:
-            self._tab_serial.append_log("串口未连接。", "tx")
-            return
-        display = self._serial_payload_display(payload, mode)
-        self._tab_serial.send_button.setEnabled(False)
-
-        def worker():
-            try:
-                self._serial_collector.send(payload, mode)
-            except Exception as exc:
-                self._serial_send_finished.emit(False, display, str(exc))
-                return
-            self._serial_send_finished.emit(True, display, "")
-
-        self._start_serial_worker(worker, "LoopMaster-serial-send")
+        self._serial_controller.send(payload, mode)
 
     def _finish_serial_send(self, ok: bool, display: str, error: str):
-        if getattr(self, "_shutting_down", False):
-            return
-        if hasattr(self, "_tab_serial"):
-            self._tab_serial.send_button.setEnabled(True)
         if ok:
             self._tab_serial.append_log(display, "tx")
             self._tab_serial.send_edit.clear()
@@ -2087,40 +2001,16 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _serial_payload_display(payload: object, mode: str) -> str:
-        if mode == "hex" and isinstance(payload, (bytes, bytearray)):
-            return bytes(payload).hex(" ")
-        if isinstance(payload, bytes):
-            return MainWindow._escape_serial_log_text(payload.decode("utf-8", "replace"))
-        if isinstance(payload, bytearray):
-            return MainWindow._escape_serial_log_text(bytes(payload).decode("utf-8", "replace"))
-        return MainWindow._escape_serial_log_text(str(payload))
+        return serial_payload_display(payload, mode)
 
     @staticmethod
     def _escape_serial_log_text(text: str) -> str:
-        return text.replace("\r", "\\r").replace("\n", "\\n")
+        return escape_serial_log_text(text)
 
     def _refresh_serial_tab(self):
-        if getattr(self, "_shutting_down", False) or not hasattr(self, "_tab_serial"):
-            return
-        self._serial_log_sequence, logs = self._serial_collector.get_logs_since(
-            self._serial_log_sequence
-        )
-        for timestamp, line in logs:
-            self._tab_serial.append_log(f"{timestamp:8.3f}s  {line}", "rx")
-
-        data = self._serial_collector.get_data(tail_seconds=10.0)
-        if data:
-            self._tab_serial.set_scope_data(data)
-
-        if self._tab_serial.is_connected and not self._serial_collector.is_running:
-            error = self._serial_collector.last_error
-            self._tab_serial.set_connected(False)
-            if error:
-                self._tab_serial.append_log(error, "rx")
-            self._serial_timer.stop()
+        self._serial_controller.refresh_runtime()
 
     def _set_serial_busy(self, busy: bool, label: str = ""):
-        self._serial_busy = bool(busy)
         if not hasattr(self, "_tab_serial"):
             return
         self._tab_serial.connect_button.setEnabled(not busy)
@@ -2132,42 +2022,14 @@ class MainWindow(QMainWindow):
             )
 
     def _start_serial_worker(self, target, name: str):
-        if getattr(self, "_shutting_down", False):
-            return
-        self._serial_workers = [
-            worker for worker in getattr(self, "_serial_workers", [])
-            if worker.is_alive()
-        ]
-        worker = threading.Thread(target=target, name=name, daemon=True)
-        self._serial_workers.append(worker)
-        worker.start()
+        self._serial_controller.start_worker(target, name)
 
     def _join_serial_workers(self, timeout: float = 0.6) -> bool:
-        deadline = time.perf_counter() + max(0.0, float(timeout))
-        workers = list(getattr(self, "_serial_workers", []))
-        all_stopped = True
-        for worker in workers:
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                all_stopped = False
-                break
-            worker.join(remaining)
-            if worker.is_alive():
-                all_stopped = False
-        self._serial_workers = [
-            worker for worker in getattr(self, "_serial_workers", [])
-            if worker.is_alive()
-        ]
-        return all_stopped
+        return self._serial_controller.join_workers(timeout)
 
     @staticmethod
     def _serial_protocol_key(label: str) -> str:
-        value = (label or "").strip().lower()
-        if "just" in value:
-            return "justfloat"
-        if "raw" in value:
-            return "raw"
-        return "firewater"
+        return serial_protocol_key(label)
 
     def _restore_serial_config(self, cfg: dict):
         if not hasattr(self, "_tab_serial"):
@@ -4373,7 +4235,6 @@ class MainWindow(QMainWindow):
                 "_sample_timer",
                 "_idle_timer",
                 "_debug_state_timer",
-                "_serial_timer",
                 "_scope_resize_sync_timer",
                 "_scope_resize_settle_timer",
                 "_window_resize_sync_timer",
@@ -4395,10 +4256,8 @@ class MainWindow(QMainWindow):
                 logger.warning("Sampling thread did not stop before shutdown timeout")
 
         def stop_serial():
-            self._serial_collector.stop()
-            if not self._join_serial_workers(timeout=0.6):
+            if not self._serial_controller.shutdown(timeout=0.6):
                 logger.warning("Serial worker did not stop before shutdown timeout")
-            self._serial_busy = False
             if hasattr(self, "_tab_serial"):
                 self._tab_serial.set_connected(False)
 
