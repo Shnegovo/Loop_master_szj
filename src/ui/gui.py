@@ -385,6 +385,7 @@ class MainWindow(QMainWindow):
         self._serial_collector = SerialCollector()
         self._serial_log_sequence = 0
         self._serial_busy = False
+        self._serial_workers: list[threading.Thread] = []
         self._unlimited_mode = False
         self._frame_rate = FRAME_RATE_DEFAULT
         self._probe_list: list[dict] = []
@@ -1989,7 +1990,7 @@ class MainWindow(QMainWindow):
                 return
             self._serial_connect_finished.emit(True, config, "")
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_serial_worker(worker, "LoopMaster-serial-connect")
 
     def _finish_serial_connect(self, ok: bool, config: object, error: str):
         if getattr(self, "_shutting_down", False):
@@ -2030,7 +2031,7 @@ class MainWindow(QMainWindow):
                 error = str(exc)
             self._serial_disconnect_finished.emit(error)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_serial_worker(worker, "LoopMaster-serial-disconnect")
 
     def _finish_serial_disconnect(self, error: str):
         if getattr(self, "_shutting_down", False):
@@ -2064,7 +2065,7 @@ class MainWindow(QMainWindow):
                 return
             self._serial_send_finished.emit(True, display, "")
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_serial_worker(worker, "LoopMaster-serial-send")
 
     def _finish_serial_send(self, ok: bool, display: str, error: str):
         if getattr(self, "_shutting_down", False):
@@ -2122,6 +2123,35 @@ class MainWindow(QMainWindow):
             self._tab_serial.connect_button.setText(
                 "断开" if self._tab_serial.is_connected else "连接"
             )
+
+    def _start_serial_worker(self, target, name: str):
+        if getattr(self, "_shutting_down", False):
+            return
+        self._serial_workers = [
+            worker for worker in getattr(self, "_serial_workers", [])
+            if worker.is_alive()
+        ]
+        worker = threading.Thread(target=target, name=name, daemon=True)
+        self._serial_workers.append(worker)
+        worker.start()
+
+    def _join_serial_workers(self, timeout: float = 0.6) -> bool:
+        deadline = time.perf_counter() + max(0.0, float(timeout))
+        workers = list(getattr(self, "_serial_workers", []))
+        all_stopped = True
+        for worker in workers:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                all_stopped = False
+                break
+            worker.join(remaining)
+            if worker.is_alive():
+                all_stopped = False
+        self._serial_workers = [
+            worker for worker in getattr(self, "_serial_workers", [])
+            if worker.is_alive()
+        ]
+        return all_stopped
 
     @staticmethod
     def _serial_protocol_key(label: str) -> str:
@@ -4514,12 +4544,21 @@ class MainWindow(QMainWindow):
                 if timer is not None:
                     timer.stop()
 
+        def request_backend_shutdown():
+            request = getattr(self._backend, "request_shutdown", None)
+            if callable(request):
+                request()
+
         def stop_sampling():
             self._unlimited_mode = False
-            self._collector.stop()
+            stopped = self._collector.stop(timeout=0.8)
+            if not stopped:
+                logger.warning("Sampling thread did not stop before shutdown timeout")
 
         def stop_serial():
             self._serial_collector.stop()
+            if not self._join_serial_workers(timeout=0.6):
+                logger.warning("Serial worker did not stop before shutdown timeout")
             self._serial_busy = False
             if hasattr(self, "_tab_serial"):
                 self._tab_serial.set_connected(False)
@@ -4531,6 +4570,7 @@ class MainWindow(QMainWindow):
                 self._backend.disconnect()
 
         step("stop timers", stop_timers)
+        step("request backend shutdown", request_backend_shutdown)
         step("stop sampling", stop_sampling)
         step("stop serial", stop_serial)
         step("save config", self._save_config)

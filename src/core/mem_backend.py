@@ -46,10 +46,20 @@ class SWDBackend:
         self._probe_name = ""
         self._probe_kind = ""
         self._io_lock = threading.RLock()
+        self._closing = threading.Event()
         # 预计算的读取计划缓存: {id(variables): [(name, plan), ...]}
         self._plan_cache_key = None
         self._plan_cache: list[tuple[str, tuple]] = []
         self._block_plan_cache = None
+
+    def request_shutdown(self):
+        """Ask in-flight callers to stop entering hardware I/O during app shutdown."""
+        self._closing.set()
+        self._connected = False
+
+    def _raise_if_closing(self):
+        if self._closing.is_set():
+            raise RuntimeError("调试器正在断开")
 
     @staticmethod
     def _safe_probe_attr(probe, attr: str) -> str:
@@ -158,6 +168,7 @@ class SWDBackend:
         from pyocd.core.session import Session
 
         self._last_error = ""
+        self._closing.clear()
         self._probe_name = ""
         self._probe_kind = ""
         self._connected = False
@@ -212,6 +223,7 @@ class SWDBackend:
                     probe_kind = self._probe_kind
                     probe_name = self._probe_name
                     self.disconnect()
+                    self._closing.clear()
                     self._probe_kind = probe_kind
                     self._probe_name = probe_name
                     register_mspm0_targets()
@@ -258,6 +270,8 @@ class SWDBackend:
             return False
 
     def disconnect(self, timeout: float | None = None):
+        self.request_shutdown()
+        session = None
         acquired = False
         if timeout is None:
             self._io_lock.acquire()
@@ -268,23 +282,15 @@ class SWDBackend:
                 self._connected = False
                 self._last_error = "断开调试器超时，已请求退出。"
                 session = self._session
-                if session:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
                 self._session = None
                 self._target = None
                 self._ap = None
                 self._plan_cache_key = None
                 self._block_plan_cache = None
+                self._close_session_with_timeout(session, timeout=0.0)
                 return
         try:
-            if self._session:
-                try:
-                    self._session.close()
-                except Exception:
-                    pass
+            session = self._session
             self._session = None
             self._target = None
             self._ap = None
@@ -296,10 +302,49 @@ class SWDBackend:
         finally:
             if acquired:
                 self._io_lock.release()
+        close_timeout = None if timeout is None else max(0.0, float(timeout))
+        self._close_session_with_timeout(session, close_timeout)
+
+    def _close_session_with_timeout(self, session, timeout: float | None = None) -> bool:
+        if session is None:
+            return True
+        if timeout is None:
+            try:
+                session.close()
+                return True
+            except Exception as exc:
+                self._last_error = f"关闭调试会话失败: {exc}"
+                return False
+
+        done = threading.Event()
+        error: list[BaseException] = []
+
+        def close_worker():
+            try:
+                session.close()
+            except BaseException as exc:  # noqa: BLE001 - cleanup must not leak
+                error.append(exc)
+            finally:
+                done.set()
+
+        worker = threading.Thread(
+            target=close_worker,
+            name="LoopMaster-SWD-close",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            self._last_error = "关闭调试会话超时，已后台释放。"
+            return False
+        if error:
+            self._last_error = f"关闭调试会话失败: {error[0]}"
+            return False
+        return True
 
     @property
     def is_connected(self) -> bool:
-        return self._connected and self._ap is not None
+        return not self._closing.is_set() and self._connected and self._ap is not None
 
     @property
     def target_name(self) -> str:
@@ -330,6 +375,7 @@ class SWDBackend:
     def target_state(self) -> str:
         """Return the current pyOCD target state as a short display string."""
         with self._io_lock:
+            self._raise_if_closing()
             if not self._target or not self.is_connected:
                 return "Disconnected"
             try:
@@ -342,6 +388,7 @@ class SWDBackend:
 
     def halt_target(self) -> bool:
         with self._io_lock:
+            self._raise_if_closing()
             if not self._target or not self.is_connected:
                 self._last_error = "探针未连接"
                 return False
@@ -354,6 +401,7 @@ class SWDBackend:
 
     def resume_target(self) -> bool:
         with self._io_lock:
+            self._raise_if_closing()
             if not self._target or not self.is_connected:
                 self._last_error = "探针未连接"
                 return False
@@ -366,6 +414,7 @@ class SWDBackend:
 
     def step_target(self) -> bool:
         with self._io_lock:
+            self._raise_if_closing()
             if not self._target or not self.is_connected:
                 self._last_error = "探针未连接"
                 return False
@@ -385,6 +434,7 @@ class SWDBackend:
 
     def read_pc(self) -> Optional[int]:
         with self._io_lock:
+            self._raise_if_closing()
             if not self._target or not self.is_connected:
                 return None
             try:
@@ -402,6 +452,7 @@ class SWDBackend:
             return self._read_unlocked(address, width)
 
     def _read_unlocked(self, address: int, width: int) -> int:
+        self._raise_if_closing()
         if not self._ap:
             raise RuntimeError("未连接探针")
         ap = self._ap
@@ -441,6 +492,7 @@ class SWDBackend:
         regions are rejected by address window before any write is attempted.
         """
         with self._io_lock:
+            self._raise_if_closing()
             if not self._ap:
                 raise RuntimeError("未连接探针")
             if not self._target or not self.is_connected:
@@ -476,6 +528,7 @@ class SWDBackend:
     def restore_variable_raw(self, address: int, type_info: TypeInfo, raw: bytes) -> dict:
         """Restore bytes captured by write_variable_value()."""
         with self._io_lock:
+            self._raise_if_closing()
             if not self._ap:
                 raise RuntimeError("未连接探针")
             if not self._target or not self.is_connected:
@@ -538,6 +591,7 @@ class SWDBackend:
         return any(start <= address and end <= stop for start, stop in _RAM_WINDOWS)
 
     def _read_bytes_unlocked(self, address: int, width: int) -> bytes:
+        self._raise_if_closing()
         if width <= 0 or width > 8:
             raise ValueError(f"不支持的读取宽度: {width}")
         if not self._ap:
@@ -557,6 +611,7 @@ class SWDBackend:
         return bytes(data)
 
     def _write_bytes_unlocked(self, address: int, data: bytes) -> None:
+        self._raise_if_closing()
         if not self._ap:
             raise RuntimeError("未连接探针")
         if not data:
@@ -584,6 +639,7 @@ class SWDBackend:
     def read_block_pipelined(self, block_start: int, block_words: int,
                              block_plans: list[tuple], num_samples: int = 8):
         with self._io_lock:
+            self._raise_if_closing()
             return self._read_block_pipelined_unlocked(block_start, block_words, block_plans, num_samples)
 
     def _read_block_pipelined_unlocked(self, block_start: int, block_words: int,
@@ -640,12 +696,14 @@ class SWDBackend:
 
     def read_batch(self, variables: list[tuple[str, int, TypeInfo]]) -> dict[str, float]:
         with self._io_lock:
+            self._raise_if_closing()
             return self._read_batch_unlocked(variables)
 
     def _read_batch_unlocked(self, variables: list[tuple[str, int, TypeInfo]]) -> dict[str, float]:
         """批量读取 — 预计算计划 + 逐变量快速提取，无 isinstance 开销。"""
         if not variables:
             return {}
+        self._raise_if_closing()
         if not self._ap:
             raise RuntimeError("未连接探针")
 
@@ -709,6 +767,7 @@ class SWDBackend:
     ) -> list[dict[str, float]]:
         if not variables:
             return []
+        self._raise_if_closing()
         if not self._ap:
             raise RuntimeError("未连接探针")
 
@@ -776,8 +835,9 @@ class SWDBackend:
     ) -> list[list[float]]:
         if not variables:
             return []
+        self._raise_if_closing()
         if not self._ap:
-            raise RuntimeError("鏈繛鎺ユ帰閽?")
+            raise RuntimeError("未连接探针")
 
         self._ensure_plan_cache_unlocked(variables)
         order_map = {name: idx for idx, (name, _plan) in enumerate(self._plan_cache)}
@@ -786,7 +846,8 @@ class SWDBackend:
     def _read_batch_row_ordered_unlocked(self, order_map: dict[str, int]) -> list[float]:
         ap = self._ap
         if not ap:
-            raise RuntimeError("鏈繛鎺ユ帰閽?")
+            raise RuntimeError("未连接探针")
+        self._raise_if_closing()
 
         row = [float("nan")] * len(order_map)
         block = self._block_plan_cache

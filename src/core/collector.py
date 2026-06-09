@@ -172,14 +172,20 @@ class DataCollector:
         self._thread = threading.Thread(target=self._sample_loop, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def request_stop(self):
         self._running = False
         self._wake_event.set()
+
+    def stop(self, timeout: float = 1.0) -> bool:
+        self.request_stop()
+        stopped = True
         if self._thread:
-            self._thread.join(timeout=1)
-            if not self._thread.is_alive():
+            self._thread.join(timeout=max(0.0, float(timeout)))
+            stopped = not self._thread.is_alive()
+            if stopped:
                 self._thread = None
         self._end_timer_precision()
+        return stopped
 
     @property
     def is_running(self) -> bool:
@@ -244,6 +250,8 @@ class DataCollector:
                         samples = self._backend.read_batch_samples(variables_snapshot, batch_size)
                     else:
                         samples = [self._backend.read_batch(variables_snapshot)]
+                    if not self._running:
+                        break
                     produced_count = max(1, len(samples))
                     if timestamps is not None:
                         with self._lock:
@@ -266,6 +274,8 @@ class DataCollector:
                         self._actual_rate = self._sample_count / elapsed if elapsed > 0 else 0
 
             except Exception as e:
+                if not self._running:
+                    break
                 import sys
                 print(f"[Collector] sample error: {e}", file=sys.stderr, flush=True)
 

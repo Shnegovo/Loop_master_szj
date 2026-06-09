@@ -20,6 +20,9 @@ ui-*/
 ui-*.png
 ui-*.log
 table-debug-shot.png
+tools/*-runtime/
+tools/*-probe/
+tools/ui-workspace-nav/
 
 cockpit-tools-main/
 cockpit-tools-main.zip
