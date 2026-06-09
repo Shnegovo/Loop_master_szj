@@ -599,3 +599,62 @@ Add a safe Keil project metadata layer so the future modern debugger frontend ca
   - represent source tree entries independently of Qt widgets
   - model visual breakpoints, enabled state, file/line, condition, and hit count
   - add no-UI probes so the future code editor/gutter can be built on a stable core model
+
+## Stage 12 - Debug Workbench Source And Breakpoint Models
+
+### Goal
+
+Create pure core models for the future modern Keil debugger frontend so the code editor, gutter, and breakpoint list can be built on tested state instead of ad-hoc Qt widget logic.
+
+### Completed
+
+- Added `src/core/debug_workbench.py`.
+- Added source view models:
+  - `SourceEntry`
+  - `SourceTreeNode`
+  - language classification for C/C++/ASM/header files
+- Added breakpoint models:
+  - `Breakpoint`
+  - `BreakpointStore`
+- `BreakpointStore` now supports:
+  - add/upsert
+  - lookup
+  - list all
+  - list by file
+  - toggle add/remove
+  - remove
+  - enable/disable
+  - condition update
+  - verified-state update
+  - hit-count recording
+- Added `source_entries_from_keil_project()` and `source_tree_from_entries()` to bridge the Keil project parser into a future code tree/editor UI.
+- Added `tools/debug_workbench_model_probe.py`, a no-UI probe for source entries, tree shape, and breakpoint behavior.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\keil\project.py tools\debug_workbench_model_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS, source entries/tree and breakpoint store behavior are stable.
+- `python tools\keil_project_probe.py`
+  - PASS, synthetic Keil project parsing still works.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, real project metadata still parses.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --plan-launch --port 4827 --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, Keil launch planning still works.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works.
+- `git diff --check -- src/core/debug_workbench.py tools/debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, read source contents, or call UVSOCK debug commands.
+- The new model is intentionally UI-agnostic so the future code view can be implemented with Qt widgets, QScintilla, Monaco-in-webview, or another editor surface without rewriting breakpoint semantics.
+
+### Next Target
+
+- Add a minimal Qt-free code document layer:
+  - load source text only from an explicit selected file
+  - map line numbers to breakpoint decorations
+  - provide search/current-PC/run-line decoration state
+  - add probes with synthetic files before building the visual editor
