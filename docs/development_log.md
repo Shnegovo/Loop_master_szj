@@ -70,3 +70,69 @@ Make shutdown regressions visible before touching larger architecture changes.
   - reduce variable tree branch protrusion
   - hide splitter residue when the scope sidebar is collapsed
   - keep changes small and verify with existing UI probes
+
+## Stage 2 - UI Edge Polish And Probe Cleanup
+
+### Goal
+
+Close the visible UI rough edges before starting larger architecture work.
+
+### Completed
+
+- Replaced obvious English UI strings with Chinese copy:
+  - target tooltip
+  - variable tree folder tooltip
+  - curve color tooltips
+  - scope sidebar tooltip
+  - serial hero baud text
+  - probe fallback names
+  - sampling rate `MAX` display
+- Switched the app and scope axis font preference to `Microsoft YaHei UI`.
+- Reduced heavy button weight in the light theme while keeping primary buttons prominent.
+- Increased variable tree indentation and explicitly styled tree branch areas to avoid branch/selection protrusions.
+- Added `scopeMainSplitter` styling and hid its handle when the scope settings sidebar is collapsed.
+- Made the serial assistant splitter non-collapsible, non-opaque during drag, and visually thinner.
+- Hardened `PclComboBox` popup positioning:
+  - repositions on owner move/resize
+  - hides on window deactivate/close
+  - clamps popup width/height inside the window
+- Cleaned mojibake comments/log messages that could surface in logs or confuse follow-up work.
+- Cleaned screenshot-only probe exits so Qt teardown noise does not mask UI PASS results.
+
+### Verified
+
+- `python -m py_compile main.py src\ui\gui.py src\ui\pcl_theme.py src\ui\serial_tab.py tools\ui_combo_popup_probe.py tools\ui_pid_waveform_probe.py`
+- `python tools\serial_parser_probe.py`
+  - PASS for CSV, FireWater, JustFloat, raw text, and hex lines.
+- `python tools\ui_combo_popup_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\combo-final-clean`
+  - PASS, popup screenshot complete.
+- `python tools\ui_serial_integration_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\serial-rerun`
+  - PASS, serial assistant screenshot complete.
+- `python tools\ui_workspace_nav_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\nav`
+  - PASS, LoopMaster and serial workspace navigation screenshots complete.
+- `python tools\ui_scope_splitter_perf_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\splitter-perf-rerun --iterations 240`
+  - PASS, avg `9.36ms`, p95 `14.85ms`, max `20.72ms`, slow>24ms `0`.
+- `python tools\ui_human_flow_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\human-flow`
+  - PASS, covered live data, Halt, Run, splitter drag, sidebar hide/show, narrow window, axis toggles, stop, close.
+- `python tools\ui_pid_waveform_probe.py --output-dir %TEMP%\loopmaster-ui-stage2\pid-waveform-clean2`
+  - PASS, covered step overshoot, steady micro jitter, high-frequency small jitter, single-sample overshoot, absurd glitch clipping, and mixed three-pane PID.
+- `python tools\ui_close_process_probe.py --entry main.py --exit-timeout 10`
+  - PASS, close-to-exit about `346.8ms`.
+- `python tools\ui_close_process_probe.py --scenario sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `342.2ms`.
+- `python tools\ui_close_process_probe.py --scenario serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `352.2ms`.
+
+### Notes
+
+- A parallel run of multiple GUI probes made the splitter performance probe exceed budget once; a standalone rerun passed cleanly. Treat splitter performance probes as single-process measurements.
+- Screenshot-only probes should avoid Qt teardown assertions; close/lifecycle behavior is covered by `ui_close_process_probe.py`.
+
+### Next Target
+
+- Start architecture foundation work before adding more large features:
+  - add transport capability protocols for pyOCD/Keil/serial/replay paths
+  - begin decoder extraction from serial backend
+  - move pure scope display algorithms out of `MainWindow`
+  - prepare a serial controller split so new tools do not continue to bloat `gui.py`
+  - add a no-hardware fake transport probe for future Keil and replay work

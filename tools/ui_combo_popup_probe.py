@@ -161,8 +161,8 @@ def run(output_dir: Path) -> None:
         flush=True,
     )
 
-    if os.name == "nt":
-        ctypes.windll.kernel32.ExitProcess(0)
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(0)
 
 

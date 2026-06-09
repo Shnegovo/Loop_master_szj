@@ -76,7 +76,7 @@ _STM32_TARGET_FALLBACKS = [
 
 
 def _build_target_options() -> list[tuple[str, str]]:
-    options = [("STM32 Auto / Cortex-M", DEFAULT_TARGET)]
+    options = [("STM32 自动 / Cortex-M", DEFAULT_TARGET)]
     stm32_targets = list(_STM32_TARGET_FALLBACKS)
     try:
         from pyocd.target import TARGET
@@ -176,26 +176,26 @@ def setup_logging(log_path: str = "loopmaster.log"):
         '%(asctime)s [%(levelname)-7s] %(message)s',
         datefmt='%H:%M:%S',
     )
-    # 鏂囦欢杈撳嚭 鈥?瀹屾暣鏃ュ織
+    # 文件输出，保留完整日志
     fh = logging.FileHandler(log_path, encoding='utf-8')
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
-    # 鎺у埗鍙拌緭鍑?鈥?INFO 浠ヤ笂
+    # 控制台输出 INFO 及以上
     ch = logging.StreamHandler(sys.stderr)
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
     sys.excepthook = lambda exc_type, exc, tb: logger.critical(
-        "Unhandled exception",
+        "未处理异常",
         exc_info=(exc_type, exc, tb),
     )
     threading.excepthook = lambda args: logger.critical(
-        "绾跨▼寮傚父: %s",
-        getattr(args.thread, "name", "unknown"),
+        "线程异常：%s",
+        getattr(args.thread, "name", "未知线程"),
         exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
     )
-    logger.info("LoopMaster 鍚姩")
+    logger.info("LoopMaster 启动")
 
 
 # ---- Helpers ----
@@ -338,7 +338,7 @@ class ScopePane:
         self.plot.getAxis("bottom").setPen(pg.mkPen(color="#e4ebf3"))
         self.plot.getAxis("left").setTextPen(pg.mkPen(color="#516174"))
         self.plot.getAxis("bottom").setTextPen(pg.mkPen(color="#516174"))
-        axis_font = QFont("Segoe UI", 9)
+        axis_font = QFont("Microsoft YaHei UI", 9)
         for axis_name in ("left", "bottom"):
             axis = self.plot.getAxis(axis_name)
             try:
@@ -449,7 +449,7 @@ class MainWindow(QMainWindow):
         self._target_is_halted = False
         self._target_state_value = "--"
 
-        # Timers 鈥?蹇呴』鍦?_setup_ui 涔嬪墠鍒涘缓锛屽洜涓?setValue 浼氳Е鍙?valueChanged 淇″彿
+        # Timers 必须在 _setup_ui 之前创建，因为 setValue 会触发 valueChanged 信号
         self._plot_timer = QTimer(self)
         self._plot_timer.timeout.connect(self._update_plot)
 
@@ -863,7 +863,7 @@ class MainWindow(QMainWindow):
                 current_port = self._tab_serial.port_combo.currentData() or self._tab_serial.port_combo.currentText()
                 if current_port and not str(current_port).lower().startswith("no serial") and "未发现" not in str(current_port):
                     port_text = str(current_port)
-                baud_text = f"{self._tab_serial.baud_combo.currentText()} baud"
+                baud_text = f"{self._tab_serial.baud_combo.currentText()} 波特"
                 connected = bool(self._tab_serial.is_connected)
             channel_count = 0
             try:
@@ -879,7 +879,7 @@ class MainWindow(QMainWindow):
         if self._backend.is_connected:
             target = self._backend.target_name or "已连接"
             probe = self._backend.probe_kind or self._backend.probe_name or "SWD"
-            self._hero_probe.setText(f"{probe} -> {target}")
+            self._hero_probe.setText(f"{probe} → {target}")
         else:
             self._hero_probe.setText("调试器未连接")
         self._hero_vars.setText(f"{len(self._monitored)} 个变量")
@@ -923,7 +923,7 @@ class MainWindow(QMainWindow):
         dialog = PclLoadingDialog(
             self,
             "正在加载 ELF/AXF",
-            f"正在解析 {elf_path.name}，请稍候...",
+            f"正在解析 {elf_path.name}，请稍候…",
         )
         dialog.show()
         QApplication.processEvents()
@@ -941,7 +941,7 @@ class MainWindow(QMainWindow):
 
     def _setup_menu(self):
         self._file_menu = QMenu("文件", self)
-        act_elf = QAction("导入 ELF/AXF...", self)
+        act_elf = QAction("导入 ELF/AXF…", self)
         act_elf.triggered.connect(self._on_import_elf)
         self._file_menu.addAction(act_elf)
 
@@ -950,7 +950,7 @@ class MainWindow(QMainWindow):
         self._act_recent_elf.setEnabled(False)
         self._file_menu.addAction(self._act_recent_elf)
 
-        act_pack = QAction("导入 CMSIS-Pack...", self)
+        act_pack = QAction("导入 CMSIS-Pack…", self)
         act_pack.triggered.connect(self._on_import_pack)
         self._file_menu.addAction(act_pack)
 
@@ -976,7 +976,7 @@ class MainWindow(QMainWindow):
         act_disconnect.triggered.connect(self._on_disconnect_ui)
         self._probe_menu.addAction(act_disconnect)
 
-        # 鏄剧ず鑿滃崟 鈥?甯х巼閫夋嫨
+        # 显示菜单：帧率选择
         self._display_menu = QMenu("显示", self)
         self._fps_actions = []
         self._fps_group = QAction(self)  # dummy action group holder
@@ -1052,7 +1052,7 @@ class MainWindow(QMainWindow):
 
         self._probe_combo = PclComboBox()
         self._probe_combo.setFixedWidth(320)
-        self._probe_combo.setPlaceholderText("扫描以查找调试器...")
+        self._probe_combo.setPlaceholderText("扫描以查找调试器…")
         self._polish_combo_popup(self._probe_combo)
         layout.addWidget(self._probe_combo)
 
@@ -1070,8 +1070,8 @@ class MainWindow(QMainWindow):
         self._target_combo.setEditable(True)
         self._target_combo.setInsertPolicy(QComboBox.NoInsert)
         self._target_combo.setToolTip(
-            "For STM32, Cortex-M is usually fine. You can also enter a pyOCD "
-            "target such as stm32f103rc. For TI MSPM0G3507, use mspm0g3507 or m0g3507.")
+            "STM32 通常选择 Cortex-M 即可，也可以输入 pyOCD 目标名，例如 stm32f103rc。"
+            "TI MSPM0G3507 可使用 mspm0g3507 或 m0g3507。")
         if self._target_combo.lineEdit():
             self._target_combo.lineEdit().setPlaceholderText("cortex_m / stm32f103rc / mspm0g3507")
         for label, target_name in TARGET_OPTIONS:
@@ -1385,7 +1385,7 @@ class MainWindow(QMainWindow):
             self._conn_label.setStyleSheet("color: #2fb344; font-weight: 600; font-size: 9pt;")
             if self._probe_combo.count() == 0:
                 probe_kind = self._backend.probe_kind or "调试器"
-                probe_name = self._backend.probe_name or "connected"
+                probe_name = self._backend.probe_name or "已连接"
                 self._probe_combo.addItem(f"{probe_kind} - {probe_name}")
             self._btn_connect.setText("断开")
             self._btn_connect.setObjectName("disconnectBtn")
@@ -1415,7 +1415,7 @@ class MainWindow(QMainWindow):
             self._btn_scan.setEnabled(True)
             self._set_connect_mode_enabled(True)
             self._swd_freq_combo.setEnabled(True)
-        # 寮哄埗鏍峰紡鍒锋柊
+        # 强制样式刷新
         self._btn_connect.style().unpolish(self._btn_connect)
         self._btn_connect.style().polish(self._btn_connect)
         self._refresh_hero()
@@ -1541,7 +1541,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self._btn_recent_elf)
 
         self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("按名称搜索变量...")
+        self._filter_edit.setPlaceholderText("按名称搜索变量…")
         self._filter_edit.setClearButtonEnabled(True)
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         top_bar.addWidget(self._filter_edit, stretch=1)
@@ -1562,7 +1562,7 @@ class MainWindow(QMainWindow):
         self._tree.setColumnWidth(2, 200)
         self._tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self._tree.setRootIsDecorated(True)
-        self._tree.setIndentation(12)
+        self._tree.setIndentation(18)
         self._tree.setAnimated(True)
         self._tree.setAllColumnsShowFocus(True)
         self._tree.setUniformRowHeights(True)
@@ -1584,8 +1584,9 @@ class MainWindow(QMainWindow):
         tab2_layout.setSpacing(0)
 
         self._scope_splitter = QSplitter(Qt.Horizontal)
+        self._scope_splitter.setObjectName("scopeMainSplitter")
         self._scope_splitter.setChildrenCollapsible(False)
-        self._scope_splitter.setHandleWidth(3)
+        self._scope_splitter.setHandleWidth(2)
         self._scope_splitter.setOpaqueResize(False)
         self._scope_splitter.splitterMoved.connect(self._on_scope_splitter_moved)
         tab2_layout.addWidget(self._scope_splitter, stretch=1)
@@ -1802,7 +1803,7 @@ class MainWindow(QMainWindow):
         self._rate_combo.addItem("200 Hz", 200)
         self._rate_combo.addItem("500 Hz", 500)
         self._rate_combo.addItem("1000 Hz", 1000)
-        self._rate_combo.addItem("MAX", 0)
+        self._rate_combo.addItem("最大", 0)
         self._rate_combo.setCurrentIndex(3)
         self._polish_combo_popup(self._rate_combo)
         self._rate_combo.currentIndexChanged.connect(self._on_rate_combo_changed)
@@ -1900,14 +1901,14 @@ class MainWindow(QMainWindow):
         self._scope_pane_splitter = QSplitter(Qt.Horizontal)
         self._scope_pane_splitter.setObjectName("scopePaneSplitter")
         self._scope_pane_splitter.setChildrenCollapsible(False)
-        self._scope_pane_splitter.setHandleWidth(3)
+        self._scope_pane_splitter.setHandleWidth(4)
         self._scope_pane_splitter.setOpaqueResize(False)
         self._scope_pane_splitter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scope_pane_splitter.splitterMoved.connect(self._on_scope_pane_splitter_moved)
         self._scope_right_splitter = QSplitter(Qt.Vertical)
         self._scope_right_splitter.setObjectName("scopePaneSplitter")
         self._scope_right_splitter.setChildrenCollapsible(False)
-        self._scope_right_splitter.setHandleWidth(3)
+        self._scope_right_splitter.setHandleWidth(4)
         self._scope_right_splitter.setOpaqueResize(False)
         self._scope_right_splitter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scope_right_splitter.splitterMoved.connect(self._on_scope_pane_splitter_moved)
@@ -1980,7 +1981,7 @@ class MainWindow(QMainWindow):
             protocol=self._serial_protocol_key(getattr(options, "protocol", "FireWater CSV")),
             buffer_seconds=60.0,
         )
-        self._set_serial_busy(True, "正在打开...")
+        self._set_serial_busy(True, "正在打开…")
 
         def worker():
             try:
@@ -2021,7 +2022,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_serial_busy", False):
             self._tab_serial.append_log("串口操作尚未完成。", "rx")
             return
-        self._set_serial_busy(True, "正在关闭...")
+        self._set_serial_busy(True, "正在关闭…")
 
         def worker():
             error = ""
@@ -2211,14 +2212,14 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         error = None
         try:
-            dialog.set_message(f"正在读取 {self._elf_path.name} 的调试信息...")
+            dialog.set_message(f"正在读取 {self._elf_path.name} 的调试信息…")
             QApplication.processEvents()
             elf = ELFParser(self._elf_path)
             elf.open()
             dwarf_db = parse_debug_info(self._elf_path)
 
             # Try to find a linker map file for accurate source file mapping
-            dialog.set_message("正在匹配变量来源和结构体布局...")
+            dialog.set_message("正在匹配变量来源和结构体布局…")
             QApplication.processEvents()
             symbol_to_file = {}
             map_path = self._find_map_file()
@@ -2228,7 +2229,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-            dialog.set_message("正在生成变量列表...")
+            dialog.set_message("正在生成变量列表…")
             QApplication.processEvents()
             inventory = VariableInventory(elf, dwarf_db, symbol_to_file)
             self._variables = inventory.generate()
@@ -2308,7 +2309,7 @@ class MainWindow(QMainWindow):
                 folder.setText(0, short_name)
                 folder.setText(1, f"{len(vars_in_file)} 个变量")
                 folder.setText(2, fname)
-                folder.setToolTip(0, "Click to expand or collapse")
+                folder.setToolTip(0, "点击展开或折叠")
                 folder.setFlags(folder.flags() & ~Qt.ItemIsSelectable)
                 font = folder.font(0)
                 font.setBold(True)
@@ -2323,7 +2324,7 @@ class MainWindow(QMainWindow):
         self._tree.blockSignals(False)
         self._tree.collapseAll()
 
-        # 鎭㈠涓婃閫変腑鐨勫彉閲?
+        # 恢复上次选中的变量
         self._monitored = set()
         saved_vars = self._saved_monitored_variables
         if saved_vars:
@@ -2720,7 +2721,7 @@ class MainWindow(QMainWindow):
         if not selected:
             self._selected_value_label.setText("已选：--")
         elif selected in self._temporary_writes:
-            self._selected_value_label.setText(f"已选：{self._short_value_name(selected)} - 已修改")
+            self._selected_value_label.setText(f"已选：{self._short_value_name(selected)}（已修改）")
         else:
             self._selected_value_label.setText(f"已选：{self._short_value_name(selected)}")
 
@@ -2930,9 +2931,9 @@ class MainWindow(QMainWindow):
                 btn.setToolTip(btn.text())
 
         if hasattr(self, "_btn_next_color"):
-            self._btn_next_color.setToolTip("Next color")
+            self._btn_next_color.setToolTip("切换到下一种曲线颜色")
         if hasattr(self, "_btn_reset_colors"):
-            self._btn_reset_colors.setToolTip("Reset colors")
+            self._btn_reset_colors.setToolTip("重置曲线颜色")
 
         self._refresh_debug_buttons()
 
@@ -3067,19 +3068,21 @@ class MainWindow(QMainWindow):
             self._scope_sidebar_scroll.setVisible(visible)
         if hasattr(self, "_btn_scope_sidebar"):
             self._btn_scope_sidebar.setChecked(visible)
-            self._btn_scope_sidebar.setToolTip("Hide settings sidebar" if visible else "Show settings sidebar")
+            self._btn_scope_sidebar.setToolTip("隐藏设置侧栏" if visible else "显示设置侧栏")
         if hasattr(self, "_scope_splitter"):
             total_width = self._scope_splitter.width() or sum(self._scope_splitter.sizes()) or 1
             if visible:
+                self._scope_splitter.setHandleWidth(2)
                 self._fit_scope_layout(sync_splitter=True)
             else:
+                self._scope_splitter.setHandleWidth(0)
                 self._scope_splitter.setSizes([0, total_width])
         if save:
             self._save_config()
 
     @staticmethod
     def _short_value_name(name: str) -> str:
-        return name if len(name) <= 42 else "..." + name[-39:]
+        return name if len(name) <= 42 else "…" + name[-39:]
 
     @staticmethod
     def _format_debug_value(value: float) -> str:
@@ -3183,7 +3186,7 @@ class MainWindow(QMainWindow):
     def _curve_display_name(self, name: str) -> str:
         if len(name) <= 34:
             return name
-        return "..." + name[-31:]
+        return "…" + name[-31:]
 
     def _curve_default_index(self, name: str) -> int:
         names = self._curve_color_names()
@@ -3209,7 +3212,7 @@ class MainWindow(QMainWindow):
             compact = f"{parts[-2]}.{parts[-1]}"
             if len(compact) <= 18:
                 return compact
-        return "..." + name[-13:]
+        return "…" + name[-13:]
 
     def _update_scope_pane_legend(self, pane: ScopePane, names: tuple[str, ...]):
         if not hasattr(pane, "legend_label"):
@@ -3290,7 +3293,7 @@ class MainWindow(QMainWindow):
             else:
                 self._curve_color_combo.setCurrentIndex(0)
         else:
-            self._curve_color_combo.addItem("None", "")
+            self._curve_color_combo.addItem("未选择", "")
         self._curve_color_combo.blockSignals(False)
         self._curve_color_combo.setEnabled(bool(names))
         self._polish_combo_popup(self._curve_color_combo)
@@ -3394,7 +3397,7 @@ class MainWindow(QMainWindow):
         self._populate_tree()
 
     # ================================================================
-    #  Probe actions
+    #  调试器操作
     # ================================================================
 
     def _on_view_log(self):
@@ -3431,7 +3434,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_probes_ui(self):
         self._btn_scan.setEnabled(False)
-        self._btn_scan.setText("正在扫描...")
+        self._btn_scan.setText("正在扫描…")
         QApplication.processEvents()
         try:
             self._probe_list = SWDBackend.scan_probes()
@@ -3448,9 +3451,9 @@ class MainWindow(QMainWindow):
         else:
             for i, p in enumerate(self._probe_list):
                 uid = p.get("uid") or ""
-                uid_short = uid[:8] if uid else "unknown"
+                uid_short = uid[:8] if uid else "未知"
                 kind = p.get("kind") or "调试器"
-                name = p.get("name") or p.get("vendor") or "Unknown"
+                name = p.get("name") or p.get("vendor") or "未知调试器"
                 vendor = p.get("vendor") or ""
                 detail = f"{name} ({vendor})" if vendor and vendor not in name else name
                 label = f"{kind} - {detail} [{uid_short}]"
@@ -3497,19 +3500,19 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(
                 f"调试器：{self._backend.probe_kind or '已连接'}")
             self._led.setStyleSheet("color: #2fb344;")
-            logger.info("Probe connected (probe=%s, mode=%s, target=%s, SWD=%dkHz)",
+            logger.info("调试器已连接 (probe=%s, mode=%s, target=%s, SWD=%dkHz)",
                 self._backend.probe_kind, connect_mode, self._backend.target_name,
                 self._backend.swd_freq_khz)
             self._refresh_debug_state()
             self._idle_read()
         else:
             reason = self._backend.last_error or "未找到目标芯片，请检查接线和供电。"
-            logger.warning("Connect failed: %s", reason)
+            logger.warning("连接失败：%s", reason)
             self._show_warning("连接失败",
                 reason)
 
     def _on_disconnect_ui(self):
-        logger.info("Probe disconnected")
+        logger.info("调试器已断开")
         self._on_stop()
         self._backend.disconnect()
         self._temporary_writes.clear()
@@ -3550,7 +3553,7 @@ class MainWindow(QMainWindow):
 
         rate = self._rate_combo.currentData()
         if rate == 0:
-            rate = 1000  # MAX 鈫?unlimited mode
+            rate = 1000  # 最大模式使用高频采样
 
         self._collector.configure(rate, BUFFER_SECONDS)
         self._collector.set_variables(self._monitor_list)
@@ -3606,7 +3609,7 @@ class MainWindow(QMainWindow):
             self._show_warning("采样失败", str(e))
             return
         self._set_frame_rate(self._frame_rate)
-        logger.info("Started background sampling: %d variables, target %d Hz", len(self._monitor_list), rate)
+        logger.info("后台采样已启动：%d 个变量，目标 %d Hz", len(self._monitor_list), rate)
 
         self._btn_start.setText("停止")
         self._btn_start.setObjectName("stopBtn")
@@ -3616,7 +3619,7 @@ class MainWindow(QMainWindow):
         self._show_workspace_page("scope")
 
     def _on_stop(self):
-        logger.info("Stopped sampling (%d samples)", self._collector._sample_count)
+        logger.info("采样已停止（%d 个样本）", self._collector._sample_count)
         self._unlimited_mode = False
         self._sample_timer.stop()
         self._collector.stop()
@@ -3641,10 +3644,10 @@ class MainWindow(QMainWindow):
             if rate is None:
                 return
             if rate == 0:
-                rate = 1000  # MAX 鈫?high-rate batched mode
+                rate = 1000  # 最大模式使用高频批量采样
             self._apply_rate(int(rate))
         except Exception as e:
-            logger.exception("Sample-rate switch failed")
+            logger.exception("采样率切换失败")
             self._show_warning("采样率切换失败", str(e))
 
     def _apply_rate(self, rate: int):
@@ -3654,12 +3657,12 @@ class MainWindow(QMainWindow):
         self._update_sample_rate_label()
         if not self._collector.is_running:
             return
-        logger.info("Sample rate switched: %d Hz", rate)
+        logger.info("采样率已切换：%d Hz", rate)
 
     def _set_rate_combo(self, rate: int):
         """Set combo to match a saved rate value."""
         if rate >= 500:
-            rate = 0  # MAX
+            rate = 0  # 最大
         idx = self._rate_combo.findData(rate)
         if idx >= 0:
             self._rate_combo.setCurrentIndex(idx)
@@ -3678,12 +3681,12 @@ class MainWindow(QMainWindow):
         self._fast_bufs = c._buffers  # {name: deque}
         self._fast_ts = c._timestamps  # deque
 
-        # 鍒嗙被: 鐩存帴(float)璇诲彇 vs 闇€瑕?_extract_val 澶勭悊
+        # 分类：直接读取 uint32 或交给 _extract_val 处理
         self._fast_direct = []   # [(deque, word_addr), ...]
         self._fast_complex = []  # [(deque, word_addr, bo, w, sgn, flt), ...]
         self._fast_names = []    # [name, ...]
 
-        # 鏋勫缓鎵€鏈夊彉閲忕殑璇诲彇璁″垝
+        # 构建所有变量的读取计划
         all_plans = []  # [(wa, bo, w, wc, sgn, flt, buf), ...]
         for name, addr, ti in self._monitor_list:
             wa, bo, w, wc, sgn, flt = decoder.make_plan(addr, ti)
@@ -3701,18 +3704,18 @@ class MainWindow(QMainWindow):
                 self._fast_complex.append((buf, addr, 0, w, sgn, flt, True))
                 logger.debug(f"Variable '{name}' -> cross-word: bo={bo} w={w} wc={wc}")
 
-        # 灏濊瘯鍚堝苟涓哄崟娆″潡璇诲彇锛堝皢 N 娆?USB 浜嬪姟鍙樹负 1 娆★級
+        # 尝试合并为单次块读取，将 N 次 USB 事务变为 1 次
         self._fast_block = None
         if len(all_plans) >= 2:
-            all_plans.sort(key=lambda x: x[0])  # 鎸?word_addr 鎺掑簭
+            all_plans.sort(key=lambda x: x[0])  # 按 word_addr 排序
             first_wa = all_plans[0][0]
             last_plan = all_plans[-1]
             last_end = last_plan[0] + last_plan[3] * 4
             total_words = (last_end - first_wa) // 4
             if 2 <= total_words <= 64:
                 self._fast_block = (first_wa, total_words, all_plans)
-                logger.info(f"Block read mode: {len(all_plans)} variables, "
-                            f"range 0x{first_wa:08X}, {total_words} words")
+                logger.info(f"块读取模式：{len(all_plans)} 个变量，"
+                            f"范围 0x{first_wa:08X}, {total_words} words")
 
     def _on_sample_tick(self):
         """Fast sampling path with inline references."""
@@ -3729,7 +3732,7 @@ class MainWindow(QMainWindow):
             t0 = tick_start
             c._t0 = t0
 
-        # 灏濊瘯鍗曟鍧楄鍙栵紙灏?N 娆?USB 浜嬪姟鍚堝苟涓?1 娆★級
+        # 尝试单次块读取，将 N 次 USB 事务合并为 1 次
         block = self._fast_block
         if block is not None:
             block_start, block_words, block_plans = block
@@ -3743,7 +3746,7 @@ class MainWindow(QMainWindow):
                         buf.append(_extract_val(words, word_idx=idx, byte_offset=bo,
                                                 width=w, is_signed=sgn, is_float=flt))
                     else:
-                        # 璺ㄥ瓧鍙橀噺鍥為€€鍒?read()锛堢綍瑙侊級
+                        # 跨字变量回退到 read()
                         buf.append(float(self._backend.read(wa + bo, w)))
                 ts_deque.append(tick_start - t0)
                 c._sample_count += 1
@@ -3754,18 +3757,18 @@ class MainWindow(QMainWindow):
                                  f"rate: {c._actual_rate:.0f}Hz | {len(block_plans)} vars -> {block_words} words")
                 return
             except Exception as e:
-                logger.warning(f"Block read failed: {e}; falling back to per-variable reads")
-                self._fast_block = None  # 涓嶅啀灏濊瘯
-                # 缁х画鎵ц閫愪釜璇诲彇璺緞
+                logger.warning(f"块读取失败：{e}；回退到逐变量读取")
+                self._fast_block = None  # 不再尝试块读取
+                # 继续执行逐变量读取路径
 
         try:
-            # 鐩存帴璇诲彇璺緞 (瀵归綈 uint32 鈥?鏈€甯歌鎯呭喌)
+            # 直接读取路径：对齐 uint32 是最常见情况
             for buf, wa in self._fast_direct:
                 buf.append(float(ap.read_memory(wa, transfer_size=32)))
 
-            # 澶嶆潅绫诲瀷璺緞 (鍋忕Щ / 鏈夌鍙?/ 娴偣)
+            # 复杂类型路径：偏移、有符号数或浮点数
             for item in self._fast_complex:
-                if len(item) == 7:  # 璺ㄥ瓧鍙橀噺
+                if len(item) == 7:  # 跨字变量
                     buf, addr, _, w, sgn, flt, _ = item
                     buf.append(float(self._backend.read(addr, w)))
                 else:
@@ -3774,7 +3777,7 @@ class MainWindow(QMainWindow):
                     buf.append(_extract_val(raw, byte_offset=bo, width=w,
                                             is_signed=sgn, is_float=flt))
         except Exception:
-            pass  # USB 鍋跺彂閿欒锛岃烦杩囨湰娆￠噰鏍?
+            pass  # USB 偶发错误，跳过本次采样
 
         ts_deque.append(tick_start - t0)
 
@@ -3809,7 +3812,7 @@ class MainWindow(QMainWindow):
 
         if block is not None:
             block_start, block_words, block_plans = block
-            # 鑷€傚簲娴佹按绾挎繁搴? 鍧楄秺灏忔繁搴﹁秺澶э紝USB 寮€閿€鍧囨憡瓒婂ソ
+            # 自适应流水线深度：块越小深度越大，均摊 USB 开销
             if block_words <= 8:
                 pipe_depth = 48
             elif block_words <= 16:
@@ -3830,7 +3833,7 @@ class MainWindow(QMainWindow):
                     for (_, _, _, _, _, _, buf), val in zip(block_plans, sample_vals):
                         buf.append(val)
             except Exception:
-                # 娴佹按绾垮け璐ユ椂鍥為€€鍗曟鍧楄鍙?
+                # 流水线失败时回退到单次块读取
                 try:
                     words = ap.read_memory_block32(block_start, block_words)
                     if not isinstance(words, list):
@@ -3848,7 +3851,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         else:
-            # 闈炲潡璇诲彇璺緞 鈥?閫愪釜鍙橀噺璇诲彇
+            # 非块读取路径：逐个变量读取
             batch_deadline = time.perf_counter() + 0.020
             while c._running and time.perf_counter() < batch_deadline:
                 try:
@@ -3932,7 +3935,7 @@ class MainWindow(QMainWindow):
     def _configured_sample_rate_text(self) -> str:
         selected = self._rate_combo.currentData() if hasattr(self, "_rate_combo") else None
         if selected == 0:
-            return "MAX"
+            return "最大"
         configured = self._collector._sample_rate
         return f"{configured} Hz" if configured else "--"
 
@@ -3998,19 +4001,19 @@ class MainWindow(QMainWindow):
         self._update_sample_rate_label()
 
         if running and self._auto_scroll:
-            # 婊氬姩妯″紡锛氬彧鍙栨椂闂寸獥鍙?+ 灏戦噺杈硅窛鐨勬暟鎹紝淇濊瘉楂樻晥
+            # 滚动模式：只取时间窗口加少量边距的数据，保证高效
             raw_data = self._collector.get_data(tail_seconds=time_window * 1.5)
         else:
-            # 鐢ㄦ埛鎵嬪姩缂╂斁/骞崇Щ锛氬彇鍏ㄩ儴鍘嗗彶鏁版嵁
+            # 用户手动缩放或平移时取全部历史数据
             raw_data = self._collector.get_data()
 
         if not raw_data:
             return
 
-        # 鎻掑€?鎶藉彇澶勭悊
+        # 插值和抽取处理
         data = self._process_display_data(raw_data)
 
-        # 鎵归噺鏇存柊鏇茬嚎
+        # 批量更新曲线
         latest_ts = 0.0
         effective_fps = self._effective_plot_fps()
         point_budget = max(700, int(effective_fps * 36))
@@ -4526,7 +4529,7 @@ class MainWindow(QMainWindow):
             try:
                 fn()
             except Exception:
-                logger.exception("Shutdown step failed: %s", label)
+                logger.exception("关闭步骤失败：%s", label)
 
         def stop_timers():
             for name in (
@@ -4590,7 +4593,7 @@ class MainWindow(QMainWindow):
 # ================================================================
 
 def run_scope(elf_path: str = None, pack_path: str = None, target: str = None):
-    # Windows: 鎶婄郴缁熷畾鏃跺櫒绮惧害浠?15.6ms 鎻愬崌鍒?1ms
+    # Windows: 将系统定时器精度从约 15.6ms 提升到 1ms
     import platform
     timer_precision_active = False
     if platform.system() == "Windows":

@@ -120,7 +120,17 @@ class PclComboBox(QComboBox):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
         if watched is self._popup_frame and event.type() == QEvent.Hide:
             self.update()
-        if self._popup_frame.isVisible() and event.type() == QEvent.MouseButtonPress:
+        if not self._popup_frame.isVisible():
+            return super().eventFilter(watched, event)
+
+        event_type = event.type()
+        owner = self.window()
+        if event_type in (QEvent.WindowDeactivate, QEvent.Close):
+            self.hidePopup()
+            return super().eventFilter(watched, event)
+        if watched is owner and event_type in (QEvent.Move, QEvent.Resize):
+            QTimer.singleShot(0, self._position_popup)
+        if event_type == QEvent.MouseButtonPress:
             pos = self._event_global_pos(event)
             if pos is not None:
                 popup_rect = QRect(self._popup_frame.mapToGlobal(QPoint(0, 0)), self._popup_frame.size())
@@ -168,11 +178,14 @@ class PclComboBox(QComboBox):
         popup_width = max(self.width(), self.minimumWidth(), self.sizeHint().width(), 96)
 
         available = owner.rect().adjusted(4, 4, -4, -4)
+        popup_width = min(popup_width, max(96, available.width()))
+        popup_height = min(popup_height, max(row_height + chrome_height, available.height()))
         below = self.mapTo(owner, QPoint(0, self.height() + 3))
         above = self.mapTo(owner, QPoint(0, -popup_height - 3))
         y = below.y()
-        if y + popup_height > available.bottom() and above.y() >= available.top():
+        if y + popup_height > available.bottom() + 1 and above.y() >= available.top():
             y = above.y()
+        y = max(available.top(), min(y, available.bottom() - popup_height + 1))
         x = max(available.left(), min(below.x(), available.right() - popup_width + 1))
 
         self._popup_frame.setGeometry(x, y, popup_width, popup_height)
@@ -231,7 +244,7 @@ def polish_combo_popup(combo: QComboBox) -> None:
 
 def apply_pcl_theme(app: QApplication) -> None:
     """Apply a light, card-based cockpit theme."""
-    app.setFont(QFont("Segoe UI Variable Text", 10))
+    app.setFont(QFont("Microsoft YaHei UI", 10))
     palette = app.palette()
     palette.setColor(QPalette.Window, QColor(WINDOW))
     palette.setColor(QPalette.WindowText, QColor(TEXT))
@@ -540,9 +553,14 @@ def apply_pcl_theme(app: QApplication) -> None:
         }}
         QTreeWidget::branch, QTreeView::branch {{
             background: transparent;
+            border: none;
+            margin: 0px;
+            padding: 0px;
+            width: 18px;
         }}
         QTreeWidget::branch:selected, QTreeView::branch:selected {{
             background: transparent;
+            border: none;
         }}
         QTableWidget::item, QTableView::item {{
             padding: 3px 7px;
@@ -1157,6 +1175,20 @@ def apply_pcl_theme(app: QApplication) -> None:
             padding: 2px;
             gridline-color: #edf2f8;
         }}
+        QTreeWidget, QTreeView {{
+            show-decoration-selected: 0;
+        }}
+        QTreeWidget::branch, QTreeView::branch {{
+            background: transparent;
+            border: none;
+            margin: 0px;
+            padding: 0px;
+            width: 18px;
+        }}
+        QTreeWidget::branch:selected, QTreeView::branch:selected {{
+            background: transparent;
+            border: none;
+        }}
         QTreeWidget::item, QTreeView::item {{
             min-height: 28px;
             padding: 4px 7px;
@@ -1219,7 +1251,7 @@ def apply_pcl_theme(app: QApplication) -> None:
             border-radius: 8px;
             color: #273449;
             font-size: 10pt;
-            font-weight: 600;
+            font-weight: 560;
         }}
         QPushButton:hover {{
             background: #eef6ff;
@@ -1405,6 +1437,18 @@ def apply_pcl_theme(app: QApplication) -> None:
         QSplitter::handle:hover {{
             background: #dce7f3;
         }}
+        QSplitter#scopeMainSplitter::handle {{
+            background: transparent;
+            border: none;
+        }}
+        QSplitter#scopeMainSplitter::handle:horizontal {{
+            width: 2px;
+            margin: 16px 0px;
+            border-left: 1px solid rgba(148, 163, 184, 34);
+        }}
+        QSplitter#scopeMainSplitter::handle:hover {{
+            background: rgba(37, 99, 235, 18);
+        }}
         QSplitter#scopePaneSplitter::handle {{
             background: transparent;
             border: none;
@@ -1429,11 +1473,11 @@ def apply_pcl_theme(app: QApplication) -> None:
         }}
         QPushButton#presetBtn {{
             min-height: 28px;
-            font-weight: 600;
+            font-weight: 560;
         }}
         QPushButton#startBtn, QPushButton#stopBtn, QPushButton#connectBtn,
         QPushButton#disconnectBtn, QPushButton#importBtn, QPushButton#exportBtn {{
-            font-weight: 700;
+            font-weight: 620;
         }}
         QGraphicsView {{
             border: none;

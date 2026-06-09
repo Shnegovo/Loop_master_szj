@@ -271,25 +271,23 @@ def run(output_dir: Path) -> None:
     screenshots.append(path)
     issues.extend(found)
 
-    print("[pid-wave] close window", flush=True)
-    window.close()
-    QApplication.processEvents()
-    print("[pid-wave] quit app", flush=True)
-    app.quit()
-
     if issues:
         print("[pid-wave] issues found", flush=True)
         print("\n".join(dict.fromkeys(issues)))
         print("screenshots:")
         for path in screenshots:
             print(path)
-        raise SystemExit(1)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        faulthandler.disable()
+        os._exit(1)
 
     print("[pid-wave] all checks passed", flush=True)
     print("PASS pid-waveform probe")
     for path in screenshots:
         print(path)
     faulthandler.cancel_dump_traceback_later()
+    faulthandler.disable()
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

@@ -205,6 +205,9 @@ class SerialTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
         splitter.setObjectName("serialSplitter")
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(4)
+        splitter.setOpaqueResize(False)
         splitter.addWidget(self._build_scope_panel())
         splitter.addWidget(self._build_console_panel())
         splitter.setStretchFactor(0, 3)
@@ -275,7 +278,7 @@ class SerialTab(QWidget):
         title.setObjectName("serialSectionTitle")
         header.addWidget(title)
         header.addStretch(1)
-        hint = QLabel("pyqtgraph")
+        hint = QLabel("实时曲线")
         hint.setObjectName("serialHint")
         header.addWidget(hint)
         layout.addLayout(header)
