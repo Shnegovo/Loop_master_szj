@@ -30,8 +30,11 @@ from PySide6.QtWidgets import (
 from src.core.debug_workbench import (
     BreakpointStore,
     CodeDocument,
+    DebugAction,
     LineDecoration,
     SourceTreeNode,
+    DebugWorkbenchSession,
+    DebugWorkbenchStatus,
     line_decorations,
     load_code_document,
     source_entries_from_keil_project,
@@ -239,10 +242,13 @@ class DebugWorkbenchTab(QWidget):
         self._current_document: CodeDocument | None = None
         self._current_pc_line: int | None = None
         self._run_line: int | None = None
+        self._session = DebugWorkbenchSession()
+        self._backend_controls_ready = False
 
         self.setObjectName("debugWorkbenchTab")
         self._build_ui()
         self._apply_style()
+        self._apply_debug_status(self._session.status)
         self._refresh_summary()
 
     @property
@@ -278,6 +284,7 @@ class DebugWorkbenchTab(QWidget):
 
     def set_project(self, project: KeilProject) -> None:
         self._project = project
+        self._session.set_project(project)
         self._breakpoints.clear()
         self._current_document = None
         self._current_pc_line = None
@@ -291,12 +298,22 @@ class DebugWorkbenchTab(QWidget):
         polish_combo_popup(self.target_combo)
         self._rebuild_source_tree()
         self._load_first_existing_source()
+        self._apply_debug_status(self._session.status)
         self._refresh_summary()
 
     def set_runtime_markers(self, current_pc_line: int | None = None, run_line: int | None = None) -> None:
         self._current_pc_line = current_pc_line
         self._run_line = run_line
         self._refresh_decorations()
+
+    def set_debug_status(self, status: DebugWorkbenchStatus, *, controls_ready: bool = False) -> None:
+        self._session.apply_status(status)
+        self._backend_controls_ready = bool(controls_ready)
+        self._current_pc_line = status.current_pc_line
+        self._run_line = status.run_line
+        self._apply_debug_status(status)
+        self._refresh_decorations()
+        self._refresh_summary()
 
     def add_breakpoint(
         self,
@@ -374,9 +391,34 @@ class DebugWorkbenchTab(QWidget):
 
         self.summary_label = QLabel("未打开工程")
         self.summary_label.setObjectName("debugSummary")
-        layout.addWidget(self.summary_label, 1, 0, 1, 4)
+        layout.addWidget(self.summary_label, 1, 0, 1, 2)
+
+        actions = self._build_action_bar()
+        layout.addLayout(actions, 1, 2, 1, 2)
         layout.setColumnStretch(3, 1)
         return bar
+
+    def _build_action_bar(self) -> QHBoxLayout:
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self._action_buttons: dict[str, QPushButton] = {}
+        for key, title in (
+            ("discover", "发现 Keil"),
+            ("attach", "连接"),
+            ("disconnect", "断开"),
+            ("halt", "暂停"),
+            ("run", "运行"),
+        ):
+            button = QPushButton(title)
+            button.setObjectName("debugActionButton")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumWidth(58)
+            button.setEnabled(False)
+            self._action_buttons[key] = button
+            layout.addWidget(button)
+        layout.addStretch(1)
+        return layout
 
     def _build_navigation_panel(self) -> QFrame:
         panel = QFrame()
@@ -545,9 +587,32 @@ class DebugWorkbenchTab(QWidget):
 
     def _refresh_summary(self) -> None:
         project, source_count, breakpoints = self.hero_summary()
-        self.summary_label.setText(f"{project} · {source_count} · {breakpoints}")
+        status = self._session.status
+        self.summary_label.setText(f"{project} · {source_count} · {breakpoints} · {status.label}")
         self._refresh_breakpoint_table()
         self.summaryChanged.emit()
+
+    def _apply_debug_status(self, status: DebugWorkbenchStatus) -> None:
+        self.status_text.setText(f"{status.label} · {status.detail}")
+        self.status_dot.setProperty("state", status.state.value)
+        self._repolish(self.status_dot)
+        actions = {action.key: action for action in self._session.actions()}
+        for key, button in self._action_buttons.items():
+            action = actions.get(key, DebugAction(key, button.text(), False, "等待后端状态"))
+            enabled = bool(action.enabled and self._backend_controls_ready)
+            button.setEnabled(enabled)
+            if enabled:
+                button.setToolTip(action.title)
+            elif action.enabled and not self._backend_controls_ready:
+                button.setToolTip("等待调试后端控制器接入")
+            else:
+                button.setToolTip(action.reason or "当前状态不可用")
+
+    def _repolish(self, *widgets: QWidget) -> None:
+        for widget in widgets:
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
 
     def _marker_text(self, decorations: tuple[LineDecoration, ...]) -> str:
         counts: dict[str, int] = {}
@@ -590,6 +655,15 @@ class DebugWorkbenchTab(QWidget):
                 color: #2563eb;
                 font-size: 14px;
             }
+            QLabel#debugStatusDot[state="running"] {
+                color: #16a34a;
+            }
+            QLabel#debugStatusDot[state="paused"] {
+                color: #f97316;
+            }
+            QLabel#debugStatusDot[state="error"] {
+                color: #ef4444;
+            }
             QComboBox#debugCombo, QLineEdit#debugSearch {
                 background: #f8fbff;
                 border: 1px solid #d2deea;
@@ -617,6 +691,24 @@ class DebugWorkbenchTab(QWidget):
             QPushButton#debugPrimaryButton:hover {
                 background: #1d4ed8;
                 border-color: #1d4ed8;
+            }
+            QPushButton#debugActionButton {
+                min-height: 28px;
+                border-radius: 7px;
+                padding: 4px 9px;
+                font-weight: 560;
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                color: #0f172a;
+            }
+            QPushButton#debugActionButton:hover {
+                background: #eef6ff;
+                border-color: #9fb8d4;
+            }
+            QPushButton#debugActionButton:disabled {
+                background: #f3f6fa;
+                border-color: #dce6f0;
+                color: #9aa6b4;
             }
             QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable, QPlainTextEdit#debugCodeEditor {
                 background: #fbfdff;

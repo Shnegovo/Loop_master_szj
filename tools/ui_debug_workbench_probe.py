@@ -16,7 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.core.debug_workbench import search_document  # noqa: E402
+from src.core.debug_workbench import (  # noqa: E402
+    DebugRuntimeState,
+    default_debug_capabilities,
+    make_debug_status,
+    search_document,
+)
 from src.ui.gui import MainWindow  # noqa: E402
 from src.ui.pcl_theme import apply_pcl_theme  # noqa: E402
 
@@ -208,7 +213,22 @@ def run(output_dir: Path, width: int, height: int) -> int:
         tab.search_edit.setText("speed")
         tab.add_breakpoint(12)
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
-        tab.set_runtime_markers(current_pc_line=18, run_line=29)
+        tab.set_debug_status(
+            make_debug_status(
+                state=DebugRuntimeState.RUNNING,
+                backend="keil",
+                detail="合成运行状态，后端控制器尚未接入",
+                project_path=project_path,
+                current_pc_line=18,
+                run_line=29,
+                capabilities=default_debug_capabilities(
+                    DebugRuntimeState.RUNNING,
+                    runtime_control=True,
+                    breakpoint_sync=True,
+                ),
+            ),
+            controls_ready=False,
+        )
         _pump(app, 0.35)
         screenshots.append(_save(window, output_dir, "01_debug_workbench_project"))
 
@@ -232,6 +252,15 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=2")
         if "PC" not in tab.marker_label.text() or "运行行" not in tab.marker_label.text():
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
+        if "目标运行中" not in tab.status_text.text():
+            issues.append(f"status text did not reflect running state: {tab.status_text.text()!r}")
+        enabled_actions = [
+            key
+            for key, button in getattr(tab, "_action_buttons", {}).items()
+            if button.isEnabled()
+        ]
+        if enabled_actions:
+            issues.append(f"debug actions should remain disabled without backend controller: {enabled_actions!r}")
         if "DebugDemo.uvprojx" not in window._hero_file.text():
             issues.append(f"hero did not show project name: {window._hero_file.text()!r}")
         issues.extend(_check_non_blank(window._tabs.currentWidget(), "debug workbench content"))

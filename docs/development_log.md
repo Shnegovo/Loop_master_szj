@@ -771,3 +771,61 @@ Add the first visible modern Keil debug workbench surface: a source tree, source
   - keep UI controls disabled or read-only until a verified backend capability exists
   - prepare source tree selection, search result navigation, and breakpoint state for later Keil synchronization
   - add a no-hardware probe for state transitions
+
+## Stage 15 - Debug Workbench State Foundation
+
+### Goal
+
+Add a pure, no-hardware debug workbench state layer so the new Keil-facing UI can show reliable connection/runtime status and future run-control actions without pretending that backend control already exists.
+
+### Completed
+
+- Extended `src/core/debug_workbench.py` with a pure debug session model:
+  - `DebugRuntimeState`
+  - `DebugBackendKind`
+  - `DebugCapabilities`
+  - `DebugWorkbenchStatus`
+  - `DebugAction`
+  - `DebugWorkbenchSession`
+- Added status/action reducers for disconnected, Keil discovered, Keil attached, running, paused, and error states.
+- Added pure projection helpers for synthetic UVSOCK preflight and connection results.
+- Kept variable writes disabled by default even after a connected runtime projection.
+- Updated `DebugWorkbenchTab` with:
+  - Chinese status text and status dot
+  - disabled run-control action row for discover/connect/disconnect/halt/run
+  - summary text that includes the current debug state
+  - runtime marker updates driven by `DebugWorkbenchStatus`
+- Updated debug workbench probes so UI screenshots now verify status text and confirm run-control buttons stay disabled until a backend controller is explicitly wired.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS, state/action/capability transitions work in the pure model.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS, workspace navigation still renders LoopMaster, debug workbench, and serial assistant domains.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS, serial assistant integration screenshot still renders.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, real Keil project metadata still parses.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works and prefers `UVSC64.dll`.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, or write variables.
+- The UI now has visible run-control affordances, but they remain disabled until a backend controller is connected and deliberately marks itself ready.
+- The next hardware-facing steps must remain opt-in because Keil, ST-Link, target reset state, and variable writes can disturb a real MCU session.
+
+### Next Target
+
+- Add an explicit no-hardware Keil preflight controller/UI wiring stage:
+  - trigger Keil discovery from the `发现 Keil` action
+  - feed the existing Keil bridge/preflight result into `DebugWorkbenchSession`
+  - show Chinese success/error details in the debug workbench
+  - keep attach, halt, run, breakpoint sync, and variable writes disabled until a later hardware/smoke stage

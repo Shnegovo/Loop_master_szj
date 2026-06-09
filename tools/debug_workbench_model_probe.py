@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -12,6 +13,9 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_workbench import (  # noqa: E402
     BreakpointStore,
+    DebugRuntimeState,
+    DebugWorkbenchSession,
+    debug_actions_for_status,
     line_decorations,
     load_code_document,
     search_document,
@@ -58,6 +62,10 @@ PROJECT = """<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def _action_map(session: DebugWorkbenchSession) -> dict[str, bool]:
+    return {action.key: action.enabled for action in session.actions()}
 
 
 def main() -> int:
@@ -126,6 +134,106 @@ def main() -> int:
         _assert((2, "pc") in kinds, "pc decoration missing")
         _assert((4, "run") in kinds, "run decoration missing")
         _assert(sum(1 for item in decorations if item.kind == "search") == 3, "search decoration count mismatch")
+
+        session = DebugWorkbenchSession()
+        session.set_project(project)
+        _assert(session.status.state == DebugRuntimeState.DISCONNECTED, "initial debug state mismatch")
+        actions = _action_map(session)
+        _assert(actions["discover"], "discover should be enabled while disconnected")
+        _assert(not actions["attach"], "attach should be disabled before discovery")
+        _assert(not actions["halt"], "halt should be disabled before attach")
+
+        session.mark_discovered(can_attach=True)
+        _assert(session.status.state == DebugRuntimeState.KEIL_DISCOVERED, "discovered state mismatch")
+        actions = _action_map(session)
+        _assert(actions["discover"], "rediscover should remain enabled")
+        _assert(actions["attach"], "attach should be enabled after discovery")
+        _assert(not actions["run"], "run should be disabled before attach")
+
+        session.mark_attached(running=True, runtime_control=True, breakpoint_sync=True)
+        _assert(session.status.state == DebugRuntimeState.RUNNING, "running state mismatch")
+        actions = _action_map(session)
+        _assert(actions["disconnect"], "disconnect should be enabled after attach")
+        _assert(actions["halt"], "halt should be enabled while running")
+        _assert(not actions["run"], "run should be disabled while already running")
+        _assert(actions["sync_breakpoints"], "breakpoint sync should be enabled when declared")
+        _assert(not actions["write_variables"], "write variables should default disabled")
+
+        session.update_runtime(running=False, current_pc_line=3, run_line=4)
+        _assert(session.status.state == DebugRuntimeState.PAUSED, "paused state mismatch")
+        _assert(session.status.current_pc_line == 3, "pc line was not retained")
+        actions = _action_map(session)
+        _assert(actions["run"], "run should be enabled while paused")
+        _assert(actions["step"], "step should be enabled while paused with runtime control")
+        _assert(not actions["halt"], "halt should be disabled while paused")
+
+        status = session.mark_error("synthetic bridge timeout")
+        _assert(status.state == DebugRuntimeState.ERROR, "error state mismatch")
+        _assert(debug_actions_for_status(status)[0].enabled, "discover should be enabled after error")
+        session.disconnect()
+        _assert(session.status.state == DebugRuntimeState.DISCONNECTED, "disconnect state mismatch")
+
+        missing_preflight = SimpleNamespace(
+            discovery=SimpleNamespace(installed=False),
+            can_attempt_connection=False,
+            reasons=("Keil/uVision was not discovered",),
+            uvision_running=False,
+        )
+        status = session.apply_uvsock_preflight(missing_preflight)
+        _assert(status.state == DebugRuntimeState.ERROR, "missing Keil preflight should map to error")
+        _assert("not discovered" in status.error, "preflight error should retain reason")
+
+        idle_preflight = SimpleNamespace(
+            discovery=SimpleNamespace(installed=True),
+            can_attempt_connection=False,
+            reasons=("uVision is not running",),
+            uvision_running=False,
+        )
+        status = session.apply_uvsock_preflight(idle_preflight)
+        _assert(status.state == DebugRuntimeState.KEIL_DISCOVERED, "idle preflight state mismatch")
+        actions = _action_map(session)
+        _assert(actions["discover"], "discover should remain enabled after idle preflight")
+        _assert(not actions["attach"], "attach should be disabled when UVSOCK cannot attempt")
+
+        ready_preflight = SimpleNamespace(
+            discovery=SimpleNamespace(installed=True),
+            can_attempt_connection=True,
+            reasons=(),
+            uvision_running=True,
+        )
+        status = session.apply_uvsock_preflight(ready_preflight)
+        _assert(status.state == DebugRuntimeState.KEIL_DISCOVERED, "ready preflight state mismatch")
+        _assert(_action_map(session)["attach"], "attach should be enabled when UVSOCK can attempt")
+
+        failed_connection = SimpleNamespace(
+            connected=False,
+            error="UVSC_OpenConnection failed",
+            target_running=None,
+        )
+        status = session.apply_uvsock_connection(failed_connection)
+        _assert(status.state == DebugRuntimeState.ERROR, "failed connection should map to error")
+        _assert("OpenConnection" in status.error, "connection error should be retained")
+
+        running_connection = SimpleNamespace(
+            connected=True,
+            error="",
+            target_running=True,
+        )
+        status = session.apply_uvsock_connection(running_connection)
+        _assert(status.state == DebugRuntimeState.RUNNING, "running connection state mismatch")
+        _assert(_action_map(session)["halt"], "halt should be enabled after connected running state")
+
+        paused_connection = SimpleNamespace(
+            connected=True,
+            error="",
+            target_running=False,
+        )
+        status = session.apply_uvsock_connection(paused_connection)
+        _assert(status.state == DebugRuntimeState.PAUSED, "paused connection state mismatch")
+        actions = _action_map(session)
+        _assert(actions["run"], "run should be enabled after connected paused state")
+        _assert(actions["step"], "step should be enabled after connected paused state")
+        _assert(not actions["write_variables"], "write variables must stay disabled after UVSOCK projection")
 
     print("PASS debug workbench model probe")
     return 0
