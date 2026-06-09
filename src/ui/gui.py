@@ -61,6 +61,7 @@ from src.ui.serial_controller import (
     serial_payload_display,
     serial_protocol_key,
 )
+from src.ui.debug_workbench_tab import DebugWorkbenchTab
 from src.ui.serial_tab import SerialTab
 
 # ---- Constants ----
@@ -440,6 +441,7 @@ class MainWindow(QMainWindow):
         self._page_indices: dict[str, int] = {}
         self._workspace_domains: list[WorkspaceDomain] = [
             WorkspaceDomain("loopmaster", "LoopMaster", "变量调试与 MCU 示波"),
+            WorkspaceDomain("debug", "调试工作台", "Keil 工程源码与断点预览"),
             WorkspaceDomain("serial", "串口助手", "串口收发与 VOFA 示波"),
         ]
         self._current_workspace_domain = "loopmaster"
@@ -867,6 +869,15 @@ class MainWindow(QMainWindow):
             self._hero_file.setText(port_text)
             self._hero_probe.setText("串口已连接" if connected else "串口空闲")
             self._hero_vars.setText(f"{baud_text} / {channel_count} 路波形")
+            return
+        if getattr(self, "_current_workspace_domain", "loopmaster") == "debug":
+            if hasattr(self, "_tab_debug_workbench"):
+                project_text, source_text, breakpoint_text = self._tab_debug_workbench.hero_summary()
+            else:
+                project_text, source_text, breakpoint_text = "未打开 Keil 工程", "只读预览", "0 个断点"
+            self._hero_file.setText(project_text)
+            self._hero_probe.setText(source_text)
+            self._hero_vars.setText(breakpoint_text)
             return
 
         self._hero_file.setText(self._elf_path.name if self._elf_path else "未加载 ELF/AXF")
@@ -1926,6 +1937,10 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_initial_scope_layout)
         self._set_scope_pane_count(self._scope_pane_count, save=False)
         self._toggle_scope_sidebar(self._scope_sidebar_visible, save=False)
+
+        self._tab_debug_workbench = DebugWorkbenchTab()
+        self._tab_debug_workbench.summaryChanged.connect(self._refresh_hero)
+        self._register_workspace_page("debug_sources", "源码", self._tab_debug_workbench, domain="debug")
 
         self._tab_serial = SerialTab()
         self._register_workspace_page("serial", "串口收发", self._tab_serial, domain="serial")

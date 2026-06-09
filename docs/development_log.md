@@ -710,3 +710,64 @@ Add a Qt-free code document layer that can feed a future modern source editor wi
   - show a source preview with line numbers
   - render breakpoint/current-PC/search decorations from the core model
   - keep it disconnected from Keil runtime until UVSOCK smoke is verified
+
+## Stage 14 - Read-Only Debug Workbench UI Surface
+
+### Goal
+
+Add the first visible modern Keil debug workbench surface: a source tree, source preview, line-number gutter, local breakpoints, search highlights, and PC/run-line decorations, while keeping the page disconnected from Keil runtime control.
+
+### Completed
+
+- Added `src/ui/debug_workbench_tab.py`.
+- Added `DebugWorkbenchTab`, a self-contained Qt page for the new debugger workspace.
+- Added `SourceCodeEditor`, a read-only `QPlainTextEdit` preview with:
+  - line-number gutter
+  - gutter click breakpoint toggling
+  - breakpoint markers
+  - current PC marker
+  - run-line marker
+  - search-line highlights
+- Added Keil project loading through the existing read-only project parser.
+- Added source tree rendering from the core `SourceTreeNode` model.
+- Added a local breakpoint table for the selected source file/project.
+- Integrated a third workspace domain in `MainWindow`:
+  - `LoopMaster`
+  - `调试工作台`
+  - `串口助手`
+- Added debug-workbench hero summaries for project name, source count, and local breakpoint count.
+- Added `tools/ui_debug_workbench_probe.py`, a screenshot probe that builds a synthetic Keil project/source tree and verifies the UI surface.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS, pure source/breakpoint/document/decorator models still work.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS, existing LoopMaster and serial workspace navigation still works with the new domain present.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS, serial assistant integration screenshot still renders.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, real Keil project metadata still parses.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, or write variables.
+- The new debug page is intentionally a UI/model bridge only. Runtime state is represented as decorations so future Keil/UVSOCK, pyOCD, or DAP-style backends can drive the same visual layer.
+- The screenshot probe initially exposed a Windows offscreen font-rendering issue. The probe now uses the native desktop platform by default and leaves `QT_QPA_PLATFORM=offscreen` as an explicit opt-in for CI-style runs.
+- Open-source IDE/debugger references for future stages must be tracked in the plan or handoff notes with source and license before any code is copied or adapted.
+
+### Next Target
+
+- Add a debug-workbench state/controller layer before touching hardware:
+  - represent disconnected/Keil-discovered/Keil-attached/runtime-paused/runtime-running states
+  - keep UI controls disabled or read-only until a verified backend capability exists
+  - prepare source tree selection, search result navigation, and breakpoint state for later Keil synchronization
+  - add a no-hardware probe for state transitions
