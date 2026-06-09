@@ -393,3 +393,52 @@ Move from static Keil discovery to a safe runtime preflight: load the selected U
   - use only open/close and status-style non-mutating calls after signatures are verified
   - never write memory or variables
   - log clear guidance when Keil is closed or UVSOCK is not enabled
+
+## Stage 8 - Opt-In UVSOCK Connection Path
+
+### Goal
+
+Add the first UVSOCK connection attempt path, but keep it opt-in and read-only: it must refuse to call `UVSC_OpenConnection` unless Keil/uVision is already running, a port is explicitly provided, and the preflight is clean.
+
+### Completed
+
+- Added `UvscConnectionResult`.
+- Added `attempt_existing_uvsock_connection()`:
+  - requires an explicit port
+  - validates the port range
+  - requires successful discovery and DLL load
+  - requires a running uVision process before any connection attempt
+  - calls `UVSC_Init`, `UVSC_OpenConnection`, optional `UVSC_DBG_STATUS`, `UVSC_CloseConnection`, and `UVSC_UnInit` only after preflight passes
+  - never starts Keil, never launches a project, never halts/runs the target, and never reads or writes memory/variables
+- Updated `tools/keil_uvsock_preflight_probe.py`:
+  - default remains dry-run preflight
+  - `--attempt-existing --port <port>` enables the explicit open/close path
+  - `--status` optionally asks for `UVSC_DBG_STATUS` only after a connection succeeds
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\uvsock.py tools\keil_uvsock_preflight_probe.py`
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS, `UVSC64.dll` loads and uVision is reported as not running.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --attempt-existing --port 4827 --status`
+  - PASS, did not attempt connection because uVision was not running.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, discovery still finds `UVSC64.dll`, `103` exports, and all important UVSOCK exports.
+- `python tools\keil_bridge_probe.py --keil-root D:\__missing_keil_root__ --expect-missing`
+  - PASS, strict missing-root behavior still works.
+- `git diff --check -- src/core/keil/__init__.py src/core/keil/uvsock.py tools/keil_uvsock_preflight_probe.py`
+  - PASS.
+
+### Notes
+
+- The connected ST-Link/F401CCU6 board was not accessed in this stage.
+- Current machine state during verification: uVision was not running, so the opt-in connection path correctly returned `attempted=False`.
+- The next real connection test needs uVision opened with UVSOCK enabled on a known port.
+
+### Next Target
+
+- Add Keil/uVision launch guidance and optional user-controlled UVSOCK starter:
+  - detect whether Keil is already running
+  - provide the exact command needed to start uVision with a UVSOCK port
+  - keep automatic launch disabled by default
+  - when the user explicitly opts in, start Keil with UVSOCK enabled and run the open/status/close probe

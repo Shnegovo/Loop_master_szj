@@ -58,6 +58,46 @@ class UvscPreflight:
         )
 
 
+@dataclass(frozen=True)
+class UvscConnectionResult:
+    attempted: bool
+    connected: bool
+    port: int | None
+    handle: int = 0
+    status_code: int | None = None
+    status_name: str = ""
+    target_running: bool | None = None
+    error: str = ""
+
+    def summary(self) -> str:
+        parts = [
+            f"attempted={self.attempted}",
+            f"connected={self.connected}",
+            f"port={self.port if self.port is not None else '--'}",
+        ]
+        if self.status_code is not None:
+            parts.append(f"status={self.status_name or self.status_code}")
+        if self.target_running is not None:
+            parts.append(f"target_running={self.target_running}")
+        if self.error:
+            parts.append(f"error={self.error}")
+        return "UVSOCK connection " + " ".join(parts)
+
+
+UVSC_STATUS_NAMES = {
+    0: "UVSC_STATUS_SUCCESS",
+    1: "UVSC_STATUS_FAILED",
+    2: "UVSC_STATUS_NOT_SUPPORTED",
+    3: "UVSC_STATUS_NOT_INIT",
+    4: "UVSC_STATUS_TIMEOUT",
+    5: "UVSC_STATUS_INVALID_CONTEXT",
+    6: "UVSC_STATUS_INVALID_PARAM",
+    7: "UVSC_STATUS_BUFFER_TOO_SMALL",
+    8: "UVSC_STATUS_CALLBACK_IN_USE",
+    9: "UVSC_STATUS_COMMAND_ERROR",
+}
+
+
 def check_uvsock_preflight(
     root: str | os.PathLike[str] | None = None,
     require_running: bool = False,
@@ -87,6 +127,115 @@ def check_uvsock_preflight(
     )
 
 
+def attempt_existing_uvsock_connection(
+    root: str | os.PathLike[str] | None,
+    port: int | None,
+    query_status: bool = False,
+    connection_name: str = "LoopMaster",
+) -> tuple[UvscPreflight, UvscConnectionResult]:
+    """Opt-in connection to an already running UVSOCK port.
+
+    This function never starts uVision. It only connects to an explicit port,
+    optionally asks for debug run status, then closes the connection.
+    """
+
+    preflight = check_uvsock_preflight(root=root, require_running=True)
+    if port is None:
+        return preflight, UvscConnectionResult(
+            attempted=False,
+            connected=False,
+            port=None,
+            error="No UVSOCK port was provided",
+        )
+    if not (1 <= int(port) <= 65535):
+        return preflight, UvscConnectionResult(
+            attempted=False,
+            connected=False,
+            port=int(port),
+            error="UVSOCK port must be in range 1..65535",
+        )
+    if not preflight.can_attempt_connection:
+        return preflight, UvscConnectionResult(
+            attempted=False,
+            connected=False,
+            port=int(port),
+            error="; ".join(preflight.reasons) or "preflight failed",
+        )
+
+    library = preflight.load_result.handle
+    if library is None:
+        return preflight, UvscConnectionResult(
+            attempted=False,
+            connected=False,
+            port=int(port),
+            error="UVSOCK DLL handle is missing",
+        )
+
+    _configure_uvsc_signatures(library)
+    init_code = int(library.UVSC_Init(1, 65535))
+    if init_code != 0:
+        return preflight, UvscConnectionResult(
+            attempted=True,
+            connected=False,
+            port=int(port),
+            status_code=init_code,
+            status_name=uvsc_status_name(init_code),
+            error="UVSC_Init failed",
+        )
+
+    handle = ctypes.c_int(0)
+    uv_port = ctypes.c_int(int(port))
+    name = connection_name.encode("utf-8")[:256] or b"LoopMaster"
+    open_code = int(
+        library.UVSC_OpenConnection(
+            ctypes.c_char_p(name),
+            ctypes.byref(handle),
+            ctypes.byref(uv_port),
+            None,
+            0,
+            None,
+            None,
+            None,
+            0,
+            None,
+        )
+    )
+    if open_code != 0:
+        _safe_uvsc_uninit(library)
+        return preflight, UvscConnectionResult(
+            attempted=True,
+            connected=False,
+            port=int(uv_port.value),
+            status_code=open_code,
+            status_name=uvsc_status_name(open_code),
+            error="UVSC_OpenConnection failed",
+        )
+
+    status_code: int | None = None
+    target_running: bool | None = None
+    try:
+        if query_status:
+            running = ctypes.c_int(0)
+            status_code = int(library.UVSC_DBG_STATUS(handle.value, ctypes.byref(running)))
+            if status_code == 0:
+                target_running = bool(running.value)
+    finally:
+        try:
+            library.UVSC_CloseConnection(handle.value, 0)
+        finally:
+            _safe_uvsc_uninit(library)
+
+    return preflight, UvscConnectionResult(
+        attempted=True,
+        connected=True,
+        port=int(uv_port.value),
+        handle=int(handle.value),
+        status_code=status_code,
+        status_name=uvsc_status_name(status_code) if status_code is not None else "",
+        target_running=target_running,
+    )
+
+
 def load_uvsc_library(discovery: KeilDiscovery) -> UvscLoadResult:
     dll = discovery.preferred_uvsc
     if dll is None or not dll.exists:
@@ -106,6 +255,12 @@ def load_uvsc_library(discovery: KeilDiscovery) -> UvscLoadResult:
     except Exception as exc:
         return UvscLoadResult(dll=dll, loaded=False, error=str(exc))
     return UvscLoadResult(dll=dll, loaded=True, handle=handle)
+
+
+def uvsc_status_name(status: int | None) -> str:
+    if status is None:
+        return ""
+    return UVSC_STATUS_NAMES.get(int(status), f"UVSC_STATUS_{int(status)}")
 
 
 def list_running_uvision() -> tuple[KeilProcess, ...]:
@@ -148,3 +303,34 @@ class _dll_directory:
         if self._token is not None:
             self._token.close()
             self._token = None
+
+
+def _configure_uvsc_signatures(library) -> None:
+    library.UVSC_Init.argtypes = [ctypes.c_int, ctypes.c_int]
+    library.UVSC_Init.restype = ctypes.c_int
+    library.UVSC_UnInit.argtypes = []
+    library.UVSC_UnInit.restype = ctypes.c_int
+    library.UVSC_OpenConnection.argtypes = [
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    ]
+    library.UVSC_OpenConnection.restype = ctypes.c_int
+    library.UVSC_CloseConnection.argtypes = [ctypes.c_int, ctypes.c_int]
+    library.UVSC_CloseConnection.restype = ctypes.c_int
+    library.UVSC_DBG_STATUS.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+    library.UVSC_DBG_STATUS.restype = ctypes.c_int
+
+
+def _safe_uvsc_uninit(library) -> None:
+    try:
+        library.UVSC_UnInit()
+    except Exception:
+        pass
