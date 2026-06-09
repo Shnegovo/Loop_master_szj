@@ -542,3 +542,60 @@ Prepare the real UVSOCK smoke flow without making it automatic: the code can now
   - launch uVision with UVSOCK
   - verify open/status/close behavior
   - document exact failure modes if UVSOCK or Keil project setup needs adjustment
+
+## Stage 11 - Keil Project Metadata Parser
+
+### Goal
+
+Add a safe Keil project metadata layer so the future modern debugger frontend can understand targets, output AXF paths, groups, and source file paths without launching Keil or reading source contents.
+
+### Completed
+
+- Added `src/core/keil/project.py`.
+- Added project model dataclasses:
+  - `KeilProject`
+  - `KeilTarget`
+  - `KeilGroup`
+  - `KeilProjectFile`
+- Added `parse_keil_project()` for `.uvprojx`/`.uvproj` metadata:
+  - target names
+  - output directory/name
+  - expected `.axf` output path
+  - listing path
+  - groups
+  - file names, file types, and resolved paths
+  - source/header classification by suffix
+- Added `find_keil_projects()` for bounded project discovery under an explicit root.
+- Added `tools/keil_project_probe.py`:
+  - default synthetic `.uvprojx` parse
+  - explicit project parse
+  - bounded project listing
+- Exported the project parser API from `src/core/keil/__init__.py`.
+
+### Verified
+
+- `python -m py_compile src\core\keil\__init__.py src\core\keil\project.py tools\keil_project_probe.py`
+- `python tools\keil_project_probe.py`
+  - PASS, synthetic project parsed with `1` target, `2` groups, `3` files, output `demo_f401.axf`.
+- `python tools\keil_project_probe.py --list-root D:\Keil\code`
+  - PASS, found `3` Keil projects by path.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, parsed `1` target, `5` groups, `19` files, output `D:\Keil\code\HELLO\MDK-ARM\HELLO\HELLO.axf`.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still works.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --plan-launch --port 4827 --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, UVSOCK launch planning still works with the same project.
+- `git diff --check -- src/core/keil/__init__.py src/core/keil/project.py tools/keil_project_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage only reads project XML metadata. It does not read source file contents, launch Keil, access ST-Link/F401CCU6, or call UVSOCK debug commands.
+- The parser gives the future code view, breakpoint UI, DWARF/AXF loading, and UVSOCK launch flow a shared project model.
+
+### Next Target
+
+- Add a debugger workbench data model for source files and breakpoints:
+  - represent source tree entries independently of Qt widgets
+  - model visual breakpoints, enabled state, file/line, condition, and hit count
+  - add no-UI probes so the future code editor/gutter can be built on a stable core model
