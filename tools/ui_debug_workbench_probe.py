@@ -178,6 +178,17 @@ def _check_non_blank(widget: QWidget, label: str) -> list[str]:
     return issues
 
 
+def _plan_rows(tab) -> dict[str, dict[str, str]]:
+    rows: dict[str, dict[str, str]] = {}
+    for plan in getattr(tab, "_plan_rows", ()):
+        rows[plan.title] = {
+            "status": plan.status,
+            "risk": tab._risk_label(plan),
+            "tooltip": tab._plan_tooltip(plan),
+        }
+    return rows
+
+
 def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
     QApplication.processEvents()
     path = output_dir / f"{name}.png"
@@ -263,8 +274,67 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ),
             controls_ready=False,
         )
+        running_plans = _plan_rows(tab)
+        required_plan_titles = {
+            "连接调试会话",
+            "断开调试会话",
+            "暂停目标",
+            "继续运行",
+            "单步",
+            "同步断点",
+            "写变量",
+        }
+        missing_plans = required_plan_titles - set(running_plans)
+        if missing_plans:
+            issues.append(f"command plan preview missing plans: {sorted(missing_plans)!r}")
+        if running_plans.get("暂停目标", {}).get("status") != "计划就绪":
+            issues.append(f"halt plan should be ready but disabled while running: {running_plans.get('暂停目标')!r}")
+        if running_plans.get("继续运行", {}).get("status") != "等待条件":
+            issues.append(f"run plan should wait while already running: {running_plans.get('继续运行')!r}")
+        write_tip = running_plans.get("写变量", {}).get("tooltip", "")
+        for phrase in ("RAM", "类型", "回读", "范围"):
+            if phrase not in write_tip:
+                issues.append(f"write variable plan tooltip missing {phrase}: {write_tip!r}")
         _pump(app, 0.35)
         screenshots.append(_save(window, output_dir, "01_debug_workbench_project"))
+
+        tab.set_debug_status(
+            make_debug_status(
+                state=DebugRuntimeState.PAUSED,
+                backend="keil",
+                detail="合成暂停状态，动作仍只允许计划预览",
+                project_path=project_path,
+                current_pc_line=18,
+                run_line=29,
+                capabilities=default_debug_capabilities(
+                    DebugRuntimeState.PAUSED,
+                    runtime_control=True,
+                    breakpoint_sync=True,
+                    variable_write=True,
+                ),
+            ),
+            controls_ready=False,
+        )
+        paused_plans = _plan_rows(tab)
+        if paused_plans.get("继续运行", {}).get("status") != "计划就绪":
+            issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
+        if paused_plans.get("单步", {}).get("status") != "计划就绪":
+            issues.append(f"step plan should be ready but disabled while paused: {paused_plans.get('单步')!r}")
+        if paused_plans.get("写变量", {}).get("status") != "计划就绪":
+            issues.append(f"write variable plan should surface readiness without execution: {paused_plans.get('写变量')!r}")
+        if "烟测" not in paused_plans.get("写变量", {}).get("tooltip", ""):
+            issues.append("write variable plan tooltip should mention smoke-stage execution guard")
+        if "继续运行" not in tab.plan_focus_label.text():
+            issues.append(f"top plan strip should focus run while paused: {tab.plan_focus_label.text()!r}")
+        if "烟测" not in tab.plan_guard_label.text():
+            issues.append(f"top plan strip should show execution guard: {tab.plan_guard_label.text()!r}")
+        enabled_actions = [
+            key
+            for key, button in getattr(tab, "_action_buttons", {}).items()
+            if button.isEnabled()
+        ]
+        if enabled_actions:
+            issues.append(f"debug buttons should remain disabled in paused synthetic state: {enabled_actions!r}")
 
         tab.editor.verticalScrollBar().setValue(8)
         _pump(app, 0.2)
@@ -286,8 +356,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=2")
         if "PC" not in tab.marker_label.text() or "运行行" not in tab.marker_label.text():
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
-        if "目标运行中" not in tab.status_text.text():
-            issues.append(f"status text did not reflect running state: {tab.status_text.text()!r}")
+        if "目标已暂停" not in tab.status_text.text():
+            issues.append(f"status text did not reflect paused synthetic state: {tab.status_text.text()!r}")
         enabled_actions = [
             key
             for key, button in getattr(tab, "_action_buttons", {}).items()

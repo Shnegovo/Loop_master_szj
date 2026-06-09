@@ -13,8 +13,10 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_workbench import (  # noqa: E402
     BreakpointStore,
+    DebugCommandPlan,
     DebugRuntimeState,
     DebugWorkbenchSession,
+    debug_command_plans_for_status,
     debug_actions_for_status,
     line_decorations,
     load_code_document,
@@ -66,6 +68,41 @@ def _assert(condition: bool, message: str) -> None:
 
 def _action_map(session: DebugWorkbenchSession) -> dict[str, bool]:
     return {action.key: action.enabled for action in session.actions()}
+
+
+def _plan_map(session: DebugWorkbenchSession) -> dict[str, DebugCommandPlan]:
+    return {plan.key: plan for plan in session.command_plans()}
+
+
+def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
+    expected = {
+        "discover",
+        "attach",
+        "disconnect",
+        "halt",
+        "run",
+        "step",
+        "sync_breakpoints",
+        "write_variables",
+    }
+    _assert(set(plans) == expected, f"debug command plan keys changed: {sorted(plans)}")
+    for key, plan in plans.items():
+        _assert(plan.key == key, f"plan key mismatch for {key}")
+        _assert(plan.title, f"plan title missing for {key}")
+        _assert(plan.intent, f"plan intent missing for {key}")
+        _assert(plan.status in {"可执行", "计划就绪", "等待条件"}, f"unexpected plan status for {key}: {plan.status}")
+        _assert(not plan.execution_enabled or key == "discover", f"{key} should not become executable in plan-only mode")
+        if key != "discover" and plan.preconditions_met:
+            _assert("烟测" in plan.disabled_reason or "只显示计划" in plan.disabled_reason, f"{key} lacks preview guard")
+
+
+def _assert_risky_plans_disabled(plans: dict[str, DebugCommandPlan]) -> None:
+    for key in ("attach", "disconnect", "halt", "run", "step", "sync_breakpoints", "write_variables"):
+        plan = plans[key]
+        _assert(not plan.execution_enabled, f"{key} must remain execution-disabled")
+        _assert(plan.requirements, f"{key} should explain requirements")
+        _assert(plan.safety_notes, f"{key} should explain safety notes")
+        _assert(plan.preview_steps, f"{key} should expose preview steps")
 
 
 def main() -> int:
@@ -142,6 +179,11 @@ def main() -> int:
         _assert(actions["discover"], "discover should be enabled while disconnected")
         _assert(not actions["attach"], "attach should be disabled before discovery")
         _assert(not actions["halt"], "halt should be disabled before attach")
+        plans = _plan_map(session)
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        _assert(plans["discover"].execution_enabled, "safe discover preflight should remain executable")
+        _assert(not plans["attach"].preconditions_met, "attach precondition should be blocked before discovery")
 
         session.mark_discovered(can_attach=True)
         _assert(session.status.state == DebugRuntimeState.KEIL_DISCOVERED, "discovered state mismatch")
@@ -149,6 +191,11 @@ def main() -> int:
         _assert(actions["discover"], "rediscover should remain enabled")
         _assert(actions["attach"], "attach should be enabled after discovery")
         _assert(not actions["run"], "run should be disabled before attach")
+        plans = _plan_map(session)
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        _assert(plans["attach"].preconditions_met, "attach plan should be ready after discovery")
+        _assert(not plans["attach"].execution_enabled, "attach plan must stay disabled until smoke stage")
 
         session.mark_attached(running=True, runtime_control=True, breakpoint_sync=True)
         _assert(session.status.state == DebugRuntimeState.RUNNING, "running state mismatch")
@@ -158,6 +205,12 @@ def main() -> int:
         _assert(not actions["run"], "run should be disabled while already running")
         _assert(actions["sync_breakpoints"], "breakpoint sync should be enabled when declared")
         _assert(not actions["write_variables"], "write variables should default disabled")
+        plans = _plan_map(session)
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        _assert(plans["halt"].preconditions_met, "halt plan should be ready while target is running")
+        _assert(not plans["run"].preconditions_met, "run plan should be blocked while already running")
+        _assert(plans["sync_breakpoints"].preconditions_met, "sync breakpoint plan should reflect capability")
 
         session.update_runtime(running=False, current_pc_line=3, run_line=4)
         _assert(session.status.state == DebugRuntimeState.PAUSED, "paused state mismatch")
@@ -166,10 +219,33 @@ def main() -> int:
         _assert(actions["run"], "run should be enabled while paused")
         _assert(actions["step"], "step should be enabled while paused with runtime control")
         _assert(not actions["halt"], "halt should be disabled while paused")
+        plans = _plan_map(session)
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        _assert(plans["run"].preconditions_met, "run plan should be ready while paused")
+        _assert(plans["step"].preconditions_met, "step plan should be ready while paused")
+        _assert(not plans["halt"].preconditions_met, "halt plan should be blocked while paused")
+
+        session.mark_attached(running=False, runtime_control=True, breakpoint_sync=True, variable_write=True)
+        plans = _plan_map(session)
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        write_plan = plans["write_variables"]
+        _assert(write_plan.preconditions_met, "write variable precondition should reflect declared capability")
+        _assert(not write_plan.execution_enabled, "write variable plan must remain disabled even when capability is declared")
+        write_text = " ".join(write_plan.requirements + write_plan.safety_notes + write_plan.preview_steps)
+        for phrase in ("RAM", "类型", "回读", "审计", "范围"):
+            _assert(phrase in write_text, f"write variable plan missing safety phrase: {phrase}")
+        for value in write_plan.__dict__.values():
+            _assert(not callable(value), "write variable plan must not carry executable objects")
 
         status = session.mark_error("synthetic bridge timeout")
         _assert(status.state == DebugRuntimeState.ERROR, "error state mismatch")
         _assert(debug_actions_for_status(status)[0].enabled, "discover should be enabled after error")
+        plans = {plan.key: plan for plan in debug_command_plans_for_status(status)}
+        _assert_plan_shape(plans)
+        _assert_risky_plans_disabled(plans)
+        _assert("synthetic bridge timeout" in plans["attach"].disabled_reason, "error plan should preserve backend reason")
         session.disconnect()
         _assert(session.status.state == DebugRuntimeState.DISCONNECTED, "disconnect state mismatch")
 

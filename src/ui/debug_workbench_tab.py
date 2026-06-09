@@ -31,6 +31,7 @@ from src.core.debug_workbench import (
     BreakpointStore,
     CodeDocument,
     DebugAction,
+    DebugCommandPlan,
     LineDecoration,
     SourceTreeNode,
     DebugWorkbenchSession,
@@ -254,6 +255,7 @@ class DebugWorkbenchTab(QWidget):
         self._search_index = -1
         self._breakpoint_rows = ()
         self._diagnostics: tuple[tuple[str, str], ...] = ()
+        self._plan_rows: tuple[DebugCommandPlan, ...] = ()
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -433,6 +435,7 @@ class DebugWorkbenchTab(QWidget):
 
         actions = self._build_action_bar()
         layout.addLayout(actions, 1, 2, 1, 2)
+        layout.addWidget(self._build_action_plan_strip(), 2, 0, 1, 4)
         layout.setColumnStretch(3, 1)
         return bar
 
@@ -458,6 +461,36 @@ class DebugWorkbenchTab(QWidget):
             layout.addWidget(button)
         layout.addStretch(1)
         return layout
+
+    def _build_action_plan_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setObjectName("debugPlanStrip")
+        strip.setCursor(Qt.WhatsThisCursor)
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setSpacing(8)
+
+        label = QLabel("动作计划")
+        label.setObjectName("debugPlanTitle")
+        layout.addWidget(label)
+
+        self.plan_focus_label = QLabel("等待状态")
+        self.plan_focus_label.setObjectName("debugPlanFocus")
+        layout.addWidget(self.plan_focus_label)
+
+        self.plan_state_label = QLabel("等待条件")
+        self.plan_state_label.setObjectName("debugPlanState")
+        layout.addWidget(self.plan_state_label)
+
+        self.plan_risk_label = QLabel("信息")
+        self.plan_risk_label.setObjectName("debugPlanRisk")
+        layout.addWidget(self.plan_risk_label)
+
+        self.plan_guard_label = QLabel("所有真实调试动作仍处于预览保护")
+        self.plan_guard_label.setObjectName("debugPlanGuard")
+        self.plan_guard_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.plan_guard_label, 1)
+        return strip
 
     def _build_navigation_panel(self) -> QFrame:
         panel = QFrame()
@@ -497,7 +530,7 @@ class DebugWorkbenchTab(QWidget):
         self.diagnostics_table.setAlternatingRowColors(True)
         self.diagnostics_table.verticalHeader().setDefaultSectionSize(24)
         self.diagnostics_table.verticalHeader().setMinimumSectionSize(22)
-        self.diagnostics_table.setMinimumHeight(166)
+        self.diagnostics_table.setMinimumHeight(138)
         layout.addWidget(self.diagnostics_table, 1)
 
         bp_title = QLabel("本地断点")
@@ -518,7 +551,7 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.breakpoint_table.setAlternatingRowColors(True)
         self.breakpoint_table.cellClicked.connect(self._on_breakpoint_table_clicked)
-        self.breakpoint_table.setMinimumHeight(118)
+        self.breakpoint_table.setMinimumHeight(108)
         layout.addWidget(self.breakpoint_table, 1)
         self._refresh_diagnostics_table()
         return panel
@@ -760,6 +793,83 @@ class DebugWorkbenchTab(QWidget):
         item.setToolTip(text)
         self.diagnostics_table.setItem(row, column, item)
 
+    def _refresh_command_plan_preview(self) -> None:
+        if not hasattr(self, "plan_focus_label"):
+            return
+        self._plan_rows = self._session.command_plans()
+        plan = self._focused_command_plan()
+        tooltip = self._all_plan_tooltip()
+        if plan is None:
+            self.plan_focus_label.setText("等待状态")
+            self.plan_state_label.setText("等待条件")
+            self.plan_risk_label.setText("信息")
+            self.plan_guard_label.setText("所有真实调试动作仍处于预览保护")
+        else:
+            self.plan_focus_label.setText(plan.title)
+            self.plan_state_label.setText(plan.status)
+            self.plan_risk_label.setText(self._risk_label(plan))
+            if plan.execution_enabled:
+                guard_text = "可执行"
+            elif plan.preconditions_met:
+                guard_text = "条件满足，但仍等待 UVSOCK 烟测阶段"
+            else:
+                guard_text = plan.disabled_reason or "等待后端条件"
+            self.plan_guard_label.setText(guard_text)
+        for widget in (
+            self.plan_focus_label,
+            self.plan_state_label,
+            self.plan_risk_label,
+            self.plan_guard_label,
+        ):
+            widget.setToolTip(tooltip)
+        self._repolish(self.plan_state_label, self.plan_risk_label)
+
+    def _focused_command_plan(self) -> DebugCommandPlan | None:
+        priority = (
+            "attach",
+            "halt",
+            "run",
+            "step",
+            "sync_breakpoints",
+            "write_variables",
+            "disconnect",
+            "discover",
+        )
+        ready = {plan.key: plan for plan in self._plan_rows if plan.preconditions_met}
+        for key in priority:
+            if key in ready:
+                return ready[key]
+        return self._plan_rows[0] if self._plan_rows else None
+
+    def _all_plan_tooltip(self) -> str:
+        if not self._plan_rows:
+            return "等待调试状态"
+        return "\n\n".join(self._plan_tooltip(plan) for plan in self._plan_rows)
+
+    def _plan_tooltip(self, plan: DebugCommandPlan) -> str:
+        sections = [
+            plan.intent,
+            f"状态: {plan.status}",
+        ]
+        if plan.disabled_reason:
+            sections.append(f"限制: {plan.disabled_reason}")
+        if plan.requirements:
+            sections.append("条件: " + "；".join(plan.requirements))
+        if plan.safety_notes:
+            sections.append("安全: " + "；".join(plan.safety_notes))
+        if plan.preview_steps:
+            sections.append("步骤: " + " -> ".join(plan.preview_steps))
+        return "\n".join(sections)
+
+    def _risk_label(self, plan: DebugCommandPlan) -> str:
+        labels = {
+            "info": "信息",
+            "low": "低",
+            "medium": "中",
+            "high": "高",
+        }
+        return labels.get(plan.risk.value, plan.risk.value)
+
     def _refresh_summary(self) -> None:
         project, source_count, breakpoints = self.hero_summary()
         status = self._session.status
@@ -782,6 +892,7 @@ class DebugWorkbenchTab(QWidget):
                 button.setToolTip("等待调试后端控制器接入")
             else:
                 button.setToolTip(action.reason or "当前状态不可用")
+        self._refresh_command_plan_preview()
 
     def _repolish(self, *widgets: QWidget) -> None:
         for widget in widgets:
@@ -841,6 +952,47 @@ class DebugWorkbenchTab(QWidget):
             }
             QLabel#debugStatusDot[state="error"] {
                 color: #ef4444;
+            }
+            QFrame#debugPlanStrip {
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
+            QLabel#debugPlanTitle {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QLabel#debugPlanFocus {
+                color: #0f172a;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 7px;
+                background: #eef6ff;
+                border: 1px solid #c8dbf3;
+                border-radius: 5px;
+            }
+            QLabel#debugPlanState {
+                color: #1d4ed8;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 7px;
+                background: #eff6ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 5px;
+            }
+            QLabel#debugPlanRisk {
+                color: #b45309;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 7px;
+                background: #fffbeb;
+                border: 1px solid #fde68a;
+                border-radius: 5px;
+            }
+            QLabel#debugPlanGuard {
+                color: #64748b;
+                font-size: 9pt;
             }
             QComboBox#debugCombo, QLineEdit#debugSearch {
                 background: #f8fbff;

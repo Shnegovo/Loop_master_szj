@@ -995,3 +995,76 @@ Make the debug workbench source view feel closer to a modern IDE by improving lo
   - render attach/halt/run/step/sync-breakpoint/write-variable plans as disabled previews
   - include safety notes and required opt-in conditions per action
   - keep execution disabled until a separate UVSOCK smoke stage is deliberately started
+
+## Stage 19 - Safe Debug Command Planning Layer
+
+### Goal
+
+Introduce an explicit plan layer between "the backend says this action is possible" and "LoopMaster is allowed to execute it", so future Keil/UVSOCK runtime controls can be reviewed, displayed, and tested before any hardware-facing command path is enabled.
+
+### Completed
+
+- Added pure command-plan models in `src/core/debug_workbench.py`:
+  - `DebugPlanRisk`
+  - `DebugCommandPlan`
+  - `DebugWorkbenchSession.command_plans()`
+  - `debug_command_plans_for_status()`
+- Added stable plans for:
+  - Keil discovery/preflight
+  - attach/disconnect
+  - halt/run/step
+  - breakpoint synchronization
+  - variable writes
+- Kept real execution separated from capability state:
+  - safe Keil discovery can remain executable as a no-hardware preflight
+  - attach/halt/run/step/sync/write remain preview-only even when their preconditions are met
+- Added stronger safety text for variable writes:
+  - RAM-only or explicit address whitelist
+  - type/length/alignment/range/endian checks
+  - old/new value review
+  - audit log
+  - write-after-readback verification
+- Added a compact top toolbar `动作计划` preview strip in the debug workbench.
+- Moved plan presentation out of the left navigation column after screenshot review showed that a table there made narrow windows too cramped.
+- Kept the left debug workbench column focused on source tree, backend diagnostics, and local breakpoints.
+- Extended model and UI probes to verify:
+  - every debug action has a plan
+  - risky plans remain execution-disabled
+  - running state makes halt ready but still preview-only
+  - paused state makes run/step/write ready but still preview-only
+  - write-variable safety text includes RAM/type/range/readback requirements
+  - real toolbar buttons stay disabled without a backend controller
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS, Keil discovery still finds the 64-bit UVSOCK DLL and important exports.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, the real HELLO project still parses.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The new command-plan layer intentionally treats runtime capability as necessary but not sufficient. A future smoke/controller stage must opt into execution separately.
+- Screenshot review caught and fixed a layout issue: the first implementation put a full plan table in the left column, which squeezed diagnostics and breakpoints in narrow windows.
+
+### Next Target
+
+- Add a dry-run Keil command transaction layer:
+  - represent UVSOCK attach/halt/run/step/breakpoint/write-variable operations as typed transaction objects
+  - render the exact future command intent without executing it
+  - add a controller-level execution gate distinct from UI button readiness
+  - persist a lightweight debug audit log for planned commands and future execution results
+  - keep all hardware-facing execution disabled until an explicit UVSOCK smoke stage is started

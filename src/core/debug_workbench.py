@@ -133,6 +133,28 @@ class DebugAction:
     reason: str = ""
 
 
+class DebugPlanRisk(str, Enum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True)
+class DebugCommandPlan:
+    key: str
+    title: str
+    intent: str
+    status: str
+    risk: DebugPlanRisk
+    preconditions_met: bool
+    execution_enabled: bool
+    disabled_reason: str = ""
+    requirements: tuple[str, ...] = ()
+    safety_notes: tuple[str, ...] = ()
+    preview_steps: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class Breakpoint:
     path: Path
@@ -342,6 +364,9 @@ class DebugWorkbenchSession:
     def actions(self) -> tuple[DebugAction, ...]:
         return debug_actions_for_status(self._status)
 
+    def command_plans(self) -> tuple[DebugCommandPlan, ...]:
+        return debug_command_plans_for_status(self._status)
+
     def apply_status(self, status: DebugWorkbenchStatus) -> DebugWorkbenchStatus:
         self._status = status
         return self._status
@@ -442,6 +467,121 @@ def debug_actions_for_status(status: DebugWorkbenchStatus) -> tuple[DebugAction,
             "写变量",
             caps.can_write_variables and attached,
             _disabled_reason(caps.can_write_variables and attached, status),
+        ),
+    )
+
+
+def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugCommandPlan, ...]:
+    actions = {action.key: action for action in debug_actions_for_status(status)}
+    return (
+        _command_plan(
+            actions,
+            "discover",
+            "发现 Keil",
+            DebugPlanRisk.INFO,
+            "刷新 Keil 安装、UVSOCK DLL 与 uVision 进程状态",
+            requirements=("只读取本机路径与进程状态",),
+            safety_notes=("不启动 Keil，不连接 UVSOCK，不访问 ST-Link 或目标板",),
+            preview_steps=("定位 Keil 根目录", "检查 UVSOCK DLL", "读取 uVision 进程状态"),
+            preview_only=False,
+        ),
+        _command_plan(
+            actions,
+            "attach",
+            "连接调试会话",
+            DebugPlanRisk.MEDIUM,
+            "通过 UVSOCK 连接已经处于 Debug 状态的 uVision",
+            requirements=(
+                "显式进入 UVSOCK 烟测/连接阶段",
+                "确认 Keil 工程与 Target 和当前工作台一致",
+                "连接失败只记录错误，不自动重试或复位目标",
+            ),
+            safety_notes=("连接本身不写变量，但会进入真实调试会话上下文",),
+            preview_steps=("打开 UVSOCK 连接", "读取目标运行状态", "同步只读会话状态"),
+        ),
+        _command_plan(
+            actions,
+            "disconnect",
+            "断开调试会话",
+            DebugPlanRisk.LOW,
+            "关闭 LoopMaster 到 Keil 的调试桥接连接",
+            requirements=("已建立 UVSOCK 调试连接",),
+            safety_notes=("只释放桥接连接，不关闭 Keil，不复位目标",),
+            preview_steps=("停止状态轮询", "关闭 UVSOCK 连接", "保留本地断点与源码状态"),
+        ),
+        _command_plan(
+            actions,
+            "halt",
+            "暂停目标",
+            DebugPlanRisk.HIGH,
+            "请求 Keil 暂停正在运行的 MCU",
+            requirements=(
+                "已完成连接烟测并确认运行控制能力",
+                "确认当前固件可被安全暂停",
+                "暂停前记录时间戳和当前会话信息",
+            ),
+            safety_notes=("暂停会改变真实目标运行时序，可能影响电机/通信/控制闭环",),
+            preview_steps=("发送 Halt 命令", "读取 PC 位置", "刷新源码运行标记"),
+        ),
+        _command_plan(
+            actions,
+            "run",
+            "继续运行",
+            DebugPlanRisk.HIGH,
+            "请求 Keil 让暂停的 MCU 继续运行",
+            requirements=(
+                "已完成连接烟测并确认运行控制能力",
+                "确认断点和变量写入计划不会造成意外停机",
+                "Run 后继续轮询目标运行状态",
+            ),
+            safety_notes=("继续运行会恢复真实目标行为，需要确认外设和执行环境安全",),
+            preview_steps=("发送 Run 命令", "确认运行状态", "更新工作台状态灯"),
+        ),
+        _command_plan(
+            actions,
+            "step",
+            "单步",
+            DebugPlanRisk.HIGH,
+            "请求 Keil 执行一次源码/汇编单步",
+            requirements=(
+                "目标处于暂停状态",
+                "已确认当前调用栈和中断状态适合单步",
+                "单步后读取 PC 并重新定位源码",
+            ),
+            safety_notes=("单步可能进入中断、库函数或外设等待路径，需要清晰提示",),
+            preview_steps=("发送 Step 命令", "读取 PC", "刷新当前行和调用上下文"),
+        ),
+        _command_plan(
+            actions,
+            "sync_breakpoints",
+            "同步断点",
+            DebugPlanRisk.MEDIUM,
+            "把本地可视化断点同步到 Keil 调试会话",
+            requirements=(
+                "断点 dry-run 映射到 Keil 支持的文件/行号",
+                "逐条返回验证状态并允许失败项留在本地",
+                "同步前显示新增、删除、禁用差异",
+            ),
+            safety_notes=("断点会改变目标运行停顿位置，必须可撤销并显示验证结果",),
+            preview_steps=("生成断点差异", "执行 Keil 断点命令", "回读验证状态"),
+        ),
+        _command_plan(
+            actions,
+            "write_variables",
+            "写变量",
+            DebugPlanRisk.HIGH,
+            "从 LoopMaster 面板写入 Keil 可见的变量或内存",
+            requirements=(
+                "仅允许 RAM 符号或明确地址白名单",
+                "完成类型、长度、对齐、数值范围和端序校验",
+                "写入前展示旧值/新值差异并记录审计日志",
+                "写入后立即回读校验，不一致则标红并停止批量写入",
+            ),
+            safety_notes=(
+                "变量写入会直接改变 MCU 运行状态，PID/电机/通信变量必须有范围护栏",
+                "禁止默认允许 Flash、寄存器控制位或未知指针地址写入",
+            ),
+            preview_steps=("解析符号和类型", "校验写入范围", "写入后回读并记录"),
         ),
     )
 
@@ -716,6 +856,45 @@ def _debug_reason_text(reason: str) -> str:
         "preflight failed": "预检失败",
     }
     return translations.get(reason, reason)
+
+
+def _command_plan(
+    actions: dict[str, DebugAction],
+    key: str,
+    title: str,
+    risk: DebugPlanRisk,
+    intent: str,
+    *,
+    requirements: tuple[str, ...],
+    safety_notes: tuple[str, ...],
+    preview_steps: tuple[str, ...],
+    preview_only: bool = True,
+) -> DebugCommandPlan:
+    action = actions.get(key, DebugAction(key, title, False, "等待后端状态"))
+    preconditions_met = bool(action.enabled)
+    execution_enabled = bool(preconditions_met and not preview_only)
+    if execution_enabled:
+        status = "可执行"
+        disabled_reason = ""
+    elif preconditions_met:
+        status = "计划就绪"
+        disabled_reason = "等待单独启动 UVSOCK 烟测阶段，当前版本只显示计划"
+    else:
+        status = "等待条件"
+        disabled_reason = action.reason or "当前状态不可用"
+    return DebugCommandPlan(
+        key=key,
+        title=title,
+        intent=intent,
+        status=status,
+        risk=risk,
+        preconditions_met=preconditions_met,
+        execution_enabled=execution_enabled,
+        disabled_reason=disabled_reason,
+        requirements=requirements,
+        safety_notes=safety_notes,
+        preview_steps=preview_steps,
+    )
 
 
 def _disabled_reason(enabled: bool, status: DebugWorkbenchStatus) -> str:
