@@ -230,6 +230,14 @@ def _cleanup_process(proc: subprocess.Popen[str]) -> str:
 
 
 def _resolve_command(args: argparse.Namespace) -> tuple[list[str], str]:
+    scenario_args: list[str] = []
+    if args.scenario != "idle":
+        scenario_args = ["--scenario", args.scenario]
+        if args.exe is not None:
+            raise ValueError("--scenario is only supported with a Python entry")
+        if args.entry is None:
+            args.entry = TOOLS_DIR / "ui_close_scenario_entry.py"
+
     if args.exe is not None:
         exe = args.exe.resolve()
         if not exe.exists():
@@ -246,7 +254,9 @@ def _resolve_command(args: argparse.Namespace) -> tuple[list[str], str]:
     python = args.python.resolve() if args.python is not None else Path(sys.executable).resolve()
     if not python.exists():
         raise FileNotFoundError(f"python not found: {python}")
-    return [str(python), str(entry), *args.entry_args], "python-entry"
+    return [str(python), str(entry), *scenario_args, *args.entry_args], (
+        f"python-entry:{args.scenario}" if args.scenario != "idle" else "python-entry"
+    )
 
 
 def _build_env() -> dict[str, str]:
@@ -550,6 +560,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--settle", type=float, default=0.5, help="Seconds to wait after the window appears before closing")
     parser.add_argument("--poll-interval", type=float, default=0.05, help="Window polling interval in seconds")
     parser.add_argument("--log-tail-lines", type=int, default=60, help="Child stdout/stderr tail lines to show on failure")
+    parser.add_argument(
+        "--scenario",
+        choices=("idle", "sampling", "slow-sampling", "serial-worker"),
+        default="idle",
+        help="Use a synthetic MainWindow scenario before closing the process.",
+    )
     parser.add_argument("entry_args", nargs=argparse.REMAINDER, help="Arguments passed to the entry/exe after --")
     args = parser.parse_args(argv)
     if args.entry_args and args.entry_args[0] == "--":
