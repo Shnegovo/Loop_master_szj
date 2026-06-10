@@ -1704,3 +1704,70 @@ Close the current dry-run debugger contract as one larger milestone: breakpoint 
   - add an opt-in Keil read-only smoke path for `OpenConnection -> DBG_STATUS -> CloseConnection`
   - capture target status, project/target, PC location and remote breakpoint/variable snapshot where possible
   - continue blocking write variables, breakpoint apply, Halt/Run/Step, reset and flash operations until a later opt-in execution milestone
+
+## Milestone 29 - Debug Backend Adapter + Keil Read-Only Snapshot Foundation
+
+### Goal
+
+Start the larger debug-backend milestone by adding a backend adapter boundary and a Keil read-only snapshot model, so future Keil, OpenOCD, pyOCD, GDB server and offline replay integrations can feed the same workbench instead of wiring backend-specific code directly into the UI.
+
+### Completed
+
+- Added `src\core\debug_backend.py` with data-only backend adapter contracts:
+  - `DebugBackendDiagnostic`
+  - `DebugBackendSessionSnapshot`
+  - `DebugBackendAdapter`
+- Added `src\core\keil\backend.py` with `KeilUvSockBackendAdapter`.
+- Keil adapter now exposes:
+  - `discover()` for no-connect Keil/UVSOCK preflight
+  - `read_only_session_snapshot()` for explicit read-only UVSOCK open/status/close attempts
+- Kept Keil snapshots data-only and JSON-serializable.
+- Added read-only connection status projection so a successful UVSOCK status query can show target running/paused state without enabling Halt, Run, Step, variable writes, or breakpoint sync.
+- Moved Debug Workbench `发现 Keil` UI wiring from direct `check_uvsock_preflight()` calls to the Keil adapter.
+- Removed the old UI-local Keil diagnostics formatter; diagnostics now come from the backend snapshot rows.
+- Added `tools\debug_backend_adapter_probe.py`:
+  - monkeypatches the Keil adapter dependencies
+  - proves `discover()` does not connect
+  - proves read-only snapshots keep dangerous capabilities disabled
+  - proves snapshots are JSON/data-only
+- Added `tools\keil_backend_adapter_probe.py`:
+  - runs the real local Keil adapter in no-connect mode by default
+  - can later be reused with `--attempt-existing` for explicit read-only UVSOCK smoke
+
+### Verified
+
+- `python -m py_compile src\core\debug_backend.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\core\keil\uvsock.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_backend_adapter_probe.py tools\keil_backend_adapter_probe.py tools\ui_debug_workbench_probe.py tools\keil_command_transaction_probe.py`
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO`
+  - PASS; generated a no-connect Keil adapter snapshot with `attempted=False` and `connected=False`.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports`
+  - PASS.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+
+### Notes
+
+- This milestone slice still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK by default, halt/run the target, sync breakpoints, or write variables.
+- The adapter has an explicit `--attempt-existing` probe path for a later read-only smoke test, but this commit only verifies the no-connect path against the current machine.
+- `status_from_uvsock_connection()` remains available for future execution-capable stages, but the new adapter uses a stricter read-only status projection for this milestone.
+
+### Next Target
+
+- Continue the same large milestone with an opt-in live Keil read-only smoke workflow:
+  - require uVision already running with UVSOCK enabled
+  - run `keil_backend_adapter_probe.py --attempt-existing --status`
+  - surface the read-only snapshot in the UI without enabling control buttons
+  - start modeling remote breakpoint/PC snapshots as incomplete until Keil readback parsing is proven

@@ -36,10 +36,9 @@ from src.core.debug_workbench import (
     DebugRuntimeState,
     debug_command_plans_for_status,
     make_debug_status,
-    status_from_uvsock_preflight,
 )
 from src.core.keil.commands import KeilCommandHistory, build_keil_debug_transactions, transaction_by_key
-from src.core.keil.uvsock import build_uvision_uvsock_command, check_uvsock_preflight
+from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -450,6 +449,9 @@ class MainWindow(QMainWindow):
                     for name, color in saved_colors.items()
                     if QColor(str(color)).isValid()
                 }
+        self._debug_backend = KeilUvSockBackendAdapter(
+            KeilBackendConfig(root=self._keil_root, port=self._debug_uvsock_port)
+        )
 
         self._plot_panes: list[ScopePane] = []
         self._workspace_pages: list[WorkspacePage] = []
@@ -1996,15 +1998,13 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         diagnostics = []
         try:
-            preflight = check_uvsock_preflight(root=self._keil_root, require_running=False)
-            status = status_from_uvsock_preflight(preflight, previous)
-            launch_plan = build_uvision_uvsock_command(
-                root=self._keil_root,
-                port=self._debug_uvsock_port,
-                project=previous.project_path,
-                target=tab.debug_status.target_name or None,
+            snapshot = self._debug_backend.discover(
+                project_path=previous.project_path,
+                target_name=tab.debug_status.target_name,
+                previous_status=previous,
             )
-            diagnostics = self._debug_workbench_preflight_diagnostics(preflight, launch_plan)
+            status = snapshot.status
+            diagnostics = snapshot.diagnostic_rows()
         except Exception as exc:
             message = f"Keil 预检失败：{exc}"
             status = make_debug_status(
@@ -2081,41 +2081,6 @@ class MainWindow(QMainWindow):
             ("UVSOCK 端口", str(self._debug_uvsock_port)),
             ("错误", message),
         )
-
-    def _debug_workbench_preflight_diagnostics(self, preflight, launch_plan) -> tuple[tuple[str, str], ...]:
-        discovery = preflight.discovery
-        dll = preflight.load_result.dll.path if preflight.load_result.dll else "--"
-        reasons = "；".join(self._debug_workbench_reason_text(str(reason)) for reason in preflight.reasons) if preflight.reasons else "OK"
-        command = launch_plan.display_command if launch_plan.command else "--"
-        plan_status = "可预览" if launch_plan.command else "不可用"
-        if launch_plan.reasons:
-            plan_status = "；".join(self._debug_workbench_reason_text(str(reason)) for reason in launch_plan.reasons)
-        return (
-            ("uVision 进程", f"{len(preflight.processes)} 个" if preflight.processes else "未运行"),
-            ("可尝试连接", "是" if preflight.can_attempt_connection else "否"),
-            ("预检原因", reasons),
-            ("启动预览", plan_status),
-            ("UVSOCK 端口", str(self._debug_uvsock_port)),
-            ("Keil 根目录", str(discovery.root or self._keil_root)),
-            ("UVSOCK DLL", str(dll)),
-            ("DLL 加载", "已加载" if preflight.load_result.loaded else preflight.load_result.error or "失败"),
-            ("UV4 目录", str(discovery.uv4_dir or "--")),
-            ("启动命令", command),
-        )
-
-    @staticmethod
-    def _debug_workbench_reason_text(reason: str) -> str:
-        translations = {
-            "Keil/uVision was not discovered": "未发现 Keil/uVision",
-            "UVSOCK DLL could not be loaded": "UVSOCK DLL 加载失败",
-            "uVision is not running": "uVision 未运行",
-            "UVSOCK port must be in range 1..65535": "UVSOCK 端口必须在 1..65535 范围内",
-            "uVision executable is missing": "uVision 可执行文件缺失",
-            "No Keil project was provided; launch is guidance-only": "未选择 Keil 工程，启动命令仅作预览",
-        }
-        if reason.startswith("Keil project does not exist:"):
-            return "Keil 工程不存在：" + reason.split(":", 1)[1].strip()
-        return translations.get(reason, reason)
 
     # ================================================================
     #  Serial Assistant
