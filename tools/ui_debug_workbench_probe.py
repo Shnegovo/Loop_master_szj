@@ -414,6 +414,9 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 placeholder_tip = tab.plan_guard_label.toolTip()
                 if "OpenOCD / GDB 后端尚未接入执行器" not in placeholder_tip:
                     issues.append(f"OpenOCD placeholder tooltip missing blocked reason: {placeholder_tip!r}")
+                placeholder_history_tip = tab.plan_history_label.toolTip()
+                if "openocd_gdb" not in placeholder_history_tip or "后端尚未接入执行器" not in placeholder_history_tip:
+                    issues.append(f"OpenOCD placeholder history missing generic entry: {placeholder_history_tip!r}")
                 unsafe_actions = [
                     key
                     for key in ("halt", "run", "step", "sync_breakpoints", "write_variables")

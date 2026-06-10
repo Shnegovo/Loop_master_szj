@@ -42,7 +42,8 @@ from src.core.debug_workbench import (
     source_entries_from_keil_project,
     source_tree_from_entries,
 )
-from src.core.keil.commands import KeilCommandHistoryEntry, KeilCommandTransaction
+from src.core.debug_transactions import DebugCommandHistoryEntry, DebugCommandTransaction
+from src.core.keil.commands import KeilCommandTransaction
 from src.core.keil.project import KeilProject, parse_keil_project
 from src.ui.pcl_theme import PclComboBox, polish_combo_popup
 
@@ -303,8 +304,8 @@ class DebugWorkbenchTab(QWidget):
         self._breakpoint_rows = ()
         self._diagnostics: tuple[tuple[str, str], ...] = ()
         self._plan_rows: tuple[DebugCommandPlan, ...] = ()
-        self._command_transactions: tuple[KeilCommandTransaction, ...] = ()
-        self._command_history_entries: tuple[KeilCommandHistoryEntry, ...] = ()
+        self._command_transactions: tuple[KeilCommandTransaction | DebugCommandTransaction, ...] = ()
+        self._command_history_entries: tuple[DebugCommandHistoryEntry, ...] = ()
         self._breakpoint_table_syncing = False
         self._breakpoint_quick_syncing = False
         self._session = DebugWorkbenchSession()
@@ -434,14 +435,14 @@ class DebugWorkbenchTab(QWidget):
 
     def set_command_transactions(
         self,
-        transactions: tuple[KeilCommandTransaction, ...] | list[KeilCommandTransaction],
+        transactions: tuple[KeilCommandTransaction | DebugCommandTransaction, ...] | list[KeilCommandTransaction | DebugCommandTransaction],
     ) -> None:
         self._command_transactions = tuple(transactions)
         self._refresh_command_plan_preview()
 
     def set_command_history_entries(
         self,
-        entries: tuple[KeilCommandHistoryEntry, ...] | list[KeilCommandHistoryEntry],
+        entries: tuple[DebugCommandHistoryEntry, ...] | list[DebugCommandHistoryEntry],
     ) -> None:
         self._command_history_entries = tuple(entries)
         self._refresh_command_history_preview()
@@ -1252,7 +1253,7 @@ class DebugWorkbenchTab(QWidget):
                 return ready[key]
         return self._plan_rows[0] if self._plan_rows else None
 
-    def _focused_command_transaction(self, plan: DebugCommandPlan | None) -> KeilCommandTransaction | None:
+    def _focused_command_transaction(self, plan: DebugCommandPlan | None) -> KeilCommandTransaction | DebugCommandTransaction | None:
         if plan is None:
             return None
         for transaction in self._command_transactions:
@@ -1260,7 +1261,7 @@ class DebugWorkbenchTab(QWidget):
                 return transaction
         return None
 
-    def _command_transaction_by_key(self, key: str) -> KeilCommandTransaction | None:
+    def _command_transaction_by_key(self, key: str) -> KeilCommandTransaction | DebugCommandTransaction | None:
         for transaction in self._command_transactions:
             if transaction.kind.value == key:
                 return transaction
@@ -1295,7 +1296,7 @@ class DebugWorkbenchTab(QWidget):
         }
         return labels.get(plan.risk.value, plan.risk.value)
 
-    def _transaction_guard_text(self, transaction: KeilCommandTransaction) -> str:
+    def _transaction_guard_text(self, transaction: KeilCommandTransaction | DebugCommandTransaction) -> str:
         if transaction.execution_enabled:
             return f"执行: {transaction.title} · 审计: 待记录"
         if transaction.preconditions_met:
@@ -1303,7 +1304,7 @@ class DebugWorkbenchTab(QWidget):
         blocked = transaction.blocked_reasons[0] if transaction.blocked_reasons else "等待条件"
         return f"干跑: {transaction.title} · 审计: 已阻止 · {blocked}"
 
-    def _transaction_tooltip(self, transaction: KeilCommandTransaction) -> str:
+    def _transaction_tooltip(self, transaction: KeilCommandTransaction | DebugCommandTransaction) -> str:
         guard_lines = [
             f"- {guard.label}: {guard.state.value} {guard.detail}".rstrip()
             for guard in transaction.guards
@@ -1365,7 +1366,7 @@ class DebugWorkbenchTab(QWidget):
         ])
         return "\n".join(sections)
 
-    def _transaction_brief(self, transaction: KeilCommandTransaction) -> str:
+    def _transaction_brief(self, transaction: KeilCommandTransaction | DebugCommandTransaction) -> str:
         if transaction.command_preview:
             preview = transaction.command_preview[0]
         else:
@@ -1380,6 +1381,7 @@ class DebugWorkbenchTab(QWidget):
             state = "已阻止" if entry.blocked_reasons else "未执行"
             repeat = f" x{entry.seen_count}" if entry.seen_count > 1 else ""
             blocked = f" · {entry.blocked_reasons[0]}" if entry.blocked_reasons else ""
+            backend = f" · {entry.backend}" if getattr(entry, "backend", "") else ""
             diff = ""
             if entry.breakpoint_diff_summary:
                 summary = entry.breakpoint_diff_summary
@@ -1396,7 +1398,7 @@ class DebugWorkbenchTab(QWidget):
                 )
             snapshot = f" · snapshot={entry.backend_snapshot_id}" if entry.backend_snapshot_id else ""
             lines.append(
-                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}{snapshot}"
+                f"- #{entry.sequence} {entry.title}{backend} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}{snapshot}"
             )
         return "\n".join(lines)
 

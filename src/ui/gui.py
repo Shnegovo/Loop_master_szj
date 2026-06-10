@@ -39,8 +39,12 @@ from src.core.debug_workbench import (
     make_debug_status,
 )
 from src.core.debug_backend_registry import create_default_debug_backend_registry
-from src.core.debug_transactions import build_unavailable_debug_transactions, debug_transaction_by_key
-from src.core.keil.commands import KeilCommandHistory, build_keil_debug_transactions, transaction_by_key
+from src.core.debug_transactions import (
+    DebugCommandHistory,
+    build_unavailable_debug_transactions,
+    debug_transaction_by_key,
+)
+from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -421,7 +425,7 @@ class MainWindow(QMainWindow):
         self._shutdown_complete = False
         self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
         self._debug_uvsock_port = 4827
-        self._debug_command_history = KeilCommandHistory(max_entries=64)
+        self._debug_command_history = DebugCommandHistory(max_entries=64)
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         cfg = self._load_config()
@@ -2154,7 +2158,7 @@ class MainWindow(QMainWindow):
             )
         tab.set_command_transactions(transactions)
         focused = self._focused_debug_transaction(transactions)
-        if focused is not None and self._debug_backend_kind == DebugBackendKind.KEIL:
+        if focused is not None:
             self._debug_command_history.record(focused, event="previewed", source="ui_sync")
         tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
 

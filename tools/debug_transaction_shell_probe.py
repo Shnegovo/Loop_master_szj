@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_backend_registry import create_default_debug_backend_registry  # noqa: E402
 from src.core.debug_transactions import (  # noqa: E402
+    DebugCommandHistory,
     build_unavailable_debug_transactions,
     debug_transaction_by_key,
 )
@@ -78,6 +79,22 @@ def main() -> int:
         _assert(record["backend_snapshot_id"] == snapshot.snapshot_id, "audit snapshot id missing")
         json.dumps(record, ensure_ascii=False, sort_keys=True)
         _assert_data_only(transaction)
+
+    history = DebugCommandHistory(max_entries=3)
+    first = history.record(transactions[0], timestamp="2026-06-10T00:00:00+00:00")
+    duplicate = history.record(transactions[0], timestamp="2026-06-10T00:00:01+00:00")
+    _assert(len(history) == 1 and duplicate.seen_count == 2, "generic history should merge adjacent duplicates")
+    _assert(first.entry_id == duplicate.entry_id, "generic history should keep duplicate entry id")
+    sync = debug_transaction_by_key(transactions, "sync_breakpoints")
+    _assert(sync is not None, "sync transaction missing")
+    sync_entry = history.record(sync, timestamp="2026-06-10T00:00:02+00:00")
+    _assert(sync_entry.backend == "openocd_gdb", "generic history should retain backend")
+    _assert(sync_entry.backend_snapshot_id == snapshot.snapshot_id, "generic history should retain snapshot id")
+    _assert(history.recent(limit=1)[0].title == "同步断点", "generic recent ordering failed")
+    _assert(history.recent(limit=3, backend="openocd_gdb"), "generic backend filter failed")
+    for entry in history.all():
+        json.dumps(entry.to_record(), ensure_ascii=False, sort_keys=True)
+        _assert_data_only(entry)
 
     print("PASS debug transaction shell probe")
     return 0

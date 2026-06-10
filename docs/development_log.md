@@ -2111,3 +2111,66 @@ Wire the new backend registry into the Debug Workbench UI so Keil, OpenOCD/GDB, 
   - move UI typing from `KeilCommandTransaction` to generic transaction-compatible protocols
   - add a generic history model for Keil and non-Keil transactions
   - introduce `SourceManifest` so Keil projects, ELF/DWARF and future GDB source lists can share the editor tree
+
+## Milestone 30 Update - Generic Debug Command History
+
+### Goal
+
+Remove the next Keil-only bottleneck by giving Keil and non-Keil dry-run transactions a shared history model, so OpenOCD/GDB, pyOCD and offline replay placeholder transactions can be audited in the UI without borrowing `KeilCommandHistory`.
+
+### Completed
+
+- Added generic history primitives to `src\core\debug_transactions.py`:
+  - `DebugCommandHistoryEntry`
+  - `DebugCommandHistory`
+- Generic history records:
+  - backend id
+  - transaction id
+  - command preview
+  - blocked reasons
+  - guard summary
+  - backend snapshot id/evidence
+  - optional port and breakpoint diff data when present
+- `DebugCommandHistory` now supports:
+  - adjacent duplicate merge
+  - bounded history
+  - recent filters by kind, risk, blocked state and backend
+  - JSON/data-only records
+- `MainWindow` now uses `DebugCommandHistory` for all debug backends.
+- Debug Workbench history tooltip now displays the backend id for each entry.
+- Non-Keil unavailable backend transactions now appear in the same history strip as Keil dry-run transactions.
+- Keil's existing `KeilCommandHistory` remains in place for compatibility and its probe coverage still passes.
+
+### Verified
+
+- `python -m py_compile src\core\debug_snapshots.py src\core\debug_backend.py src\core\debug_backend_registry.py src\core\debug_transactions.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_snapshot_model_probe.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py tools\debug_backend_adapter_probe.py tools\keil_command_transaction_probe.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS; includes generic history duplicate merge and backend filter coverage.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS; OpenOCD/GDB placeholder now records a generic history entry.
+- `git diff --check`
+  - PASS except the existing CRLF normalization warning for `src\ui\gui.py`.
+
+### Notes
+
+- This update still does not launch or connect Keil/OpenOCD/pyOCD/GDB.
+- Keil's older history class is intentionally left available until all Keil-specific probes and imports are migrated.
+- Generic history is still dry-run/audit only; there is no execution path attached to history entries.
+
+### Next Target
+
+- Continue Milestone 30 with `SourceManifest` extraction:
+  - keep Keil `.uvprojx` as the first source provider
+  - add generic manifest objects for future ELF/DWARF, compile_commands and GDB source lists
+  - adapt Debug Workbench source tree consumption toward the generic manifest without changing visual layout
