@@ -51,7 +51,17 @@ def main() -> int:
             f"balance write presets missing: {_expressions(balance.write_presets)!r}",
         )
         _assert(
-            {"Angle", "AveSpeed", "PWML", "PWMR"}.issubset(_expressions(balance.scope_presets)),
+            {
+                "Angle",
+                "AveSpeed",
+                "PWML",
+                "PWMR",
+                "AnglePID.Target",
+                "AnglePID.Actual",
+                "AnglePID.POut",
+                "SpeedPID.Target",
+                "TurnPID.Out",
+            }.issubset(_expressions(balance.scope_presets)),
             f"balance scope presets missing: {_expressions(balance.scope_presets)!r}",
         )
         rows = dict(balance.diagnostic_rows())

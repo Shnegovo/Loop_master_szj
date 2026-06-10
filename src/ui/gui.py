@@ -69,6 +69,12 @@ from src.core.keil.presets import (
     keil_live_write_seed,
     keil_variable_preset_profile,
 )
+from src.core.keil.watch import (
+    KEIL_WATCH_MAX_HZ,
+    KeilUvSockWatchBackend,
+    keil_watch_rate_warning,
+    make_keil_watch_type,
+)
 from src.core.keil.profile import KeilBuildResult, KeilDebugProfile, make_keil_debug_profile
 from src.core.keil.project import parse_keil_project
 from src.core.keil.uvsock import UvscLaunchResult
@@ -430,6 +436,10 @@ class MainWindow(QMainWindow):
         self._registry: dict[str, tuple[int, TypeInfo]] = {}
 
         self._backend = SWDBackend()
+        self._scope_read_source = "swd"
+        self._keil_watch_backend: KeilUvSockWatchBackend | None = None
+        self._keil_watch_registry: dict[str, tuple[int, TypeInfo]] = {}
+        self._keil_watch_next_idle_connect = 0.0
         self._collector = DataCollector()
         self._collector.set_backend(self._backend)
         self._serial_controller = SerialController(self)
@@ -484,6 +494,14 @@ class MainWindow(QMainWindow):
                 self._recent_elf_path = Path(elf)
             self._saved_monitored_variables = cfg.get("monitored_variables", []) or []
             self._hidden_displayed_variables = set(cfg.get("hidden_displayed_variables", []) or [])
+            saved_scope_source = str(cfg.get("scope_read_source", "swd") or "swd")
+            self._scope_read_source = "keil_watch" if saved_scope_source == "keil_watch" else "swd"
+            saved_keil_watch = cfg.get("keil_watch_variables", {}) or {}
+            if isinstance(saved_keil_watch, dict):
+                for expression, type_name in saved_keil_watch.items():
+                    expr = str(expression).strip()
+                    if expr:
+                        self._keil_watch_registry[expr] = (0, make_keil_watch_type(str(type_name or "float")))
             self._scope_pane_count = max(1, min(3, int(cfg.get("scope_pane_count", 1) or 1)))
             self._scope_sidebar_visible = bool(cfg.get("scope_sidebar_visible", True))
             self._scope_plot_split_sizes = self._coerce_splitter_sizes(cfg.get("scope_plot_splitter_sizes", []), 2)
@@ -531,6 +549,7 @@ class MainWindow(QMainWindow):
         self._rate_display_last_time = time.perf_counter()
         self._rate_display_value = 0.0
         self._rate_display_last_text = ""
+        self._scope_rate_note = ""
         self._target_is_halted = False
         self._target_state_value = "--"
 
@@ -578,6 +597,8 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_statusbar()
         self._setup_motion()
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            self._restore_keil_watch_scope_selection()
 
         self._idle_timer.start(250)  # 绌洪棽璇诲彇淇濇寔 4Hz 鍥哄畾
         self._debug_state_timer.start(750)
@@ -605,6 +626,20 @@ class MainWindow(QMainWindow):
         self._refresh_hero()
         self._refresh_debug_state()
         self._window_resize_sync_timer.start(0)
+
+    def _restore_keil_watch_scope_selection(self) -> None:
+        if not getattr(self, "_keil_watch_registry", None):
+            return
+        saved = [
+            name for name in self._saved_monitored_variables
+            if name in self._keil_watch_registry
+        ]
+        self._monitored = set(saved or self._keil_watch_registry.keys())
+        self._collector.set_backend(self._active_scope_backend(connect=False))
+        if hasattr(self, "_value_table"):
+            self._sync_value_table_placeholders()
+            self._sync_plot_curve_state(force=True)
+            self._update_selected_list()
 
     def _bind_button_motion(self, *buttons: QPushButton):
         if not hasattr(self, "_button_motion_filter"):
@@ -957,6 +992,15 @@ class MainWindow(QMainWindow):
             self._hero_file.setText(project_text)
             self._hero_probe.setText(source_text)
             self._hero_vars.setText(breakpoint_text)
+            return
+
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            status = self._tab_debug_workbench.debug_status if hasattr(self, "_tab_debug_workbench") else None
+            project_text = Path(status.project_path).name if status is not None and status.project_path else "Keil Watch"
+            connected = self._scope_backend_connected()
+            self._hero_file.setText(project_text)
+            self._hero_probe.setText("UVSOCK 已连接" if connected else "UVSOCK 待连接")
+            self._hero_vars.setText(f"{len(self._monitored)} 个 Watch")
             return
 
         self._hero_file.setText(self._elf_path.name if self._elf_path else "未加载 ELF/AXF")
@@ -2061,6 +2105,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.sourceProviderConfigureRequested.connect(self._on_debug_source_provider_configure_requested)
         self._tab_debug_workbench.sourceRemapRequested.connect(self._on_debug_source_remap_requested)
         self._tab_debug_workbench.variablePresetWriteRequested.connect(self._write_keil_live_variable_from_preset)
+        self._tab_debug_workbench.variablePresetWatchRequested.connect(self._add_keil_watch_preset_to_scope)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
@@ -3418,6 +3463,72 @@ class MainWindow(QMainWindow):
             )
         self._tab_debug_workbench.set_variable_presets(tuple(rows))
 
+    def _add_keil_watch_preset_to_scope(self, expression: str, label: str, value_type: str) -> None:
+        expression = str(expression or "").strip()
+        if not expression:
+            return
+        self._set_scope_read_source("keil_watch")
+        type_info = make_keil_watch_type(value_type)
+        self._keil_watch_registry[expression] = (0, type_info)
+        self._monitored.add(expression)
+        self._saved_scope_assignments.setdefault(expression, (True, False, False))
+        self._sync_value_table_placeholders()
+        self._sync_plot_curve_state(force=True)
+        self._update_selected_list()
+        self._refresh_debug_buttons()
+        self._show_workspace_page("scope")
+        display = label or expression
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"已加入 Keil Watch：{display}")
+        self._refresh_hero()
+        self._idle_read()
+
+    def _set_scope_read_source(self, source: str) -> None:
+        source = "keil_watch" if source == "keil_watch" else "swd"
+        if source == getattr(self, "_scope_read_source", "swd"):
+            return
+        if self._collector.is_running:
+            self._on_stop()
+        self._scope_read_source = source
+        self._collector.set_backend(self._active_scope_backend(connect=False))
+        self._monitored = set()
+        self._monitor_list = []
+        self._sync_value_table_placeholders()
+
+    def _scope_registry(self) -> dict[str, tuple[int, TypeInfo]]:
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            return self._keil_watch_registry
+        return self._registry
+
+    def _active_scope_backend(self, *, connect: bool = False):
+        if getattr(self, "_scope_read_source", "swd") != "keil_watch":
+            return self._backend
+        backend = self._keil_watch_backend
+        if backend is None:
+            if hasattr(self._debug_backend, "create_watch_transport"):
+                backend = self._debug_backend.create_watch_transport(
+                    connection_name="LoopMasterScopeWatch",
+                )
+            else:
+                backend = KeilUvSockWatchBackend(
+                    root=self._keil_root,
+                    port=self._debug_uvsock_port,
+                    connection_name="LoopMasterScopeWatch",
+                )
+            self._keil_watch_backend = backend
+        if connect and not backend.is_connected and not backend.connect():
+            raise RuntimeError(backend.last_error or "Keil Watch 连接失败")
+        return backend
+
+    def _scope_backend_connected(self) -> bool:
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            backend = self._keil_watch_backend
+            return bool(backend and backend.is_connected)
+        return bool(self._backend.is_connected)
+
+    def _scope_read_source_label(self) -> str:
+        return "Keil Watch" if getattr(self, "_scope_read_source", "swd") == "keil_watch" else "SWD"
+
     def _keil_build_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_build_result", None)
         if result is None:
@@ -4005,6 +4116,8 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self):
         """Sync Qt selection state with self._monitored."""
+        if getattr(self, "_scope_read_source", "swd") != "swd":
+            self._set_scope_read_source("swd")
         selected_paths = set()
         for item in self._tree.selectedItems():
             path = item.data(0, ROLE_PATH)
@@ -4038,8 +4151,9 @@ class MainWindow(QMainWindow):
 
     def _selected_monitor_items(self) -> list[tuple[str, int, TypeInfo]]:
         items = []
+        registry = self._scope_registry()
         for path in sorted(self._monitored):
-            info = self._registry.get(path)
+            info = registry.get(path)
             if info is not None:
                 addr, ti = info
                 items.append((path, addr, ti))
@@ -4133,7 +4247,7 @@ class MainWindow(QMainWindow):
                 value_item.setText("--")
 
             addr_item = table.item(row, 2)
-            addr_text = f"0x{addr:08X}"
+            addr_text = "Keil" if getattr(self, "_scope_read_source", "swd") == "keil_watch" else f"0x{addr:08X}"
             if addr_item is None:
                 addr_item = QTableWidgetItem(addr_text)
                 addr_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -4268,18 +4382,20 @@ class MainWindow(QMainWindow):
     def _refresh_debug_buttons(self):
         if not hasattr(self, "_btn_write_value"):
             return
-        connected = self._backend.is_connected
+        source = getattr(self, "_scope_read_source", "swd")
+        connected = self._backend.is_connected if source == "swd" else self._scope_backend_connected()
         halted = bool(self._target_is_halted)
         selected = self._selected_value_path()
-        has_variable = bool(selected and selected in self._registry)
+        has_variable = bool(selected and selected in self._scope_registry())
 
         for attr in ("_btn_halt_target", "_btn_resume_target"):
             button = getattr(self, attr, None)
             if button is not None:
-                button.setEnabled(connected)
+                button.setEnabled(self._backend.is_connected)
 
-        self._btn_write_value.setEnabled(connected and halted and has_variable)
-        self._btn_restore_value.setEnabled(connected and halted and has_variable and selected in self._temporary_writes)
+        can_swd_write = source == "swd" and connected and halted and has_variable
+        self._btn_write_value.setEnabled(can_swd_write)
+        self._btn_restore_value.setEnabled(can_swd_write and selected in self._temporary_writes)
 
         if not selected:
             self._selected_value_label.setText("已选：--")
@@ -5188,19 +5304,25 @@ class MainWindow(QMainWindow):
             self._on_start()
 
     def _on_start(self):
-        if not self._elf_path:
+        source = getattr(self, "_scope_read_source", "swd")
+        if source == "swd" and not self._elf_path:
             self._show_warning("错误", "请先导入 ELF 文件。")
             return
-        if not self._backend.is_connected:
+        active_backend = None
+        if source == "swd" and not self._backend.is_connected:
             self._show_warning("错误", "请先连接调试器。")
             return
+        if source == "keil_watch":
+            try:
+                active_backend = self._active_scope_backend(connect=True)
+            except Exception as exc:
+                self._show_warning("Keil Watch 连接失败", str(exc))
+                return
+        else:
+            active_backend = self._backend
 
-        self._monitor_list = []
-        for path in sorted(self._monitored):
-            info = self._registry.get(path)
-            if info is not None:
-                addr, ti = info
-                self._monitor_list.append((path, addr, ti))
+        self._collector.set_backend(active_backend)
+        self._monitor_list = self._selected_monitor_items()
 
         if not self._monitor_list:
             self._show_warning("错误",
@@ -5210,6 +5332,17 @@ class MainWindow(QMainWindow):
         rate = self._rate_combo.currentData()
         if rate == 0:
             rate = 1000  # 最大模式使用高频采样
+        rate = int(rate)
+        self._scope_rate_note = ""
+        if source == "keil_watch":
+            if hasattr(active_backend, "clamp_sample_rate"):
+                rate, self._scope_rate_note = active_backend.clamp_sample_rate(rate)
+            else:
+                rate = min(rate, KEIL_WATCH_MAX_HZ)
+                self._scope_rate_note = keil_watch_rate_warning(rate, len(self._monitor_list))
+            extra_note = keil_watch_rate_warning(rate, len(self._monitor_list))
+            if extra_note and not self._scope_rate_note:
+                self._scope_rate_note = extra_note
 
         self._collector.configure(rate, BUFFER_SECONDS)
         self._collector.set_variables(self._monitor_list)
@@ -5232,7 +5365,7 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem("--")
             value_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._value_table.setItem(row, 1, value_item)
-            addr_item = QTableWidgetItem(f"0x{addr:08X}")
+            addr_item = QTableWidgetItem("Keil" if source == "keil_watch" else f"0x{addr:08X}")
             addr_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._value_table.setItem(row, 2, addr_item)
             self._value_table.setItem(row, 3, QTableWidgetItem(format_type(ti)))
@@ -5266,6 +5399,8 @@ class MainWindow(QMainWindow):
             return
         self._set_frame_rate(self._frame_rate)
         logger.info("后台采样已启动：%d 个变量，目标 %d Hz", len(self._monitor_list), rate)
+        if self._scope_rate_note and hasattr(self, "_sb_label"):
+            self._sb_label.setText(self._scope_rate_note)
 
         self._btn_start.setText("停止")
         self._btn_start.setObjectName("stopBtn")
@@ -5279,7 +5414,10 @@ class MainWindow(QMainWindow):
         self._unlimited_mode = False
         self._sample_timer.stop()
         self._collector.stop()
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch" and self._keil_watch_backend is not None:
+            self._keil_watch_backend.disconnect()
         self._collector._actual_rate = 0.0
+        self._scope_rate_note = ""
         self._rate_display_value = 0.0
         self._update_sample_rate_label()
         self._btn_start.setText("开始")
@@ -5308,6 +5446,15 @@ class MainWindow(QMainWindow):
 
     def _apply_rate(self, rate: int):
         """Apply sample-rate changes to the collector and timer."""
+        note = ""
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            backend = self._keil_watch_backend
+            if backend is not None and hasattr(backend, "clamp_sample_rate"):
+                rate, note = backend.clamp_sample_rate(rate)
+            else:
+                rate = min(int(rate), KEIL_WATCH_MAX_HZ)
+                note = keil_watch_rate_warning(rate, len(self._selected_monitor_items()))
+        self._scope_rate_note = note
         self._collector.set_sample_rate(rate)
         self._reset_rate_display()
         self._update_sample_rate_label()
@@ -5591,6 +5738,8 @@ class MainWindow(QMainWindow):
     def _configured_sample_rate_text(self) -> str:
         selected = self._rate_combo.currentData() if hasattr(self, "_rate_combo") else None
         if selected == 0:
+            if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+                return f"{self._collector._sample_rate} Hz（Keil 限速）"
             return "最大"
         configured = self._collector._sample_rate
         return f"{configured} Hz" if configured else "--"
@@ -5613,15 +5762,17 @@ class MainWindow(QMainWindow):
             actual = self._measure_recent_sample_rate()
             if actual <= 0:
                 actual = getattr(self._collector, "actual_rate", 0.0) or 0.0
+            note = f"  |  {self._scope_rate_note}" if getattr(self, "_scope_rate_note", "") else ""
             detail = (
                 f"实际：{self._format_sample_rate(actual)} Hz  |  "
                 f"目标：{self._configured_sample_rate_text()}  |  "
-                f"显示：{display_text}  |  窗口：{tw}s{scroll_mark}"
+                f"显示：{display_text}  |  窗口：{tw}s{scroll_mark}{note}"
             )
             text = f"实际：{self._format_sample_rate(actual)} Hz"
         else:
+            note = f"  |  {self._scope_rate_note}" if getattr(self, "_scope_rate_note", "") else ""
             detail = (
-                f"实际：-- Hz  |  目标：{self._configured_sample_rate_text()}  |  显示：{display_text}"
+                f"实际：-- Hz  |  目标：{self._configured_sample_rate_text()}  |  显示：{display_text}{note}"
             )
             text = "实际：-- Hz"
         self._sb_rate.setToolTip(detail)
@@ -5839,8 +5990,8 @@ class MainWindow(QMainWindow):
             else:
                 val_item.setText(latest)
             # Address column
-            info = self._registry.get(name)
-            addr_text = f"0x{info[0]:08X}" if info else ""
+            info = self._scope_registry().get(name)
+            addr_text = "Keil" if getattr(self, "_scope_read_source", "swd") == "keil_watch" and info else f"0x{info[0]:08X}" if info else ""
             addr_item = t.item(row, 2)
             if addr_item is None:
                 addr_item = QTableWidgetItem(addr_text)
@@ -5877,8 +6028,7 @@ class MainWindow(QMainWindow):
         """
         if getattr(self, "_shutting_down", False):
             return
-        if not self._backend.is_connected:
-            return
+        source = getattr(self, "_scope_read_source", "swd")
         if self._collector.is_running:
             return
         if not self._monitored:
@@ -5887,18 +6037,25 @@ class MainWindow(QMainWindow):
             return
 
         # Build monitor list from current selections
-        monitor_list = []
-        for path in sorted(self._monitored):
-            info = self._registry.get(path)
-            if info is not None:
-                addr, ti = info
-                monitor_list.append((path, addr, ti))
+        monitor_list = self._selected_monitor_items()
 
         if not monitor_list:
             return
 
         try:
-            raw = self._backend.read_batch(monitor_list)
+            if source == "keil_watch":
+                backend = self._keil_watch_backend
+                if backend is None or not backend.is_connected:
+                    now = time.perf_counter()
+                    if now < getattr(self, "_keil_watch_next_idle_connect", 0.0):
+                        return
+                    self._keil_watch_next_idle_connect = now + 2.0
+                backend = self._active_scope_backend(connect=True)
+            else:
+                if not self._backend.is_connected:
+                    return
+                backend = self._backend
+            raw = backend.read_batch(monitor_list)
         except Exception:
             return
 
@@ -5913,7 +6070,7 @@ class MainWindow(QMainWindow):
     # ================================================================
 
     def _on_export(self):
-        if not self._elf_path:
+        if not self._elf_path and getattr(self, "_scope_read_source", "swd") != "keil_watch":
             self._show_warning("错误", "没有可导出的数据。")
             return
         path = self._choose_save_file("导出 CSV", "scope_data.csv", "CSV (*.csv)")
@@ -5925,8 +6082,9 @@ class MainWindow(QMainWindow):
             with open(path, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["变量", "地址", "类型"])
-                for p, (addr, ti) in self._registry.items():
-                    writer.writerow([p, f"0x{addr:08X}", format_type(ti)])
+                for p, (addr, ti) in self._scope_registry().items():
+                    addr_text = "Keil" if getattr(self, "_scope_read_source", "swd") == "keil_watch" else f"0x{addr:08X}"
+                    writer.writerow([p, addr_text, format_type(ti)])
             return
 
         with open(path, "w", newline="") as f:
@@ -5960,11 +6118,14 @@ class MainWindow(QMainWindow):
     def _save_config(self):
         self._remember_scope_pane_splitter_sizes()
         remembered_elf = self._elf_path or self._recent_elf_path
-        remembered_variables = (
-            sorted(self._monitored)
-            if self._loaded_elf_this_session
-            else self._saved_monitored_variables
-        )
+        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+            remembered_variables = sorted(self._monitored)
+        else:
+            remembered_variables = (
+                sorted(self._monitored)
+                if self._loaded_elf_this_session
+                else self._saved_monitored_variables
+            )
         cfg = {
             "elf_path": str(remembered_elf) if remembered_elf else "",
             "sample_rate": self._rate_combo.currentData() or 1000,
@@ -5974,6 +6135,11 @@ class MainWindow(QMainWindow):
             "target_name": self._selected_target_name(),
             "y_auto": self._y_auto_btn.isChecked(),
             "x_scroll": self._x_scroll_btn.isChecked(),
+            "scope_read_source": getattr(self, "_scope_read_source", "swd"),
+            "keil_watch_variables": {
+                name: format_type(type_info)
+                for name, (_addr, type_info) in sorted(self._keil_watch_registry.items())
+            },
             "scope_pane_count": self._scope_pane_count,
             "scope_sidebar_visible": self._scope_sidebar_visible,
             "scope_plot_splitter_sizes": list(self._scope_plot_split_sizes),
@@ -6105,9 +6271,21 @@ class MainWindow(QMainWindow):
             detail = "backend disconnected" if ok else (getattr(self._backend, "last_error", "") or "backend disconnect timeout")
             return ok, detail
 
+        def disconnect_keil_watch():
+            backend = getattr(self, "_keil_watch_backend", None)
+            if backend is None:
+                return True, "no watch session"
+            try:
+                result = backend.disconnect()
+            except Exception as exc:
+                return False, str(exc)
+            ok = True if result is None else bool(result)
+            return ok, "watch disconnected" if ok else (getattr(backend, "last_error", "") or "watch disconnect failed")
+
         sequence.run("stop timers", stop_timers)
         sequence.run("request backend shutdown", request_backend_shutdown)
         sequence.run("stop sampling", stop_sampling)
+        sequence.run("disconnect keil watch", disconnect_keil_watch)
         sequence.run("stop serial", stop_serial)
         sequence.run("save config", self._save_config)
         sequence.run("disconnect backend", disconnect_backend)

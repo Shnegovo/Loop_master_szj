@@ -296,6 +296,7 @@ class DebugWorkbenchTab(QWidget):
     sourceProviderConfigureRequested = Signal(str)
     sourceRemapRequested = Signal()
     variablePresetWriteRequested = Signal(str, str)
+    variablePresetWatchRequested = Signal(str, str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -831,6 +832,12 @@ class DebugWorkbenchTab(QWidget):
         self.variable_preset_write_button.setEnabled(False)
         self.variable_preset_write_button.clicked.connect(self._emit_selected_variable_preset)
         preset_actions.addWidget(self.variable_preset_write_button)
+        self.variable_preset_watch_button = QPushButton("加入示波")
+        self.variable_preset_watch_button.setObjectName("debugMiniButton")
+        self.variable_preset_watch_button.setCursor(Qt.PointingHandCursor)
+        self.variable_preset_watch_button.setEnabled(False)
+        self.variable_preset_watch_button.clicked.connect(self._emit_selected_variable_watch_preset)
+        preset_actions.addWidget(self.variable_preset_watch_button)
         preset_actions.addStretch(1)
         layout.addLayout(preset_actions)
 
@@ -1435,9 +1442,14 @@ class DebugWorkbenchTab(QWidget):
                     if not write_allowed:
                         item.setForeground(QColor("#8290a3"))
         has_write = any(item[-1] for item in self._variable_presets)
+        has_watch = bool(self._variable_presets)
         self.variable_preset_write_button.setEnabled(has_write)
         self.variable_preset_write_button.setToolTip(
             "用选中的可写预设打开 Keil 写变量确认流程" if has_write else "当前工程没有可写变量预设"
+        )
+        self.variable_preset_watch_button.setEnabled(has_watch)
+        self.variable_preset_watch_button.setToolTip(
+            "把选中的变量加入 Keil Watch 示波列表" if has_watch else "当前工程没有可示波变量预设"
         )
 
     def _set_variable_preset_item(self, row: int, column: int, text: str, *, tooltip: str = "") -> None:
@@ -1448,13 +1460,22 @@ class DebugWorkbenchTab(QWidget):
         self.variable_preset_table.setItem(row, column, item)
 
     def _on_variable_preset_double_clicked(self, row: int, _column: int) -> None:
-        self._emit_variable_preset_row(row)
+        if 0 <= row < len(self._variable_presets) and self._variable_presets[row][-1]:
+            self._emit_variable_preset_row(row)
+        else:
+            self._emit_variable_watch_preset_row(row)
 
     def _emit_selected_variable_preset(self) -> None:
         row = self.variable_preset_table.currentRow() if hasattr(self, "variable_preset_table") else -1
         if row < 0 and self.variable_preset_table.rowCount() > 0:
             row = 0
         self._emit_variable_preset_row(row)
+
+    def _emit_selected_variable_watch_preset(self) -> None:
+        row = self.variable_preset_table.currentRow() if hasattr(self, "variable_preset_table") else -1
+        if row < 0 and self.variable_preset_table.rowCount() > 0:
+            row = 0
+        self._emit_variable_watch_preset_row(row)
 
     def _emit_variable_preset_row(self, row: int) -> None:
         if row < 0 or row >= len(self._variable_presets):
@@ -1463,6 +1484,12 @@ class DebugWorkbenchTab(QWidget):
         if not write_allowed:
             return
         self.variablePresetWriteRequested.emit(expression, default_value)
+
+    def _emit_variable_watch_preset_row(self, row: int) -> None:
+        if row < 0 or row >= len(self._variable_presets):
+            return
+        expression, label, value_type, _default_value, _purpose, _write_allowed = self._variable_presets[row]
+        self.variablePresetWatchRequested.emit(expression, label, value_type)
 
     def _refresh_source_provider_summary(self) -> None:
         if not hasattr(self, "source_provider_state_label"):

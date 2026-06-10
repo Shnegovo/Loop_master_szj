@@ -4127,3 +4127,112 @@ keeping the default behavior dry-run only.
   intentionally ready.
 - Add Keil watch/read sampling path for preset scope variables, with clear
   sampling-rate warnings.
+
+## Milestone 46 Update - Keil Watch Read Path And Scope Binding
+
+### Goal
+
+Move Keil integration beyond project/profile display and live-write prompts by
+adding a real low-frequency UVSOCK expression read path that can feed the
+existing oscilloscope UI.
+
+### Completed
+
+- Added `src/core/keil/watch.py`.
+  - `KeilUvSockWatchBackend` owns a persistent UVSOCK live session.
+  - Exposes the existing collector protocol: `is_connected` and `read_batch`.
+  - Reads expressions through `KeilUvscLiveSession.evaluate_expression()`.
+  - Parses common Keil numeric output including `name = 12.3`, decimal and hex.
+  - Returns `NaN` for non-numeric/error reads so plotting can continue.
+  - Adds Keil-specific sample-rate guidance:
+    - recommended 20 Hz
+    - hard UI clamp 50 Hz
+    - explicit warning when users request high-rate Watch sampling.
+- Extended `KeilUvSockBackendAdapter`.
+  - `create_watch_transport(...)`
+  - `read_watch_once(...)`
+- Extended Debug Workbench variable presets.
+  - Added `加入示波` button.
+  - Writable presets still open the existing guarded write flow.
+  - Scope/read-only presets can now be added directly to the oscilloscope.
+  - Double-click behavior:
+    - writable row: write flow
+    - read-only/scope row: add to Watch scope.
+- Bound Keil Watch to the main oscilloscope.
+  - Scope source can switch between normal SWD memory reads and Keil Watch.
+  - Keil Watch variables do not require ELF import or pyOCD/SWD connection.
+  - Address column shows `Keil`.
+  - Idle value refresh and background sampling both use the active scope source.
+  - Idle UVSOCK connection attempts are throttled so a closed uVision session
+    does not cause UI churn.
+  - Keil Watch mode is saved/restored in `loopmaster.json`.
+  - CSV export works for Keil Watch variable lists and captured Watch data.
+- Expanded balance-car scope presets using the user-provided F103 reference:
+  - `Angle`, `AngleAcc`, `AngleAcc_Filter`, `AngleDelta`
+  - `AveSpeed`, `DifSpeed`, `PWML`, `PWMR`
+  - `AnglePID.Target`, `AnglePID.Actual`, `AnglePID.Out`
+  - `AnglePID.POut`, `AnglePID.IOut`, `AnglePID.DOut`
+  - `SpeedPID.Target`, `SpeedPID.Actual`, `SpeedPID.Out`
+  - `TurnPID.Out`
+
+### Verified
+
+- `python -m py_compile src/core/keil/watch.py src/core/keil/backend.py src/core/keil/__init__.py src/ui/debug_workbench_tab.py src/ui/gui.py tools/keil_watch_read_probe.py`
+  - PASS.
+- `python tools/keil_watch_read_probe.py`
+  - PASS.
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+- `python tools/ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-keil-watch --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-keil-watch\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-keil-watch\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-keil-watch\03_debug_workbench_narrow.png`
+- `python tools/keil_debug_options_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/debug_session_contract_probe.py`
+  - PASS.
+- `python tools/debug_backend_registry_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- This is intentionally a low-frequency Keil Watch path. It is suitable for
+  PID tuning trends and live variable panels, not for high-bandwidth waveform
+  capture. High-frequency data should continue through SWD memory reads or
+  serial/VOFA-style streams.
+- The user-provided balance-car reference is now useful in the UI without
+  importing its AXF first: selecting a preset can add expressions directly to
+  Keil Watch. Real reads still require a live uVision Debug/UVSOCK session.
+- UVSOCK lifecycle may be global inside Keil's DLL. Watch sessions are
+  disconnectable, and future write/runtime operations should pause or serialize
+  against Watch polling before deeper hardware testing.
+
+### Next Target
+
+- Run a deliberate real F401 hardware smoke through the existing
+  `tools/keil_auto_debug_smoke.py --execute` path when ready.
+- Add a Keil debug profile picker:
+  - project path
+  - target
+  - AXF status
+  - UVSOCK port
+  - ST-Link option diagnostics
+  - saved per-project defaults.
+- Start the modern debugger UI layer:
+  - real breakpoint set/clear/sync against Keil
+  - source gutter actions modeled after VS Code/CubeIDE
+  - Watch expressions grouped into reusable tuning panels.
+- Keep OpenOCD/GDB and pyOCD compatibility in the same transport shape:
+  status snapshot, runtime control, variable write, low-frequency watch, and
+  high-frequency sampling as separate capabilities.

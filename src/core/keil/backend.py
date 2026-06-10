@@ -43,6 +43,7 @@ from src.core.keil.uvsock import (
     build_uvision_uvsock_command,
     check_uvsock_preflight,
 )
+from src.core.keil.watch import KeilUvSockWatchBackend, KeilWatchVariable
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,31 @@ class KeilUvSockBackendAdapter:
             project_path=project_path,
             target_name=target_name,
         )
+
+    def create_watch_transport(
+        self,
+        *,
+        connection_name: str = "LoopMasterWatch",
+    ) -> KeilUvSockWatchBackend:
+        return KeilUvSockWatchBackend(
+            root=self.config.root,
+            port=self.config.port,
+            connection_name=connection_name,
+        )
+
+    def read_watch_once(
+        self,
+        expressions: tuple[KeilWatchVariable, ...] | list[KeilWatchVariable | str],
+        *,
+        connection_name: str = "LoopMasterWatchOnce",
+    ):
+        backend = self.create_watch_transport(connection_name=connection_name)
+        if not backend.connect():
+            raise RuntimeError(backend.last_error or "Keil Watch connection failed")
+        try:
+            return backend.read_expressions(expressions)
+        finally:
+            backend.disconnect()
 
     def _runtime_control(
         self,
