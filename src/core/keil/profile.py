@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.keil.discovery import KeilDiscovery, discover_keil
+from src.core.keil.options import KeilDebugOptionsSummary, parse_keil_debug_options
 from src.core.keil.project import KeilProject, KeilTarget, parse_keil_project
 from src.core.keil.uvsock import UvscLaunchPlan, UvscLaunchResult, build_uvision_uvsock_command, start_uvision_uvsock
 
@@ -38,11 +39,12 @@ class KeilDebugProfile:
     axf_exists: bool
     build_plan: KeilBuildPlan
     launch_plan: UvscLaunchPlan
+    debug_options: KeilDebugOptionsSummary | None
     ready: bool
     reasons: tuple[str, ...]
 
     def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
-        return (
+        rows = (
             ("Keil 档案", "可用" if self.ready else "需要配置"),
             ("Keil 根目录", str(self.discovery.root or "--")),
             ("工程", str(self.project_path or "--")),
@@ -55,6 +57,9 @@ class KeilDebugProfile:
             ("启动命令", self.launch_plan.display_command or "--"),
             ("启动状态", "可启动" if self.launch_plan.ready else _reason_text(self.launch_plan.reasons)),
         )
+        if self.debug_options is not None:
+            rows = rows + self.debug_options.diagnostic_rows()
+        return rows
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ def make_keil_debug_profile(
         project=project_resolved,
         target=selected_target_name or None,
     )
+    debug_options = _make_debug_options(project_resolved, selected_target_name)
     ready = bool(discovery.installed and project_resolved and project_resolved.exists() and target is not None)
     return KeilDebugProfile(
         discovery=discovery,
@@ -136,6 +142,7 @@ def make_keil_debug_profile(
         axf_exists=axf_exists,
         build_plan=build_plan,
         launch_plan=launch_plan,
+        debug_options=debug_options,
         ready=ready and not reasons,
         reasons=tuple(reasons),
     )
@@ -269,6 +276,15 @@ def _default_build_log_path(project_path: Path | None, path: str | os.PathLike[s
     if project_path is None:
         return None
     return (project_path.parent / "loopmaster_keil_build.log").resolve()
+
+
+def _make_debug_options(project_path: Path | None, target_name: str) -> KeilDebugOptionsSummary | None:
+    if project_path is None or not project_path.exists():
+        return None
+    try:
+        return parse_keil_debug_options(project_path, target_name)
+    except Exception:
+        return None
 
 
 def _reason_text(reasons: tuple[str, ...] | list[str]) -> str:

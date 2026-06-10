@@ -3904,3 +3904,84 @@ guarded live-write/readback smoke variable.
   - visible write/scope preset lists
   - one-click fill into the write dialog
   - risk hints for `RunFlag`, PID gains and motor-output-adjacent variables.
+
+## Milestone 43 Update - Keil Debug Option Diagnostics
+
+### Goal
+
+Expose real Keil `.uvoptx` debug-adapter configuration in LoopMaster so the
+profile can show whether the selected project is using ST-Link/SWD, which debug
+clock and flash algorithm are configured, and whether Keil already marked flash
+configuration as suspicious.
+
+### Completed
+
+- Added `src/core/keil/options.py`:
+  - `KeilDebugOptionsSummary`
+  - `parse_keil_debug_options(...)`
+- The parser reads `.uvoptx` next to the `.uvprojx` and combines it with
+  `.uvprojx` target metadata.
+- Extracted diagnostics:
+  - device/vendor/pack/SVD
+  - target debug vs simulator selection
+  - monitor DLL
+  - ST-Link registry key/options
+  - protocol (`2` -> SWD, `1` -> JTAG)
+  - debug clock
+  - flash algorithm
+  - flash range
+  - RAM range
+  - Keil `InvalidFlash=1` marker.
+- Added warnings:
+  - generic `InvalidFlash=1`
+  - F103C8 projects that appear to use a 128KB flash algorithm/range.
+- Integrated debug options into `KeilDebugProfile.diagnostic_rows()`, so the
+  Debug Workbench automatically shows these rows during discovery/profile/attach.
+- Exported the parser through `src/core/keil/__init__.py`.
+- Added `tools/keil_debug_options_probe.py`.
+
+### Verified
+
+- `python -m py_compile src/core/keil/options.py src/core/keil/profile.py src/core/keil/__init__.py tools/keil_debug_options_probe.py tools/keil_debug_profile_probe.py tools/ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools/keil_debug_options_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-debug-options --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-debug-options\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-debug-options\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-debug-options\03_debug_workbench_narrow.png`
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py --keil-root D:\Keil --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe"`
+  - PASS; output now includes debug option diagnostics such as ST-Link, SWD,
+    10 MHz, flash algorithm and SVD.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This is still no-hardware parsing. It does not confirm the ST-Link probe is
+  physically connected; it tells the user what the Keil project is configured to
+  use.
+- Both the F401 probe project and the F103 balance-car reference show
+  `InvalidFlash=1` in Keil metadata, so LoopMaster now surfaces that instead of
+  hiding it.
+- The balance-car reference warning is intentionally conservative: F103C8 plus
+  128KB algorithm may be common in hobby projects, but it still deserves a
+  visible "confirm in Keil" note before automated flashing/debug launch.
+
+### Next Target
+
+- Add a visible variable preset panel in Debug Workbench:
+  - write presets and scope presets
+  - fill selected preset into the write dialog
+  - show risk hints from the preset metadata.
+- Add a controlled hardware-smoke command for F401 auto-debug:
+  - explicit CLI/tool invocation
+  - no UI modal dependency
+  - log result and leave uVision/process state clear.

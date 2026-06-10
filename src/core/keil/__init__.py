@@ -70,6 +70,10 @@ from src.core.keil.profile import (
     make_keil_debug_profile,
     run_keil_project_build,
 )
+from src.core.keil.options import (
+    KeilDebugOptionsSummary,
+    parse_keil_debug_options,
+)
 from src.core.keil.presets import (
     KeilVariablePreset,
     KeilVariablePresetProfile,
@@ -108,6 +112,7 @@ __all__ = [
     "KeilResolvedVariable",
     "KeilBuildPlan",
     "KeilBuildResult",
+    "KeilDebugOptionsSummary",
     "KeilDebugProfile",
     "KeilAutoDebugRequest",
     "KeilAutoDebugResult",
@@ -141,6 +146,7 @@ __all__ = [
     "keil_variable_preset_profile",
     "make_keil_debug_profile",
     "parse_keil_project",
+    "parse_keil_debug_options",
     "project_summary_lines",
     "read_pe_exports",
     "resolve_keil_live_variable",
