@@ -3146,8 +3146,10 @@ class MainWindow(QMainWindow):
         tab = self._tab_debug_workbench
         status = tab.debug_status
         if not status.project_path:
-            self._show_warning("Keil 自动调试", "请先打开 Keil 工程。")
-            return
+            if not self._load_default_keil_debug_profile(silent=True):
+                self._show_warning("Keil 自动调试", "请先打开 Keil 工程，或先保存一个 Keil 调试档案。")
+                return
+            status = tab.debug_status
         profile = self._make_current_keil_profile()
         if profile is None:
             self._show_warning("Keil 自动调试", "无法生成 Keil 调试档案。")
@@ -3520,20 +3522,23 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(message)
         self._show_info("Keil 调试档案", message)
 
-    def _load_default_keil_debug_profile(self) -> None:
+    def _load_default_keil_debug_profile(self, *, silent: bool = False) -> bool:
         self._keil_profile_store = load_keil_profile_store(self._keil_profile_store_path)
         record = self._keil_profile_store.default
         if record is None:
-            self._show_warning("Keil 调试档案", "还没有保存过 Keil 调试档案。")
-            return
+            if not silent:
+                self._show_warning("Keil 调试档案", "还没有保存过 Keil 调试档案。")
+            return False
         if not record.project_path.exists():
-            self._show_warning("Keil 调试档案", f"工程不存在：{record.project_path}")
-            return
+            if not silent:
+                self._show_warning("Keil 调试档案", f"工程不存在：{record.project_path}")
+            return False
         try:
             self._tab_debug_workbench.load_project(record.project_path)
         except Exception as exc:
-            self._show_warning("Keil 调试档案", f"载入工程失败：{exc}")
-            return
+            if not silent:
+                self._show_warning("Keil 调试档案", f"载入工程失败：{exc}")
+            return False
         if record.target_name:
             index = self._tab_debug_workbench.target_combo.findText(record.target_name)
             if index >= 0:
@@ -3559,6 +3564,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(message)
         self._refresh_hero()
+        return True
 
     def _configure_keil_debug_runtime(self) -> None:
         root = self._choose_existing_directory("选择 Keil 根目录")

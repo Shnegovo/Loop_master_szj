@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from src.core.keil.auto_debug import KeilAutoDebugRequest, run_keil_auto_debug_transaction  # noqa: E402
 from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter  # noqa: E402
 from src.core.keil.profile import make_keil_debug_profile  # noqa: E402
+from src.core.keil.profile_store import load_keil_profile_store  # noqa: E402
 
 
 DEFAULT_PROJECT = ROOT / "firmware" / "keil_f401_variable_probe" / "F401VariableProbe.uvprojx"
@@ -30,6 +31,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=4827)
     parser.add_argument("--project", default=str(DEFAULT_PROJECT))
     parser.add_argument("--target", default=DEFAULT_TARGET)
+    parser.add_argument("--use-profile", action="store_true", help="Use the default saved Keil debug profile.")
+    parser.add_argument("--profile-store", default=str(ROOT / "loopmaster_keil_profiles.json"))
+    parser.add_argument("--profile", default="", help="Saved profile name/key/project substring. Defaults to the store default.")
     parser.add_argument("--expression", default="debug_setpoint")
     parser.add_argument("--write-value", default="5000")
     parser.add_argument("--wait-seconds", type=float, default=25.0)
@@ -42,19 +46,29 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Print JSON records.")
     args = parser.parse_args()
 
+    profile_record = _select_saved_profile(args.profile_store, args.profile) if args.use_profile else None
+    keil_root = Path(args.keil_root)
+    port = int(args.port)
     project = Path(args.project).expanduser().resolve()
+    target = args.target
+    if profile_record is not None:
+        keil_root = profile_record.keil_root or keil_root
+        port = int(profile_record.uvsock_port)
+        project = profile_record.project_path.expanduser().resolve()
+        target = profile_record.target_name
+
     adapter = KeilUvSockBackendAdapter(
-        KeilBackendConfig(root=Path(args.keil_root), port=int(args.port), connection_name="LoopMasterAutoSmoke")
+        KeilBackendConfig(root=keil_root, port=port, connection_name="LoopMasterAutoSmoke")
     )
     profile = make_keil_debug_profile(
-        root=Path(args.keil_root),
+        root=keil_root,
         project_path=project,
-        target_name=args.target,
-        port=int(args.port),
+        target_name=target,
+        port=port,
     )
     request = KeilAutoDebugRequest(
         project_path=project,
-        target_name=args.target,
+        target_name=target,
         build_if_missing=not args.no_build,
         launch_if_needed=not args.no_launch,
         wait_seconds=float(args.wait_seconds),
@@ -69,8 +83,12 @@ def main() -> int:
     if not args.execute:
         record = {
             "mode": "dry_run",
+            "profile_source": "saved" if profile_record is not None else "defaults_or_args",
+            "profile_name": profile_record.display_name if profile_record is not None else "",
+            "keil_root": str(keil_root),
+            "port": port,
             "project": str(project),
-            "target": args.target,
+            "target": target,
             "profile_ready": profile.ready,
             "profile_reasons": list(profile.reasons),
             "axf": str(profile.axf_path or ""),
@@ -134,6 +152,30 @@ def _print_record(record: dict[str, object], *, json_mode: bool) -> None:
             print(f"{key}: {json.dumps(value, ensure_ascii=False, sort_keys=True)}")
         else:
             print(f"{key}: {value}")
+
+
+def _select_saved_profile(store_path: str, profile_selector: str):
+    store = load_keil_profile_store(store_path)
+    if not store.records:
+        raise SystemExit(f"No saved Keil profiles found: {store_path}")
+    selector = str(profile_selector or "").strip().lower()
+    if not selector:
+        record = store.default
+        if record is None:
+            raise SystemExit(f"No default Keil profile in: {store_path}")
+        return record
+    for record in store.records:
+        haystack = "\n".join(
+            (
+                record.key,
+                record.display_name,
+                str(record.project_path),
+                record.target_name,
+            )
+        ).lower()
+        if selector in haystack:
+            return record
+    raise SystemExit(f"Saved Keil profile not found: {profile_selector}")
 
 
 if __name__ == "__main__":

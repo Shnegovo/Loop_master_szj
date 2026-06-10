@@ -4325,3 +4325,64 @@ without auto-starting or auto-connecting hardware.
   - UVSOCK command transaction execution
   - remote verification snapshot.
 - Add reusable Watch groups/tuning panels for PID workflows.
+
+## Milestone 48 Update - Profile-Driven Keil Auto-Debug Smoke
+
+### Goal
+
+Connect saved Keil debug profiles to the existing auto-debug smoke flow, so a
+project/target/root/port saved once by the UI can drive repeatable smoke runs.
+
+### Completed
+
+- Extended `tools/keil_auto_debug_smoke.py`.
+  - Added `--use-profile`.
+  - Added `--profile-store`.
+  - Added `--profile` selector by name/key/project substring.
+  - Dry-run output now reports:
+    - profile source
+    - profile name
+    - Keil root
+    - UVSOCK port.
+  - Existing default F401 dry-run behavior remains unchanged unless
+    `--use-profile` is explicitly provided.
+- Added `tools/keil_auto_debug_smoke_profile_probe.py`.
+  - Creates a temporary profile store.
+  - Runs the smoke CLI in dry-run JSON mode.
+  - Verifies project/target/port come from the saved profile.
+- Updated UI auto-debug behavior.
+  - If no Keil project is currently open, `自动调试` attempts to load the
+    default saved Keil debug profile.
+  - If no saved profile exists, it keeps the explicit prompt to open a project.
+  - Existing behavior is unchanged when a project is already open.
+
+### Verified
+
+- `python -m py_compile src/ui/gui.py tools/ui_keil_profile_store_probe.py tools/keil_auto_debug_smoke.py tools/keil_auto_debug_smoke_profile_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_smoke.py --json`
+  - PASS; default F401 dry-run still works.
+- `python tools/keil_auto_debug_smoke_profile_probe.py`
+  - PASS.
+- `python tools/ui_keil_profile_store_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-profile-smoke --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-profile-smoke\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-profile-smoke\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-profile-smoke\03_debug_workbench_narrow.png`
+
+### Notes
+
+- This still does not run hardware unless `--execute` is explicitly passed.
+- Saved profiles now close the loop for repeatable smoke planning:
+  save profile in UI -> run CLI dry-run/execute from that profile -> inspect
+  same project/target/port diagnostics.
+
+### Next Target
+
+- Add a guarded UI dry-run/smoke preview around the saved profile.
+- Start real Keil breakpoint sync execution and remote verification.
+- Keep all hardware-changing actions behind explicit confirmation.
