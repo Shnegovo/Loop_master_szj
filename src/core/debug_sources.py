@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -162,6 +163,38 @@ def source_manifest_from_gdb_sources(
     )
 
 
+def source_manifest_from_compile_commands(
+    path: str | Path,
+    *,
+    name: str = "Compile Commands",
+    max_files: int = 5000,
+) -> SourceManifest:
+    compile_path = Path(path).expanduser().resolve()
+    data = json.loads(compile_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, list):
+        raise ValueError("compile_commands.json must contain a list")
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for item in data:
+        source_path = _compile_command_source_path(item, compile_path.parent)
+        if source_path is None or not _is_source_path(source_path):
+            continue
+        key = str(source_path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(source_path)
+        if len(paths) >= max_files:
+            break
+    return SourceManifest(
+        name=name,
+        root=compile_path.parent,
+        provider="compile_commands",
+        entries=source_entries_from_paths(paths, root=compile_path.parent),
+        project_path=compile_path,
+    )
+
+
 def source_entries_from_keil_project(
     project: KeilProject,
     target_name: str | None = None,
@@ -263,3 +296,17 @@ def _candidate_path_tokens(line: str) -> tuple[str, ...]:
         if token:
             tokens.append(token)
     return tuple(tokens)
+
+
+def _compile_command_source_path(item: object, default_root: Path) -> Path | None:
+    if not isinstance(item, dict):
+        return None
+    file_value = item.get("file")
+    if not file_value:
+        return None
+    path = Path(str(file_value))
+    if path.is_absolute():
+        return path
+    directory = item.get("directory")
+    root = Path(str(directory)).expanduser() if directory else default_root
+    return (root / path).resolve()

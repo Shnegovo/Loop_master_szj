@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_sources import (  # noqa: E402
     source_entries_from_paths,
+    source_manifest_from_compile_commands,
     source_manifest_from_gdb_sources,
     source_manifest_from_roots,
     source_manifest_from_keil_project,
@@ -103,6 +104,26 @@ Source files for which symbols will be read in on demand:
         _assert(len({entry.path for entry in gdb_manifest.entries}) == 3, "GDB manifest should dedupe paths")
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in gdb_manifest.entries), "GDB manifest should ignore text files")
         json.dumps(gdb_manifest.to_record(), ensure_ascii=False, sort_keys=True)
+
+        compile_commands_path = root / "compile_commands.json"
+        compile_commands_path.write_text(
+            json.dumps(
+                [
+                    {"directory": str(root), "command": "cc -c Core/Src/main.c", "file": "Core/Src/main.c"},
+                    {"directory": str(root), "command": "c++ -c Core/Src/pid.cpp", "file": "Core/Src/pid.cpp"},
+                    {"directory": str(root), "command": "cc -c Core/Src/main.c", "file": "Core/Src/main.c"},
+                    {"directory": str(root), "command": "cc -c Core/Src/ignore.txt", "file": "Core/Src/ignore.txt"},
+                    {"directory": str(root), "command": "cc -c Core/Inc/pid.h", "file": str(inc_dir / "pid.h")},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        compile_manifest = source_manifest_from_compile_commands(compile_commands_path)
+        _assert(compile_manifest.provider == "compile_commands", "compile_commands provider mismatch")
+        _assert(compile_manifest.source_count == 3, f"compile_commands should filter and dedupe: {compile_manifest.source_count}")
+        _assert(len({entry.path for entry in compile_manifest.entries}) == 3, "compile_commands should dedupe paths")
+        json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
     print("PASS debug source manifest probe")
     return 0

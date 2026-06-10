@@ -2311,3 +2311,41 @@ Add a no-process `SourceManifest` provider for GDB-style source lists, preparing
 ### Next Target
 
 - Continue with compile_commands/ELF-adjacent source providers, or fold the new providers into the backend placeholder snapshots so the UI can preview non-Keil source trees.
+
+## Milestone 30 Update - Compile Commands Source Provider
+
+### Goal
+
+Add a CMake/VSCode/CubeIDE-friendly `compile_commands.json` source provider so non-Keil projects can produce the same `SourceManifest` without requiring a Keil project file.
+
+### Completed
+
+- Added `source_manifest_from_compile_commands()` to `src\core\debug_sources.py`.
+- The provider:
+  - reads JSON only, without invoking compilers
+  - resolves relative `file` entries against their `directory`
+  - accepts absolute `file` entries
+  - filters to known source/header/ASM extensions
+  - deduplicates paths
+  - respects `max_files`
+- Extended `tools\debug_source_manifest_probe.py` with relative/absolute/duplicate/non-source compile command entries.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This provider does not run compilers, build systems, GDB, OpenOCD or pyOCD.
+- This is another source-tree foundation piece for future multi-toolchain debug sessions.
+
+### Next Target
+
+- Add ELF-adjacent source discovery or wire non-Keil source manifests into backend placeholder snapshots for UI preview.
