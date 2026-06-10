@@ -1689,10 +1689,26 @@ class DebugWorkbenchTab(QWidget):
                 and status.backend.value == "keil"
                 and status.project_path is not None
             )
-            enabled = bool((action.enabled or explicit_keil_write or explicit_keil_profile_action) and self._backend_controls_ready)
+            explicit_keil_runtime_action = (
+                key == "halt"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value == "running"
+            ) or (
+                key == "run"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value == "paused"
+            )
+            enabled = bool(
+                (action.enabled or explicit_keil_write or explicit_keil_profile_action or explicit_keil_runtime_action)
+                and self._backend_controls_ready
+            )
             button.setEnabled(enabled)
             if enabled:
-                if explicit_keil_profile_action:
+                if explicit_keil_runtime_action:
+                    button.setToolTip("显式通过 Keil/UVSOCK 改变目标运行状态，执行前会再次确认")
+                elif explicit_keil_profile_action:
                     button.setToolTip("使用当前 Keil 工程/Target 的调试档案执行显式动作")
                 elif explicit_keil_write and not action.enabled:
                     button.setToolTip("显式通过 Keil/UVSOCK 写变量，写入前会再次确认")

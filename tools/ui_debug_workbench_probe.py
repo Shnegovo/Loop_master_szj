@@ -688,12 +688,17 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"read-only attach should keep {key} action enabled")
             blocked_actions = [
                 key
-                for key in ("halt", "run", "step", "sync_breakpoints")
+                for key in ("run", "step", "sync_breakpoints")
                 if getattr(tab, "_action_buttons", {}).get(key) is not None
                 and getattr(tab, "_action_buttons", {})[key].isEnabled()
             ]
             if blocked_actions:
                 issues.append(f"read-only attach enabled dangerous actions: {blocked_actions!r}")
+            halt_button = getattr(tab, "_action_buttons", {}).get("halt")
+            if halt_button is None or not halt_button.isEnabled():
+                issues.append("read-only attach should expose explicit Keil halt action while target is running")
+            elif "UVSOCK" not in halt_button.toolTip() or ("确认" not in halt_button.toolTip() and "显式" not in halt_button.toolTip()):
+                issues.append(f"Keil halt action tooltip should mention explicit confirmation: {halt_button.toolTip()!r}")
             write_button = getattr(tab, "_action_buttons", {}).get("write_variables")
             if write_button is None or not write_button.isEnabled():
                 issues.append("read-only attach should expose explicit Keil live write action")

@@ -58,6 +58,12 @@ from src.core.debug_transactions import (
 )
 from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
 from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
+from src.core.keil.presets import (
+    KeilVariablePresetProfile,
+    keil_live_write_prompt_hint,
+    keil_live_write_seed,
+    keil_variable_preset_profile,
+)
 from src.core.keil.profile import KeilBuildResult, KeilDebugProfile, make_keil_debug_profile
 from src.core.keil.project import parse_keil_project
 from src.core.keil.uvsock import UvscLaunchResult
@@ -2068,6 +2074,9 @@ class MainWindow(QMainWindow):
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
+        if action_key in {"halt", "run"}:
+            self._control_keil_runtime_from_workbench(action_key)
+            return
         if action_key == "write_variables":
             self._write_keil_live_variable_from_workbench()
             return
@@ -2833,6 +2842,88 @@ class MainWindow(QMainWindow):
     def _connect_keil_read_only_for_debug_workbench(self):
         self._connect_debug_backend_read_only_for_workbench()
 
+    def _control_keil_runtime_from_workbench(self, action_key: str):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 运行控制", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        method_name = "halt_target" if action_key == "halt" else "run_target"
+        if not hasattr(self._debug_backend, method_name):
+            self._show_warning("Keil 运行控制", "当前 Keil 后端尚未提供运行控制执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if action_key == "halt" and status.state != DebugRuntimeState.RUNNING:
+            self._show_warning("Keil 暂停", "目标当前不是运行中状态。")
+            return
+        if action_key == "run" and status.state != DebugRuntimeState.PAUSED:
+            self._show_warning("Keil 运行", "目标当前不是暂停状态。")
+            return
+        label = "暂停" if action_key == "halt" else "运行"
+        message = (
+            f"工程：{status.project_path or '--'}\n"
+            f"Target：{status.target_name or '--'}\n"
+            f"端口：{self._debug_uvsock_port}\n\n"
+            f"这会通过 Keil/UVSOCK 真实{label} MCU，并在执行后读取目标状态。"
+        )
+        if not ask_pcl_confirmation(
+            self,
+            f"确认 Keil {label}",
+            message,
+            confirm_text=label,
+            cancel_text="取消",
+            kind="warning",
+        ):
+            return
+
+        tab.set_debug_controls_ready(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"正在通过 Keil {label}目标...")
+        try:
+            result = getattr(self._debug_backend, method_name)(
+                project_path=status.project_path,
+                target_name=status.target_name,
+            )
+        except Exception as exc:
+            result = None
+            error = str(exc)
+        else:
+            error = ""
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        if result is None:
+            diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + ((f"Keil {label}", f"失败：{error}"),)
+            self._debug_backend_diagnostics = diagnostics
+            self._refresh_debug_workbench_diagnostics()
+            self._show_warning(f"Keil {label}失败", error)
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(error)
+            return
+
+        snapshot = getattr(result, "snapshot", None)
+        if snapshot is not None:
+            status = snapshot.status
+            diagnostics = snapshot.diagnostic_rows()
+            self._debug_backend_diagnostics = tuple(diagnostics) + self._keil_runtime_control_diagnostics(result)
+            self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
+            self._debug_backend_snapshot_record = snapshot.to_record()
+            self._debug_session_controller.apply_backend_snapshot(snapshot)
+            tab.set_debug_status(status, controls_ready=True)
+        else:
+            self._debug_backend_diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + self._keil_runtime_control_diagnostics(result)
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        summary = result.summary()
+        if getattr(result, "succeeded", False):
+            self._show_info(f"Keil {label}完成", summary)
+        else:
+            self._show_warning(f"Keil {label}失败", summary)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(summary)
+        self._refresh_hero()
+
     def _build_keil_project_for_workbench(self):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 构建", "当前调试后端不是 Keil / UVSOCK。")
@@ -2979,14 +3070,15 @@ class MainWindow(QMainWindow):
             self._show_warning("Keil 写变量", "请先连接 Keil 调试会话。")
             return
 
-        default_expr = self._default_keil_live_write_expression()
-        default_value = "6000" if default_expr == "debug_setpoint" else ""
+        preset_profile = self._current_keil_variable_preset_profile()
+        default_expr, default_value = keil_live_write_seed(preset_profile)
+        prompt_hint = keil_live_write_prompt_hint(preset_profile)
         text, ok = ask_pcl_text(
             self,
             "Keil Live 写变量",
             (
                 "第一行填写变量或表达式，第二行填写新值。\n"
-                "示例：debug_setpoint\\n6000，或 AnglePID.Kp\\n40.0。"
+                f"{prompt_hint}"
             ),
             text=f"{default_expr}\n{default_value}".strip(),
             placeholder="变量名\n新值",
@@ -3060,13 +3152,14 @@ class MainWindow(QMainWindow):
         return expression, value_text
 
     def _default_keil_live_write_expression(self) -> str:
-        if self._elf_path and self._elf_path.name.lower() == "f401_variable_probe.axf":
-            return "debug_setpoint"
+        expression, _value = keil_live_write_seed(self._current_keil_variable_preset_profile())
+        return expression
+
+    def _current_keil_variable_preset_profile(self) -> KeilVariablePresetProfile:
         status = self._tab_debug_workbench.debug_status if hasattr(self, "_tab_debug_workbench") else None
         project_path = status.project_path if status is not None else None
-        if project_path and project_path.name.lower() == "project.uvprojx":
-            return "SpeedLevel"
-        return "debug_setpoint"
+        target_name = status.target_name if status is not None else ""
+        return keil_variable_preset_profile(project_path, target_name)
 
     def _current_debug_axf_path(self) -> Path | None:
         profile = self._make_current_keil_profile()
@@ -3179,6 +3272,11 @@ class MainWindow(QMainWindow):
             return ()
         return profile.diagnostic_rows()
 
+    def _keil_variable_preset_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            return ()
+        return self._current_keil_variable_preset_profile().diagnostic_rows()
+
     def _keil_build_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_build_result", None)
         if result is None:
@@ -3230,6 +3328,27 @@ class MainWindow(QMainWindow):
             rows.append(("写后回读", "未独立回读"))
         if result.error:
             rows.append(("写入错误", result.error))
+        return tuple(rows)
+
+    @staticmethod
+    def _keil_runtime_control_diagnostics(result) -> tuple[tuple[str, str], ...]:
+        if result is None:
+            return ()
+        uvsc = getattr(result, "uvsc", None)
+        action = getattr(result, "action", "")
+        label = "暂停" if action == "halt" else "运行" if action == "run" else str(action or "--")
+        target_running = getattr(result, "target_running", None)
+        target_text = "运行中" if target_running is True else "已暂停" if target_running is False else "未知"
+        rows = [
+            ("运行控制", label),
+            ("运行控制结果", "成功" if getattr(result, "succeeded", False) else "失败"),
+            ("运行控制状态", target_text),
+        ]
+        if uvsc is not None and getattr(uvsc, "status_name", ""):
+            rows.append(("运行控制 UVSC", uvsc.status_name))
+        error = getattr(result, "error", "") or (getattr(uvsc, "error", "") if uvsc is not None else "")
+        if error:
+            rows.append(("运行控制错误", str(error)))
         return tuple(rows)
 
     def _sync_debug_command_preview(self):
@@ -3332,6 +3451,7 @@ class MainWindow(QMainWindow):
         diagnostic_rows = self._dedupe_diagnostics(
             tuple(diagnostics)
             + self._keil_profile_diagnostics()
+            + self._keil_variable_preset_diagnostics()
             + self._keil_build_diagnostics()
             + self._keil_launch_diagnostics()
             + self._keil_live_write_diagnostics()

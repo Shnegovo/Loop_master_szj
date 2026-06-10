@@ -106,6 +106,25 @@ class UvscVariableWriteResult:
 
 
 @dataclass(frozen=True)
+class UvscRuntimeControlResult:
+    attempted: bool
+    action: str
+    succeeded: bool
+    status_code: int | None = None
+    status_name: str = ""
+    target_running: bool | None = None
+    error: str = ""
+
+    def summary(self) -> str:
+        label = "运行" if self.action == "run" else "暂停" if self.action == "halt" else self.action
+        state = "运行中" if self.target_running is True else "已暂停" if self.target_running is False else "未知"
+        if self.succeeded:
+            return f"UVSOCK {label}成功，目标{state}"
+        detail = self.error or self.status_name or "执行失败"
+        return f"UVSOCK {label}失败：{detail}"
+
+
+@dataclass(frozen=True)
 class UvscLaunchPlan:
     command: tuple[str, ...]
     cwd: Path | None
@@ -356,6 +375,54 @@ class KeilUvscLiveSession:
         if status != 0:
             raise UvscError("UVSC_DBG_STATUS", status, self.last_error_text())
         return bool(running.value)
+
+    def halt_target(self) -> UvscRuntimeControlResult:
+        return self._runtime_control("halt", "UVSC_DBG_STOP_EXECUTION", expected_running=False)
+
+    def run_target(self) -> UvscRuntimeControlResult:
+        return self._runtime_control("run", "UVSC_DBG_START_EXECUTION", expected_running=True)
+
+    def _runtime_control(
+        self,
+        action: str,
+        function_name: str,
+        *,
+        expected_running: bool,
+    ) -> UvscRuntimeControlResult:
+        func = getattr(self.library, function_name)
+        status = int(func(self.handle))
+        status_name = uvsc_status_name(status)
+        if status != 0:
+            return UvscRuntimeControlResult(
+                attempted=True,
+                action=action,
+                succeeded=False,
+                status_code=status,
+                status_name=status_name,
+                error=self.last_error_text() or status_name,
+            )
+        target_running = None
+        error = ""
+        try:
+            target_running = self.target_running()
+        except Exception as exc:
+            error = str(exc)
+        succeeded = target_running is expected_running
+        if target_running is None:
+            succeeded = False
+        if not succeeded and not error:
+            expected = "运行中" if expected_running else "已暂停"
+            actual = "运行中" if target_running is True else "已暂停" if target_running is False else "未知"
+            error = f"状态回读不一致：期望{expected}，实际{actual}"
+        return UvscRuntimeControlResult(
+            attempted=True,
+            action=action,
+            succeeded=bool(succeeded),
+            status_code=status,
+            status_name=status_name,
+            target_running=target_running,
+            error=error,
+        )
 
     def last_error_text(self) -> str:
         msg_type = ctypes.c_int(0)
@@ -841,6 +908,10 @@ def _configure_uvsc_signatures(library) -> None:
     library.UVSC_DBG_ENTER.restype = ctypes.c_int
     library.UVSC_DBG_EXIT.argtypes = [ctypes.c_int]
     library.UVSC_DBG_EXIT.restype = ctypes.c_int
+    library.UVSC_DBG_STOP_EXECUTION.argtypes = [ctypes.c_int]
+    library.UVSC_DBG_STOP_EXECUTION.restype = ctypes.c_int
+    library.UVSC_DBG_START_EXECUTION.argtypes = [ctypes.c_int]
+    library.UVSC_DBG_START_EXECUTION.restype = ctypes.c_int
     library.UVSC_GEN_SET_OPTIONS.argtypes = [ctypes.c_int, ctypes.POINTER(_UvsockOptions)]
     library.UVSC_GEN_SET_OPTIONS.restype = ctypes.c_int
     library.UVSC_DBG_CALC_EXPRESSION.argtypes = [ctypes.c_int, ctypes.POINTER(_Vset), ctypes.c_int]

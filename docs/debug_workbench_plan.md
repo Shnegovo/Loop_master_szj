@@ -48,6 +48,9 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 本机 `D:\Keil\Keil_v5\UV4` 已确认存在 `UV4.exe`、`uVision.com`、`UVSC.dll`、`UVSC64.dll`、`UVSCWrapper.dll`。
 - `tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports` 已确认首选 `UVSC64.dll`，解析到 103 个导出，关键入口包括 `UVSC_OpenConnection`、`UVSC_DBG_STATUS`、`UVSC_DBG_EXEC_CMD`、`UVSC_DBG_EVAL_EXPRESSION_TO_STR`、`UVSC_DBG_VARIABLE_SET`、`UVSC_DBG_MEM_READ`、`UVSC_DBG_MEM_WRITE`、`UVSC_DBG_START_EXECUTION`、`UVSC_DBG_STOP_EXECUTION`。
 - `tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil` 已确认 DLL 可加载；当前没有运行中的 uVision，因此只能证明可预检，不能宣称已连接真实会话。
+- Keil live write 已经有真实 UVSOCK 路径：F401 probe 项目可通过 `debug_setpoint` 做写入/回读烟测；UI 现在会根据工程识别 F401 probe 或平衡车 F103 工程的变量预设。
+- Keil Halt/Run 已经接入显式 UVSOCK runtime control：`暂停` / `运行` 会调用 start/stop execution 并回读状态，但仍必须由用户点击并确认。
+- 平衡车参考工程已确认：`Target 1`、`STM32F103C8`、输出 `Objects\Project.axf`，当前 AXF 未生成；首批建议变量为 `SpeedLevel`、`AngleAcc_Offset`、`AnglePID.Kp/Kd`，首批示波变量为 `Angle`、`AveSpeed`、`PWML/PWMR`。
 - 结论：Keil 方案真实可行，但必须分级实测：先只读连接和状态快照，再读变量/断点快照，再 opt-in 写变量、断点同步和 Halt/Run/Step。
 
 ## 多调试后端架构方向
@@ -138,6 +141,8 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 默认只允许 RAM 地址窗口，不写 Flash、不写外设寄存器、不写结构体整体和函数指针。
 - 写入流程：读旧值 -> 编码新值 -> 写入 -> 读回校验 -> 失败回滚。
 - Keil 主控时 Halt/Run 以 Keil 状态为准，LoopMaster 不直接抢探针。
+- 下一步必须把 build/launch/connect/write/readback 串成一个显式事务：
+  F401 probe 用 `debug_setpoint`，平衡车工程用 `SpeedLevel`，并在缺少 AXF 时先构建。
 
 ### 阶段 3：Keil 模式示波
 

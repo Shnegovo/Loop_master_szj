@@ -3646,3 +3646,151 @@ and UVSOCK launch command.
   - balance-car safe writes: `SpeedLevel`, `AngleAcc_Offset`, `AnglePID.Kp`,
     `AnglePID.Kd`
   - read/scope-only presets: `Angle`, `AveSpeed`, `PWML`, `PWMR`.
+
+## Milestone 41 Update - Keil Runtime Control And Variable Presets
+
+### Goal
+
+Move the Keil path past build/launch scaffolding by adding real opt-in
+Halt/Run runtime controls and making the first live-write defaults understand a
+real user MCU project instead of always defaulting to the F401 probe.
+
+### Completed
+
+- Added Keil UVSOCK runtime control wrappers:
+  - `KeilUvscLiveSession.halt_target()`
+  - `KeilUvscLiveSession.run_target()`
+  - both call the UVSOCK start/stop execution exports and then read back
+    `UVSC_DBG_STATUS` to confirm target state.
+- Added adapter-level runtime control:
+  - `KeilUvSockBackendAdapter.halt_target(...)`
+  - `KeilUvSockBackendAdapter.run_target(...)`
+  - each opens an explicit live UVSOCK session, performs the requested control,
+    then refreshes a read-only snapshot and checks the returned running/paused
+    state.
+- Wired Debug Workbench actions:
+  - `暂停` is enabled for Keil when controls are ready and the target snapshot
+    says running.
+  - `运行` is enabled for Keil when controls are ready and the target snapshot
+    says paused.
+  - both actions still show explicit confirmation before touching the target.
+- Added runtime diagnostics rows for the UI:
+  - action
+  - success/failure
+  - returned target state
+  - UVSOCK status/error when present.
+- Added `src/core/keil/presets.py`:
+  - `KeilVariablePreset`
+  - `KeilVariablePresetProfile`
+  - `keil_variable_preset_profile(...)`
+  - `keil_live_write_seed(...)`
+  - `keil_live_write_prompt_hint(...)`
+- Added project-aware live-write defaults:
+  - F401 probe defaults to `debug_setpoint` / `6000`.
+  - the balance-car F103 project defaults to `SpeedLevel` / `5`.
+  - unknown projects keep the old safe fallback `debug_setpoint` / `6000`.
+- Added Keil variable preset diagnostics in the Debug Workbench:
+  - `变量预设`
+  - `推荐写入`
+  - `推荐示波`
+- Added `tools/keil_variable_presets_probe.py`.
+- Updated `tools/ui_debug_workbench_probe.py` so the probe now protects the new
+  intended rule:
+  - read-only attach remains safe for step/sync/run when the target is already
+    running.
+  - Keil `暂停` is allowed as a separate explicit runtime-control action and
+    must mention UVSOCK/confirmation in the tooltip.
+
+### Balance-Car Reference Findings
+
+Reference project:
+
+`D:\学习资料\平衡车\平衡车入门教程资料\程序源码\平衡车程序\00-平衡车测试程序\平衡车测试程序-V1.0\Project.uvprojx`
+
+- Target: `Target 1`.
+- Device: `STM32F103C8`.
+- Toolchain: ARMCC 5 / Keil MDK.
+- Output AXF: `Objects\Project.axf`.
+- Current output state: AXF is not generated yet; sources and headers referenced
+  by the project are present.
+- Debug configuration summary from `.uvoptx`:
+  - ST-Link target debug selected.
+  - SWD / ARM CoreSight path.
+  - debug clock around 10 MHz.
+  - flash-before-debug enabled.
+  - flash algorithm appears to be `STM32F10x_128.FLM`; this should be shown as
+    "needs real Keil confirmation" because the Device is F103C8.
+- First write candidates:
+  - `SpeedLevel` (`uint16_t`) for scalar write/readback.
+  - `AngleAcc_Offset` (`float`) for calibration-style write.
+  - `AnglePID.Kp`, `AnglePID.Kd`, `SpeedPID.Kp` for later PID tuning.
+- First read/scope candidates:
+  - `Angle`
+  - `AngleAcc`
+  - `AngleAcc_Filter`
+  - `AveSpeed`
+  - `DifSpeed`
+  - `PWML`
+  - `PWMR`
+  - `AnglePID.Out`
+  - `SpeedPID.Out`
+
+### Verified
+
+- `python -m py_compile src/core/keil/presets.py src/core/keil/__init__.py src/core/keil/uvsock.py src/core/keil/backend.py src/ui/gui.py src/ui/debug_workbench_tab.py tools/keil_variable_presets_probe.py tools/ui_debug_workbench_probe.py tools/keil_live_variable_write_probe.py tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-runtime-control --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-runtime-control\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-runtime-control\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-runtime-control\03_debug_workbench_narrow.png`
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools/keil_command_transaction_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py --keil-root D:\Keil --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe"`
+  - PASS; uVision was not running, discovery stayed in safe preflight mode.
+- `python tools/keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/ui_debug_source_provider_probe.py --output-dir tools/ui-debug-source-provider-runtime-control`
+  - PASS.
+
+### Notes
+
+- This milestone still does not force-start or control the user's connected
+  hardware automatically. Halt/Run are now implemented, but only behind explicit
+  UI actions and confirmation.
+- The balance-car project is now recognized by source features rather than a
+  hard-coded absolute path, so moving the folder should still keep the same
+  variable presets.
+- Keil live write remains the real function priority. This stage improves the
+  first write target selection so the next automatic transaction can use
+  `SpeedLevel` on the F103 balance-car project and `debug_setpoint` on the F401
+  probe.
+
+### Next Target
+
+- Add an automatic Keil debug transaction:
+  - parse `.uvprojx/.uvoptx` profile and show device/debug-adapter warnings.
+  - if AXF is missing, run `uVision.com -b ... -t ... -j0`.
+  - launch `UV4.exe ... -s 4827 -t ...`.
+  - wait for UVSOCK readiness instead of asking the user to manually time the
+    connect click.
+  - connect and read target state.
+  - perform a guarded write/readback smoke:
+    - F401 probe: `debug_setpoint`.
+    - balance-car: `SpeedLevel`.
+  - log old value, new value, readback, target state, AXF, project and target.
+- Add a real variable preset panel in the Debug Workbench:
+  - write presets
+  - scope presets
+  - risk hints
+  - one-click fill into the existing write dialog.

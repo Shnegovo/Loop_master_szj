@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from src.core.debug_workbench import DebugRuntimeState  # noqa: E402
 from src.core.debug_session_contract import DebugSessionState, command_matrix_for_session  # noqa: E402
 from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter  # noqa: E402
-from src.core.keil.uvsock import UvscConnectionResult  # noqa: E402
+from src.core.keil.uvsock import UvscConnectionResult, UvscRuntimeControlResult  # noqa: E402
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -79,7 +79,8 @@ def _fake_launch_plan():
 def main() -> int:
     import src.core.keil.backend as backend_module
 
-    calls = {"preflight": 0, "connect": 0, "launch": 0}
+    calls = {"preflight": 0, "connect": 0, "launch": 0, "halt": 0, "run": 0}
+    fake_running = {"value": True}
 
     def fake_check(root=None, require_running=False):
         calls["preflight"] += 1
@@ -100,17 +101,56 @@ def main() -> int:
                 handle=1234,
                 status_code=0,
                 status_name="UVSC_STATUS_SUCCESS",
-                target_running=True,
+                target_running=bool(fake_running["value"]),
             ),
         )
+
+    class FakeRuntimeSession:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self.closed = True
+
+        def halt_target(self):
+            calls["halt"] += 1
+            fake_running["value"] = False
+            return UvscRuntimeControlResult(
+                attempted=True,
+                action="halt",
+                succeeded=True,
+                status_code=0,
+                status_name="UVSC_STATUS_SUCCESS",
+                target_running=False,
+            )
+
+        def run_target(self):
+            calls["run"] += 1
+            fake_running["value"] = True
+            return UvscRuntimeControlResult(
+                attempted=True,
+                action="run",
+                succeeded=True,
+                status_code=0,
+                status_name="UVSC_STATUS_SUCCESS",
+                target_running=True,
+            )
+
+    def fake_connect_existing(*_args, **_kwargs):
+        return FakeRuntimeSession()
 
     original_check = backend_module.check_uvsock_preflight
     original_launch = backend_module.build_uvision_uvsock_command
     original_connect = backend_module.attempt_existing_uvsock_connection
+    original_live_session = backend_module.KeilUvscLiveSession
     try:
         backend_module.check_uvsock_preflight = fake_check
         backend_module.build_uvision_uvsock_command = fake_launch
         backend_module.attempt_existing_uvsock_connection = fake_connect
+        backend_module.KeilUvscLiveSession = SimpleNamespace(connect_existing=fake_connect_existing)
 
         adapter = KeilUvSockBackendAdapter(KeilBackendConfig(root=Path("D:/Keil"), port=4827))
         discover = adapter.discover(project_path="D:/demo/demo.uvprojx", target_name="DebugDemo")
@@ -173,10 +213,27 @@ def main() -> int:
         _assert(calls["connect"] == 1, "preview read-only snapshot should not connect")
         _assert(not preview.connection_attempted, "preview snapshot should remain no-connect")
         _assert(preview.remote_breakpoint_snapshot is not None and not preview.remote_breakpoint_snapshot.complete, "preview should carry incomplete remote breakpoints")
+
+        halt = adapter.halt_target(project_path="D:/demo/demo.uvprojx", target_name="DebugDemo")
+        _assert(calls["halt"] == 1, "halt should call runtime session once")
+        _assert(calls["connect"] == 2, "halt should refresh read-only status after execution")
+        _assert(halt.succeeded, f"halt should succeed: {halt}")
+        _assert(halt.snapshot is not None and halt.snapshot.status.state == DebugRuntimeState.PAUSED, "halt should refresh paused snapshot")
+        _assert(halt.target_running is False, "halt target state mismatch")
+        _assert_data_only(halt)
+
+        run_result = adapter.run_target(project_path="D:/demo/demo.uvprojx", target_name="DebugDemo")
+        _assert(calls["run"] == 1, "run should call runtime session once")
+        _assert(calls["connect"] == 3, "run should refresh read-only status after execution")
+        _assert(run_result.succeeded, f"run should succeed: {run_result}")
+        _assert(run_result.snapshot is not None and run_result.snapshot.status.state == DebugRuntimeState.RUNNING, "run should refresh running snapshot")
+        _assert(run_result.target_running is True, "run target state mismatch")
+        _assert_data_only(run_result)
     finally:
         backend_module.check_uvsock_preflight = original_check
         backend_module.build_uvision_uvsock_command = original_launch
         backend_module.attempt_existing_uvsock_connection = original_connect
+        backend_module.KeilUvscLiveSession = original_live_session
 
     print("PASS debug backend adapter probe")
     return 0

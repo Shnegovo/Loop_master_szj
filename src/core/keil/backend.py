@@ -34,9 +34,11 @@ from src.core.debug_workbench import (
     status_from_uvsock_preflight,
 )
 from src.core.keil.uvsock import (
+    KeilUvscLiveSession,
     UvscConnectionResult,
     UvscLaunchPlan,
     UvscPreflight,
+    UvscRuntimeControlResult,
     attempt_existing_uvsock_connection,
     build_uvision_uvsock_command,
     check_uvsock_preflight,
@@ -48,6 +50,29 @@ class KeilBackendConfig:
     root: Path | None = None
     port: int = 4827
     connection_name: str = "LoopMaster"
+
+
+@dataclass(frozen=True)
+class KeilRuntimeControlResult:
+    action: str
+    uvsc: UvscRuntimeControlResult
+    snapshot: DebugBackendSessionSnapshot | None = None
+    error: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return bool(self.uvsc.succeeded and self.snapshot is not None and not self.error)
+
+    @property
+    def target_running(self) -> bool | None:
+        if self.snapshot is not None:
+            return self.snapshot.target_running
+        return self.uvsc.target_running
+
+    def summary(self) -> str:
+        if self.error:
+            return f"{_runtime_action_label(self.action)}失败：{self.error}"
+        return self.uvsc.summary()
 
 
 class KeilUvSockBackendAdapter:
@@ -181,6 +206,78 @@ class KeilUvSockBackendAdapter:
         )
         return launch_keil_uvsock_from_profile(profile)
 
+    def halt_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        return self._runtime_control(
+            "halt",
+            project_path=project_path,
+            target_name=target_name,
+        )
+
+    def run_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        return self._runtime_control(
+            "run",
+            project_path=project_path,
+            target_name=target_name,
+        )
+
+    def _runtime_control(
+        self,
+        action: str,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        try:
+            with KeilUvscLiveSession.connect_existing(
+                root=self.config.root,
+                port=self.config.port,
+                connection_name=f"{self.config.connection_name}{action.title()}",
+                require_debug=True,
+            ) as session:
+                uvsc_result = session.halt_target() if action == "halt" else session.run_target()
+        except Exception as exc:
+            return KeilRuntimeControlResult(
+                action=action,
+                uvsc=UvscRuntimeControlResult(
+                    attempted=True,
+                    action=action,
+                    succeeded=False,
+                    error=str(exc),
+                ),
+                snapshot=None,
+                error=str(exc),
+            )
+
+        snapshot = self.read_only_session_snapshot(
+            project_path=project_path,
+            target_name=target_name,
+            attempt_connection=True,
+            query_status=True,
+        )
+        error = ""
+        if not uvsc_result.succeeded:
+            error = uvsc_result.error
+        elif action == "halt" and snapshot.target_running is not False:
+            error = "暂停后状态回读仍不是已暂停"
+        elif action == "run" and snapshot.target_running is not True:
+            error = "运行后状态回读仍不是运行中"
+        return KeilRuntimeControlResult(
+            action=action,
+            uvsc=uvsc_result,
+            snapshot=snapshot,
+            error=error,
+        )
+
     def _snapshot(
         self,
         *,
@@ -311,6 +408,10 @@ def _target_running_text(value: bool | None) -> str:
     if value is False:
         return "已暂停"
     return "未知"
+
+
+def _runtime_action_label(action: str) -> str:
+    return "Keil 继续运行" if action == "run" else "Keil 暂停" if action == "halt" else f"Keil {action}"
 
 
 def _placeholder_pc_location(status: DebugWorkbenchStatus) -> DebugPcLocation:

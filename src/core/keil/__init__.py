@@ -41,6 +41,7 @@ from src.core.keil.uvsock import (
     UvscLaunchResult,
     UvscLoadResult,
     UvscPreflight,
+    UvscRuntimeControlResult,
     UvscSmokeResult,
     UvscVariableWriteResult,
     attempt_existing_uvsock_connection,
@@ -69,6 +70,13 @@ from src.core.keil.profile import (
     make_keil_debug_profile,
     run_keil_project_build,
 )
+from src.core.keil.presets import (
+    KeilVariablePreset,
+    KeilVariablePresetProfile,
+    keil_live_write_prompt_hint,
+    keil_live_write_seed,
+    keil_variable_preset_profile,
+)
 
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
@@ -95,6 +103,8 @@ __all__ = [
     "KeilBuildPlan",
     "KeilBuildResult",
     "KeilDebugProfile",
+    "KeilVariablePreset",
+    "KeilVariablePresetProfile",
     "KeilUvscLiveSession",
     "UvscError",
     "UvscConnectionResult",
@@ -102,6 +112,7 @@ __all__ = [
     "UvscLaunchResult",
     "UvscLoadResult",
     "UvscPreflight",
+    "UvscRuntimeControlResult",
     "UvscSmokeResult",
     "UvscVariableWriteResult",
     "KeilVariableWriteIntent",
@@ -116,6 +127,9 @@ __all__ = [
     "list_running_uvision",
     "launch_keil_uvsock_from_profile",
     "load_uvsc_library",
+    "keil_live_write_prompt_hint",
+    "keil_live_write_seed",
+    "keil_variable_preset_profile",
     "make_keil_debug_profile",
     "parse_keil_project",
     "project_summary_lines",

@@ -40,6 +40,8 @@ class FakeUvscLibrary:
         self.UVSC_DBG_STATUS = FakeFunction(self._status)
         self.UVSC_DBG_ENTER = FakeFunction(self._enter)
         self.UVSC_DBG_EXIT = FakeFunction(self._exit)
+        self.UVSC_DBG_STOP_EXECUTION = FakeFunction(self._stop)
+        self.UVSC_DBG_START_EXECUTION = FakeFunction(self._start)
         self.UVSC_GEN_SET_OPTIONS = FakeFunction(self._set_options)
         self.UVSC_DBG_CALC_EXPRESSION = FakeFunction(self._calc)
         self.UVSC_DBG_EVAL_EXPRESSION_TO_STR = FakeFunction(self._eval)
@@ -48,6 +50,7 @@ class FakeUvscLibrary:
         self.UVSC_DBG_EXEC_CMD = FakeFunction(self._exec_cmd)
         self.UVSC_GetLastError = FakeFunction(self._last_error)
         self.memory = bytearray(b"\xE8\x03\x00\x00")
+        self.running = False
 
     def _init(self, *_args) -> int:
         self.calls.append(("init", None))
@@ -68,7 +71,7 @@ class FakeUvscLibrary:
 
     def _status(self, handle: int, running) -> int:
         self.calls.append(("status", handle))
-        running._obj.value = 0
+        running._obj.value = 1 if self.running else 0
         return 0
 
     def _enter(self, handle: int) -> int:
@@ -77,6 +80,16 @@ class FakeUvscLibrary:
 
     def _exit(self, handle: int) -> int:
         self.calls.append(("exit", handle))
+        return 0
+
+    def _stop(self, handle: int) -> int:
+        self.calls.append(("stop", handle))
+        self.running = False
+        return 0
+
+    def _start(self, handle: int) -> int:
+        self.calls.append(("start", handle))
+        self.running = True
         return 0
 
     def _set_options(self, handle: int, options) -> int:
@@ -134,6 +147,10 @@ def run() -> int:
         session.enter_debug()
         running = session.target_running()
         _assert(running is False, "target_running should decode fake halted state")
+        run_result = session.run_target()
+        _assert(run_result.succeeded and run_result.target_running is True, f"run_target mismatch: {run_result}")
+        halt_result = session.halt_target()
+        _assert(halt_result.succeeded and halt_result.target_running is False, f"halt_target mismatch: {halt_result}")
 
         result = session.write_expression_value("debug_setpoint", "5000")
         _assert(result.written, f"write should pass: {result}")
@@ -148,9 +165,24 @@ def run() -> int:
         session.close()
 
     names = [name for name, _payload in fake.calls]
-    expected = ["options", "enter", "status", "calc", "eval", "mem_write", "mem_read", "exec", "close", "uninit"]
+    expected = [
+        "options",
+        "enter",
+        "status",
+        "start",
+        "status",
+        "stop",
+        "status",
+        "calc",
+        "eval",
+        "mem_write",
+        "mem_read",
+        "exec",
+        "close",
+        "uninit",
+    ]
     _assert(names == expected, f"call order mismatch: {names!r}")
-    calc_payload = fake.calls[3][1]
+    calc_payload = fake.calls[7][1]
     _assert(calc_payload[1] == "debug_setpoint = 5000", f"calc payload mismatch: {calc_payload!r}")
 
     failed = session.write_expression_value("debug_gain", "")
