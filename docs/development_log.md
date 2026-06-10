@@ -1235,3 +1235,69 @@ Make the Keil debug workbench remember recent dry-run command intent without add
   - show counts in the dry-run transaction preview/history tooltip
   - validate source file membership and line numbers before any future Keil sync command exists
   - keep all sync execution disabled until the UVSOCK smoke/controller stage is deliberately started
+
+## Stage 22 - Breakpoint Sync Dry-Run Diff
+
+### Goal
+
+Make breakpoint synchronization explainable before any Keil execution path exists: compare local breakpoints against a modeled remote snapshot, classify the changes, surface the result in the existing dry-run UI, and keep incomplete remote state safely gated.
+
+### Completed
+
+- Added remote-breakpoint snapshot models in `src/core/keil/commands.py`:
+  - `KeilRemoteBreakpoint`
+  - `KeilBreakpointRemoteSnapshot`
+  - `KeilBreakpointDiffSummary`
+- Extended `build_keil_debug_transactions()` with `remote_breakpoint_snapshot`.
+- Added `build_keil_breakpoint_diff_summary()` so sync dry-runs now classify:
+  - add
+  - remove
+  - enable
+  - disable
+  - update-condition
+  - noop
+- Kept the sync transaction data-only and execution-disabled. Non-sync transactions no longer carry breakpoint diff summaries, so attach/halt/run transaction identities do not change when only breakpoint state changes.
+- Added source membership and line-number validation into the diff guard path.
+- Missing or incomplete remote snapshots now keep sync in a WAIT guard state.
+- Complete empty local + complete empty remote snapshots now pass as a valid no-op diff.
+- Added diff counts to the debug workbench top plan tooltip without adding another permanent panel.
+- Added optional `MainWindow.set_debug_remote_breakpoint_snapshot()` wiring for future controller integration.
+- Added `breakpoint_diff` into dry-run audit/history records when a sync transaction is explicitly recorded.
+- Exported the new breakpoint snapshot/diff models through `src/core/keil/__init__.py`.
+- Extended probes with synthetic remote snapshots so the UI and model tests cover visible diff counts.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS, including add/remove/enable/disable/update-condition/noop counts, incomplete snapshot waiting, complete empty snapshot no-op pass, invalid line blocking, and data-only transaction records.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The remote snapshot is still a model/input seam, not a live UVSOCK reader.
+- The UI remains compact: the source tree, diagnostics, breakpoint list, and code editor layout are unchanged; diff counts live in the existing action-plan tooltip.
+
+### Next Target
+
+- Improve local breakpoint editing UX:
+  - make the breakpoint table support enable/disable changes and condition edits
+  - add a clear remove action that keeps source, table, and gutter decorations synchronized
+  - refresh dry-run diff previews immediately after each local breakpoint edit
+  - preserve the compact VSCode-like workbench feel without adding a heavy panel
+  - keep all Keil sync execution dry-run only until the controller/smoke stage is deliberately started

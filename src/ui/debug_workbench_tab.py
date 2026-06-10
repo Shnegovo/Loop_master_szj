@@ -293,6 +293,16 @@ class DebugWorkbenchTab(QWidget):
     def local_breakpoints(self) -> tuple:
         return self._breakpoints.all()
 
+    def local_source_paths(self) -> tuple[Path, ...]:
+        if self._source_tree is None:
+            return ()
+        paths: list[Path] = []
+        for group in self._source_tree.children:
+            for child in group.children:
+                if child.path is not None:
+                    paths.append(child.path)
+        return tuple(paths)
+
     def hero_summary(self) -> tuple[str, str, str]:
         if self._project is None:
             return "未打开 Keil 工程", "只读预览", "0 个断点"
@@ -826,6 +836,9 @@ class DebugWorkbenchTab(QWidget):
         tooltip = self._all_plan_tooltip()
         if transaction is not None:
             tooltip = tooltip + "\n\n" + self._transaction_tooltip(transaction)
+        sync_transaction = self._command_transaction_by_key("sync_breakpoints")
+        if sync_transaction is not None:
+            tooltip = tooltip + "\n\n" + self._transaction_brief(sync_transaction)
         if plan is None:
             self.plan_focus_label.setText("等待状态")
             self.plan_state_label.setText("等待条件")
@@ -887,6 +900,12 @@ class DebugWorkbenchTab(QWidget):
                 return transaction
         return None
 
+    def _command_transaction_by_key(self, key: str) -> KeilCommandTransaction | None:
+        for transaction in self._command_transactions:
+            if transaction.kind.value == key:
+                return transaction
+        return None
+
     def _all_plan_tooltip(self) -> str:
         if not self._plan_rows:
             return "等待调试状态"
@@ -939,11 +958,34 @@ class DebugWorkbenchTab(QWidget):
             f"Target: {transaction.target_name or '--'}",
             "未来命令:",
             *command_lines,
+        ]
+        if transaction.breakpoint_diff_summary is not None:
+            diff = transaction.breakpoint_diff_summary.to_record()
+            sections.extend(
+                [
+                    "断点差分:",
+                    f"- 快照: {'完成' if diff.get('snapshot_complete') else '等待'}",
+                    (
+                        "- 统计: "
+                        f"add={diff.get('add_count', 0)} remove={diff.get('remove_count', 0)} "
+                        f"enable={diff.get('enable_count', 0)} disable={diff.get('disable_count', 0)} "
+                        f"update_condition={diff.get('update_condition_count', 0)} noop={diff.get('noop_count', 0)}"
+                    ),
+                ]
+            )
+        sections.extend([
             "Guard:",
             *guard_lines,
             f"审计: {transaction.audit_summary}",
-        ]
+        ])
         return "\n".join(sections)
+
+    def _transaction_brief(self, transaction: KeilCommandTransaction) -> str:
+        if transaction.command_preview:
+            preview = transaction.command_preview[0]
+        else:
+            preview = transaction.audit_summary
+        return f"断点预览: {transaction.title} · {preview}"
 
     def _history_tooltip(self) -> str:
         if not self._command_history_entries:
@@ -953,8 +995,19 @@ class DebugWorkbenchTab(QWidget):
             state = "已阻止" if entry.blocked_reasons else "未执行"
             repeat = f" x{entry.seen_count}" if entry.seen_count > 1 else ""
             blocked = f" · {entry.blocked_reasons[0]}" if entry.blocked_reasons else ""
+            diff = ""
+            if entry.breakpoint_diff_summary:
+                summary = entry.breakpoint_diff_summary
+                diff = (
+                    f" · 断点差分 add={summary.get('add_count', 0)}"
+                    f" remove={summary.get('remove_count', 0)}"
+                    f" enable={summary.get('enable_count', 0)}"
+                    f" disable={summary.get('disable_count', 0)}"
+                    f" update_condition={summary.get('update_condition_count', 0)}"
+                    f" noop={summary.get('noop_count', 0)}"
+                )
             lines.append(
-                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}"
+                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}"
             )
         return "\n".join(lines)
 

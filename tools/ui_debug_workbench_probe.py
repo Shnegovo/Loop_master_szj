@@ -24,6 +24,8 @@ from src.core.debug_workbench import (  # noqa: E402
     search_document,
 )
 from src.core.keil.commands import (  # noqa: E402
+    KeilBreakpointRemoteSnapshot,
+    KeilRemoteBreakpoint,
     KeilCommandHistory,
     build_keil_debug_transactions,
     transaction_by_key,
@@ -204,6 +206,8 @@ def _sync_command_transactions(tab, history: KeilCommandHistory | None = None, p
         project_path=status.project_path,
         target_name=status.target_name,
         breakpoints=tab.local_breakpoints(),
+        source_paths=tab.local_source_paths(),
+        remote_breakpoint_snapshot=getattr(tab, "_debug_remote_breakpoint_snapshot", None),
         execution_gate=False,
     )
     tab.set_command_transactions(transactions)
@@ -230,6 +234,25 @@ def _focused_transaction(transactions):
         if key in ready:
             return transaction_by_key(transactions, key)
     return transactions[0] if transactions else None
+
+
+def _remote_snapshot(project_path: Path, source_dir: Path) -> KeilBreakpointRemoteSnapshot:
+    return KeilBreakpointRemoteSnapshot(
+        schema_version=1,
+        snapshot_id="keil-ui-remote-breakpoint-snapshot-demo",
+        project_path=project_path,
+        target_name="DebugDemo",
+        captured_at="2026-06-10T00:00:00+00:00",
+        complete=True,
+        breakpoints=(
+            KeilRemoteBreakpoint(path=source_dir / "main.c", line=3, enabled=False, condition="speed > 80", remote_id="bp-1", raw_location=f"{source_dir / 'main.c'}:3"),
+            KeilRemoteBreakpoint(path=source_dir / "main.c", line=24, enabled=True, condition="speed_error < -24", remote_id="bp-2", raw_location=f"{source_dir / 'main.c'}:24"),
+            KeilRemoteBreakpoint(path=source_dir / "main.c", line=12, enabled=True, condition="", remote_id="bp-3", raw_location=f"{source_dir / 'main.c'}:12"),
+            KeilRemoteBreakpoint(path=source_dir / "main.c", line=48, enabled=True, condition="", remote_id="bp-4", raw_location=f"{source_dir / 'main.c'}:48"),
+            KeilRemoteBreakpoint(path=source_dir / "main.c", line=96, enabled=True, condition="", remote_id="bp-5", raw_location=f"{source_dir / 'main.c'}:96"),
+        ),
+        error="",
+    )
 
 
 def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
@@ -265,6 +288,10 @@ def run(output_dir: Path, width: int, height: int) -> int:
         window._show_workspace_page("debug_sources")
         tab = window._tab_debug_workbench
         tab.load_project(project_path)
+        source_dir = project_path.parent.parent / "Core" / "Src"
+        remote_snapshot = _remote_snapshot(project_path, source_dir)
+        tab._debug_remote_breakpoint_snapshot = remote_snapshot
+        window._debug_remote_breakpoint_snapshot = remote_snapshot
         discover_button = getattr(tab, "_action_buttons", {}).get("discover")
         if discover_button is None or not discover_button.isEnabled():
             issues.append("discover action should be enabled when debug workbench controller is wired")
@@ -293,10 +320,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"search navigation did not show active index: {tab.marker_label.text()!r}")
         if tab.source_tree.currentItem() is None or "main.c" not in tab.source_tree.currentItem().text(0):
             issues.append("source tree did not select the current source file")
-        tab.add_breakpoint(12)
+        tab.add_breakpoint(3, condition="speed > 60")
+        tab.add_breakpoint(12, condition="speed_error > 40")
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
-        tab.breakpoint_table.setCurrentCell(1, 0)
-        tab.breakpoint_table.cellClicked.emit(1, 0)
+        tab.add_breakpoint(48)
+        tab.add_breakpoint(72)
+        tab.breakpoint_table.setCurrentCell(2, 0)
+        tab.breakpoint_table.cellClicked.emit(2, 0)
         _pump(app, 0.1)
         if tab.editor.textCursor().blockNumber() + 1 != 24:
             issues.append(f"breakpoint table did not navigate to line 24: {tab.editor.textCursor().blockNumber() + 1}")
@@ -339,6 +369,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"run plan should wait while already running: {running_plans.get('继续运行')!r}")
         if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():
             issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
+        if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=1, noop=1)" not in tab.plan_guard_label.toolTip():
+            issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
         if "历史 " not in tab.plan_history_label.text() or tab.plan_history_label.text() == "历史 0":
             issues.append(f"history chip did not record running preview: {tab.plan_history_label.text()!r}")
         history_tip = tab.plan_history_label.toolTip()
@@ -417,8 +449,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append("current document did not load enough source lines")
         elif len(search_document(tab.current_document, "speed")) < 10:
             issues.append("search hits for speed are unexpectedly low")
-        if tab.breakpoint_table.rowCount() != 2:
-            issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=2")
+        if tab.breakpoint_table.rowCount() != 5:
+            issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=5")
         if "PC" not in tab.marker_label.text() or "运行行" not in tab.marker_label.text():
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
         if "目标已暂停" not in tab.status_text.text():

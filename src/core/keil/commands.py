@@ -32,6 +32,15 @@ class KeilCommandGuardState(str, Enum):
     BLOCKED = "blocked"
 
 
+class KeilBreakpointSyncAction(str, Enum):
+    ADD = "add"
+    REMOVE = "remove"
+    ENABLE = "enable"
+    DISABLE = "disable"
+    UPDATE_CONDITION = "update_condition"
+    NOOP = "noop"
+
+
 @dataclass(frozen=True)
 class KeilCommandGuard:
     key: str
@@ -46,6 +55,115 @@ class KeilBreakpointIntent:
     line: int
     enabled: bool = True
     condition: str = ""
+
+
+@dataclass(frozen=True)
+class KeilRemoteBreakpoint:
+    path: Path | None = None
+    line: int = 0
+    enabled: bool | None = None
+    condition: str | None = ""
+    remote_id: str = ""
+    raw_location: str = ""
+    verified: bool = True
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class KeilBreakpointRemoteSnapshot:
+    schema_version: int
+    snapshot_id: str
+    project_path: Path | None
+    target_name: str
+    captured_at: str
+    complete: bool
+    breakpoints: tuple[KeilRemoteBreakpoint, ...]
+    error: str = ""
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "snapshot_id": self.snapshot_id,
+            "project_path": str(self.project_path) if self.project_path else "",
+            "target_name": self.target_name,
+            "captured_at": self.captured_at,
+            "complete": self.complete,
+            "error": self.error,
+            "breakpoints": [
+                {
+                    "path": str(item.path) if item.path is not None else "",
+                    "line": item.line,
+                    "enabled": item.enabled,
+                    "condition": item.condition,
+                    "remote_id": item.remote_id,
+                    "raw_location": item.raw_location,
+                    "verified": item.verified,
+                    "message": item.message,
+                }
+                for item in self.breakpoints
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class KeilBreakpointSyncOperation:
+    action: KeilBreakpointSyncAction
+    path: Path
+    line: int
+    local_enabled: bool | None = None
+    remote_enabled: bool | None = None
+    local_condition: str = ""
+    remote_condition: str = ""
+    valid: bool = True
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class KeilBreakpointDiffSummary:
+    schema_version: int
+    snapshot_id: str
+    local_count: int
+    remote_count: int
+    matched_count: int
+    add_count: int
+    remove_count: int
+    enable_count: int
+    disable_count: int
+    update_condition_count: int
+    noop_count: int
+    invalid_count: int
+    duplicate_count: int
+    conflict_count: int
+    changed_location_count: int
+    operation_count: int
+    snapshot_complete: bool
+    snapshot_stale: bool
+    digest: str
+    reason: str = ""
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "snapshot_id": self.snapshot_id,
+            "local_count": self.local_count,
+            "remote_count": self.remote_count,
+            "matched_count": self.matched_count,
+            "add_count": self.add_count,
+            "remove_count": self.remove_count,
+            "enable_count": self.enable_count,
+            "disable_count": self.disable_count,
+            "update_condition_count": self.update_condition_count,
+            "noop_count": self.noop_count,
+            "invalid_count": self.invalid_count,
+            "duplicate_count": self.duplicate_count,
+            "conflict_count": self.conflict_count,
+            "changed_location_count": self.changed_location_count,
+            "operation_count": self.operation_count,
+            "snapshot_complete": self.snapshot_complete,
+            "snapshot_stale": self.snapshot_stale,
+            "digest": self.digest,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -75,6 +193,7 @@ class KeilCommandTransaction:
     expected_effect: str
     guards: tuple[KeilCommandGuard, ...]
     audit_summary: str
+    breakpoint_diff_summary: KeilBreakpointDiffSummary | None = None
 
     @property
     def action_key(self) -> str:
@@ -126,6 +245,7 @@ class KeilCommandTransaction:
                 for guard in self.guards
             ],
             "audit_summary": self.audit_summary,
+            "breakpoint_diff": self.breakpoint_diff_summary.to_record() if self.breakpoint_diff_summary is not None else None,
         }
 
 
@@ -156,6 +276,7 @@ class KeilCommandHistoryEntry:
     guard_summary: dict[str, int]
     audit_summary: str
     dedupe_key: str
+    breakpoint_diff_summary: dict[str, Any] | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -184,6 +305,7 @@ class KeilCommandHistoryEntry:
             "guard_summary": dict(self.guard_summary),
             "audit_summary": self.audit_summary,
             "dedupe_key": self.dedupe_key,
+            "breakpoint_diff": self.breakpoint_diff_summary,
         }
 
 
@@ -253,6 +375,7 @@ class KeilCommandHistory:
             guard_summary=_guard_summary(transaction.guards),
             audit_summary=transaction.audit_summary,
             dedupe_key=dedupe_key,
+            breakpoint_diff_summary=transaction.breakpoint_diff_summary.to_record() if transaction.breakpoint_diff_summary is not None else None,
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
@@ -288,12 +411,34 @@ def build_keil_debug_transactions(
     project_path: str | Path | None = None,
     target_name: str = "",
     breakpoints: Iterable[object] = (),
+    remote_breakpoints: Iterable[object] = (),
+    remote_breakpoint_snapshot: KeilBreakpointRemoteSnapshot | object | None = None,
+    source_paths: Iterable[str | Path] = (),
     variable_writes: Iterable[KeilVariableWriteIntent | object] = (),
     execution_gate: bool = False,
 ) -> tuple[KeilCommandTransaction, ...]:
     project = _project_path(project_path if project_path is not None else getattr(status, "project_path", None))
     target = str(target_name or getattr(status, "target_name", "") or "")
     breakpoint_intents = tuple(_breakpoint_intent(item) for item in breakpoints)
+    remote_snapshot = _coerce_remote_breakpoint_snapshot(
+        remote_breakpoint_snapshot,
+        remote_breakpoints=remote_breakpoints,
+        project_path=project,
+        target_name=target,
+    )
+    remote_breakpoint_intents = tuple(_breakpoint_intent(item) for item in remote_snapshot.breakpoints)
+    breakpoint_ops = diff_keil_breakpoints(
+        breakpoint_intents,
+        remote_breakpoint_intents,
+        source_paths=source_paths,
+    )
+    breakpoint_diff_summary = build_keil_breakpoint_diff_summary(
+        breakpoint_intents,
+        remote_breakpoint_intents,
+        breakpoint_ops,
+        snapshot=remote_snapshot,
+        source_paths=source_paths,
+    )
     write_intents = tuple(_variable_write_intent(item) for item in variable_writes)
     return tuple(
         _build_transaction(
@@ -302,6 +447,8 @@ def build_keil_debug_transactions(
             project_path=project,
             target_name=target,
             breakpoints=breakpoint_intents,
+            breakpoint_ops=breakpoint_ops,
+            breakpoint_diff_summary=breakpoint_diff_summary,
             variable_writes=write_intents,
             execution_gate=execution_gate,
         )
@@ -330,6 +477,139 @@ def transaction_by_key(
     return None
 
 
+def diff_keil_breakpoints(
+    local_breakpoints: Iterable[KeilBreakpointIntent | object],
+    remote_breakpoints: Iterable[KeilBreakpointIntent | object] = (),
+    *,
+    source_paths: Iterable[str | Path] = (),
+) -> tuple[KeilBreakpointSyncOperation, ...]:
+    local = {_breakpoint_key(item): _breakpoint_intent(item) for item in local_breakpoints}
+    remote = {_breakpoint_key(item): _breakpoint_intent(item) for item in remote_breakpoints}
+    source_keys = {_normalise_path(path) for path in source_paths}
+    operations: list[KeilBreakpointSyncOperation] = []
+    for key in sorted(set(local) | set(remote)):
+        local_item = local.get(key)
+        remote_item = remote.get(key)
+        item = local_item or remote_item
+        if item is None:
+            continue
+        valid, reason = _breakpoint_validity(item, source_keys)
+        if local_item is not None and remote_item is None:
+            action = KeilBreakpointSyncAction.ADD
+        elif local_item is None and remote_item is not None:
+            action = KeilBreakpointSyncAction.REMOVE
+        elif local_item is not None and remote_item is not None and local_item.enabled != remote_item.enabled:
+            action = KeilBreakpointSyncAction.ENABLE if local_item.enabled else KeilBreakpointSyncAction.DISABLE
+        elif local_item is not None and remote_item is not None and local_item.condition != remote_item.condition:
+            action = KeilBreakpointSyncAction.UPDATE_CONDITION
+        else:
+            action = KeilBreakpointSyncAction.NOOP
+        operations.append(
+            KeilBreakpointSyncOperation(
+                action=action,
+                path=item.path,
+                line=item.line,
+                local_enabled=local_item.enabled if local_item is not None else None,
+                remote_enabled=remote_item.enabled if remote_item is not None else None,
+                local_condition=local_item.condition if local_item is not None else "",
+                remote_condition=remote_item.condition if remote_item is not None else "",
+                valid=valid,
+                reason=reason,
+            )
+        )
+    return tuple(operations)
+
+
+def build_keil_breakpoint_diff_summary(
+    local_breakpoints: Iterable[KeilBreakpointIntent | object],
+    remote_breakpoints: Iterable[KeilBreakpointIntent | object] = (),
+    breakpoint_ops: Iterable[KeilBreakpointSyncOperation] = (),
+    *,
+    snapshot: KeilBreakpointRemoteSnapshot | object | None = None,
+    source_paths: Iterable[str | Path] = (),
+) -> KeilBreakpointDiffSummary:
+    local_items = tuple(_breakpoint_intent(item) for item in local_breakpoints)
+    remote_items = tuple(_breakpoint_intent(item) for item in remote_breakpoints)
+    operations = tuple(breakpoint_ops) or diff_keil_breakpoints(local_items, remote_items, source_paths=source_paths)
+    counts = _breakpoint_operation_counts(operations)
+    local_keys = [_breakpoint_key(item) for item in local_items]
+    remote_keys = [_breakpoint_key(item) for item in remote_items]
+    snapshot_complete = bool(getattr(snapshot, "complete", False)) if snapshot is not None else bool(remote_items)
+    snapshot_error = str(getattr(snapshot, "error", "") or "")
+    snapshot_id = str(getattr(snapshot, "snapshot_id", "") or "")
+    if not snapshot_id:
+        snapshot_id = _breakpoint_summary_digest(local_items, remote_items, operations, snapshot_complete=snapshot_complete, snapshot_error=snapshot_error)
+    reason = snapshot_error or ("等待远端断点快照" if not snapshot_complete else "")
+    invalid_count = sum(1 for op in operations if not op.valid)
+    duplicate_count = _duplicate_count(local_keys) + _duplicate_count(remote_keys)
+    matched_count = len(set(local_keys) & set(remote_keys))
+    operation_count = sum(counts[action.value] for action in (
+        KeilBreakpointSyncAction.ADD,
+        KeilBreakpointSyncAction.REMOVE,
+        KeilBreakpointSyncAction.ENABLE,
+        KeilBreakpointSyncAction.DISABLE,
+        KeilBreakpointSyncAction.UPDATE_CONDITION,
+    ))
+    summary = KeilBreakpointDiffSummary(
+        schema_version=1,
+        snapshot_id=snapshot_id,
+        local_count=len(local_items),
+        remote_count=len(remote_items),
+        matched_count=matched_count,
+        add_count=counts[KeilBreakpointSyncAction.ADD.value],
+        remove_count=counts[KeilBreakpointSyncAction.REMOVE.value],
+        enable_count=counts[KeilBreakpointSyncAction.ENABLE.value],
+        disable_count=counts[KeilBreakpointSyncAction.DISABLE.value],
+        update_condition_count=counts[KeilBreakpointSyncAction.UPDATE_CONDITION.value],
+        noop_count=counts[KeilBreakpointSyncAction.NOOP.value],
+        invalid_count=invalid_count,
+        duplicate_count=duplicate_count,
+        conflict_count=invalid_count,
+        changed_location_count=0,
+        operation_count=operation_count,
+        snapshot_complete=snapshot_complete,
+        snapshot_stale=not snapshot_complete or bool(snapshot_error),
+        digest=_breakpoint_summary_digest(local_items, remote_items, operations, snapshot_complete=snapshot_complete, snapshot_error=snapshot_error),
+        reason=reason,
+    )
+    return summary
+
+
+def _coerce_remote_breakpoint_snapshot(
+    snapshot: KeilBreakpointRemoteSnapshot | object | None,
+    *,
+    remote_breakpoints: Iterable[object],
+    project_path: Path | None,
+    target_name: str,
+) -> KeilBreakpointRemoteSnapshot:
+    if isinstance(snapshot, KeilBreakpointRemoteSnapshot):
+        return snapshot
+    if snapshot is not None:
+        breakpoints = tuple(_remote_breakpoint(item) for item in getattr(snapshot, "breakpoints", ()))
+        return KeilBreakpointRemoteSnapshot(
+            schema_version=int(getattr(snapshot, "schema_version", 1) or 1),
+            snapshot_id=str(getattr(snapshot, "snapshot_id", "") or _breakpoint_summary_digest((), breakpoints, (), snapshot_complete=bool(getattr(snapshot, "complete", False)), snapshot_error=str(getattr(snapshot, "error", "") or ""))),
+            project_path=_project_path(getattr(snapshot, "project_path", project_path)),
+            target_name=str(getattr(snapshot, "target_name", target_name) or target_name),
+            captured_at=str(getattr(snapshot, "captured_at", _now_iso()) or _now_iso()),
+            complete=bool(getattr(snapshot, "complete", True)),
+            breakpoints=breakpoints,
+            error=str(getattr(snapshot, "error", "") or ""),
+        )
+    breakpoints = tuple(_remote_breakpoint(item) for item in remote_breakpoints)
+    snapshot_id = _breakpoint_summary_digest((), breakpoints, (), snapshot_complete=bool(breakpoints), snapshot_error="")
+    return KeilBreakpointRemoteSnapshot(
+        schema_version=1,
+        snapshot_id=snapshot_id,
+        project_path=project_path,
+        target_name=target_name,
+        captured_at=_now_iso(),
+        complete=bool(breakpoints),
+        breakpoints=breakpoints,
+        error="",
+    )
+
+
 def _build_transaction(
     plan: object,
     *,
@@ -337,15 +617,18 @@ def _build_transaction(
     project_path: Path | None,
     target_name: str,
     breakpoints: tuple[KeilBreakpointIntent, ...],
+    breakpoint_ops: tuple[KeilBreakpointSyncOperation, ...],
+    breakpoint_diff_summary: KeilBreakpointDiffSummary | None,
     variable_writes: tuple[KeilVariableWriteIntent, ...],
     execution_gate: bool,
 ) -> KeilCommandTransaction:
     kind = KeilCommandKind(str(getattr(plan, "key", "")))
     preconditions_met = bool(getattr(plan, "preconditions_met", False))
-    guards = _guards_for(kind, plan, port, project_path, target_name, breakpoints, variable_writes, execution_gate)
+    transaction_breakpoint_diff_summary = breakpoint_diff_summary if kind == KeilCommandKind.SYNC_BREAKPOINTS else None
+    guards = _guards_for(kind, plan, port, project_path, target_name, breakpoints, breakpoint_ops, transaction_breakpoint_diff_summary, variable_writes, execution_gate)
     execution_enabled = False
     dry_run = True
-    command_preview = _command_preview(kind, port, target_name, breakpoints, variable_writes)
+    command_preview = _command_preview(kind, port, target_name, breakpoints, breakpoint_ops, transaction_breakpoint_diff_summary, variable_writes)
     payload = {
         "kind": kind.value,
         "title": str(getattr(plan, "title", kind.value)),
@@ -354,6 +637,7 @@ def _build_transaction(
         "port": port,
         "commands": command_preview,
         "guards": [(guard.key, guard.state.value, guard.detail) for guard in guards],
+        "breakpoint_diff": transaction_breakpoint_diff_summary.to_record() if transaction_breakpoint_diff_summary is not None else None,
     }
     return KeilCommandTransaction(
         schema_version=1,
@@ -372,6 +656,7 @@ def _build_transaction(
         expected_effect=_expected_effect(kind),
         guards=guards,
         audit_summary=_audit_summary(kind, command_preview, dry_run),
+        breakpoint_diff_summary=transaction_breakpoint_diff_summary,
     )
 
 
@@ -382,6 +667,8 @@ def _guards_for(
     project_path: Path | None,
     target_name: str,
     breakpoints: tuple[KeilBreakpointIntent, ...],
+    breakpoint_ops: tuple[KeilBreakpointSyncOperation, ...],
+    breakpoint_diff_summary: KeilBreakpointDiffSummary | None,
     variable_writes: tuple[KeilVariableWriteIntent, ...],
     execution_gate: bool,
 ) -> tuple[KeilCommandGuard, ...]:
@@ -425,7 +712,7 @@ def _guards_for(
             )
         )
     if kind == KeilCommandKind.SYNC_BREAKPOINTS:
-        guards.extend(_breakpoint_guards(breakpoints))
+        guards.extend(_breakpoint_guards(breakpoints, breakpoint_ops, breakpoint_diff_summary))
     if kind == KeilCommandKind.WRITE_VARIABLES:
         guards.extend(_write_guards(variable_writes))
     return tuple(guards)
@@ -436,6 +723,8 @@ def _command_preview(
     port: int | None,
     target_name: str,
     breakpoints: tuple[KeilBreakpointIntent, ...],
+    breakpoint_ops: tuple[KeilBreakpointSyncOperation, ...],
+    breakpoint_diff_summary: KeilBreakpointDiffSummary | None,
     variable_writes: tuple[KeilVariableWriteIntent, ...],
 ) -> tuple[str, ...]:
     if kind == KeilCommandKind.DISCOVER:
@@ -456,15 +745,21 @@ def _command_preview(
     if kind == KeilCommandKind.STEP:
         return ('UVSC_DBG_EXEC_CMD(handle, "<single-step debug command>")', "read_pc_location()")
     if kind == KeilCommandKind.SYNC_BREAKPOINTS:
-        if not breakpoints:
-            return ("diff_local_breakpoints(count=0)", "no Keil breakpoint command will be emitted")
-        commands = [f"diff_local_breakpoints(count={len(breakpoints)})"]
-        for item in breakpoints[:8]:
-            state = "enable" if item.enabled else "disable"
-            condition = f", condition={item.condition!r}" if item.condition else ""
-            commands.append(f"UVSC_DBG_EXEC_CMD(handle, \"breakpoint {state} {item.path}:{item.line}{condition}\")")
-        if len(breakpoints) > 8:
-            commands.append(f"... {len(breakpoints) - 8} more breakpoint intents")
+        counts = _breakpoint_operation_counts(breakpoint_ops)
+        summary = breakpoint_diff_summary or build_keil_breakpoint_diff_summary(breakpoints, (), breakpoint_ops)
+        if not summary.snapshot_complete:
+            return ("breakpoint_diff(waiting_remote_snapshot=true)", "waiting for remote breakpoint snapshot")
+        count_text = ", ".join(
+            f"{key}={counts[key]}"
+            for key in ("add", "remove", "enable", "disable", "update_condition", "noop")
+        )
+        commands = [f"diff_breakpoints({count_text})"]
+        for op in breakpoint_ops[:8]:
+            if op.action == KeilBreakpointSyncAction.NOOP:
+                continue
+            commands.append(_breakpoint_operation_command(op))
+        if len(breakpoint_ops) > 8:
+            commands.append(f"... {len(breakpoint_ops) - 8} more breakpoint diff operations")
         return tuple(commands)
     if kind == KeilCommandKind.WRITE_VARIABLES:
         if not variable_writes:
@@ -481,21 +776,120 @@ def _command_preview(
     return (f"{kind.value}()",)
 
 
-def _breakpoint_guards(breakpoints: tuple[KeilBreakpointIntent, ...]) -> tuple[KeilCommandGuard, ...]:
-    if not breakpoints:
+def _breakpoint_guards(
+    breakpoints: tuple[KeilBreakpointIntent, ...],
+    breakpoint_ops: tuple[KeilBreakpointSyncOperation, ...],
+    breakpoint_diff_summary: KeilBreakpointDiffSummary | None,
+) -> tuple[KeilCommandGuard, ...]:
+    if breakpoint_diff_summary is None:
+        if not breakpoints and not breakpoint_ops:
+            return (
+                _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.WAIT, "当前没有本地断点可同步"),
+            )
+        invalid = [op for op in breakpoint_ops if not op.valid]
+        active_ops = [op for op in breakpoint_ops if op.action != KeilBreakpointSyncAction.NOOP]
         return (
-            _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.WAIT, "当前没有本地断点可同步"),
+            _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.PASS, f"{len(breakpoints)} 个本地断点待 dry-run"),
+            _guard(
+                "breakpoint_diff",
+                "断点差异",
+                KeilCommandGuardState.WAIT if not active_ops else KeilCommandGuardState.PASS,
+                "本地和远端断点无差异" if not active_ops else f"{len(active_ops)} 个差异操作待 dry-run",
+            ),
+            _guard(
+                "breakpoint_locations",
+                "断点位置",
+                KeilCommandGuardState.BLOCKED if invalid else KeilCommandGuardState.PASS,
+                f"{len(invalid)} 个断点位置无效或不在工程源码中" if invalid else "路径/行号具备基础格式",
+            ),
         )
-    invalid = [item for item in breakpoints if item.line <= 0 or not str(item.path)]
+    invalid = breakpoint_diff_summary.invalid_count
+    active_ops = breakpoint_diff_summary.operation_count
+    if not breakpoint_diff_summary.snapshot_complete:
+        return (
+            _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.WAIT, "等待远端断点快照"),
+            _guard("breakpoint_diff", "断点差异", KeilCommandGuardState.WAIT, "等待远端断点快照"),
+            _guard("breakpoint_locations", "断点位置", KeilCommandGuardState.WAIT, "等待远端断点快照"),
+        )
     return (
         _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.PASS, f"{len(breakpoints)} 个本地断点待 dry-run"),
+        _guard(
+            "breakpoint_diff",
+            "断点差异",
+            KeilCommandGuardState.PASS,
+            "本地和远端断点无差异"
+            if active_ops == 0
+            else (
+                f"新增{breakpoint_diff_summary.add_count} 删除{breakpoint_diff_summary.remove_count} 启用{breakpoint_diff_summary.enable_count} "
+                f"禁用{breakpoint_diff_summary.disable_count} 条件{breakpoint_diff_summary.update_condition_count} 无变化{breakpoint_diff_summary.noop_count}"
+            ),
+        ),
         _guard(
             "breakpoint_locations",
             "断点位置",
             KeilCommandGuardState.BLOCKED if invalid else KeilCommandGuardState.PASS,
-            f"{len(invalid)} 个断点行号或路径无效" if invalid else "路径/行号具备基础格式",
+            f"{invalid} 个断点位置无效或不在工程源码中" if invalid else "路径/行号具备基础格式",
         ),
     )
+
+
+def _breakpoint_operation_counts(operations: tuple[KeilBreakpointSyncOperation, ...]) -> dict[str, int]:
+    counts = {action.value: 0 for action in KeilBreakpointSyncAction}
+    for operation in operations:
+        counts[operation.action.value] = counts.get(operation.action.value, 0) + 1
+    return counts
+
+
+def _breakpoint_summary_digest(
+    local_breakpoints: tuple[KeilBreakpointIntent, ...],
+    remote_breakpoints: tuple[KeilBreakpointIntent, ...],
+    operations: tuple[KeilBreakpointSyncOperation, ...],
+    *,
+    snapshot_complete: bool,
+    snapshot_error: str,
+) -> str:
+    payload = {
+        "local": [(str(item.path), item.line, item.enabled, item.condition) for item in local_breakpoints],
+        "remote": [(str(item.path), item.line, item.enabled, item.condition) for item in remote_breakpoints],
+        "ops": [(op.action.value, str(op.path), op.line, op.valid, op.reason) for op in operations],
+        "complete": snapshot_complete,
+        "error": snapshot_error,
+    }
+    return _stable_id(payload)
+
+
+def _breakpoint_snapshot_digest(
+    local_breakpoints: tuple[KeilBreakpointIntent, ...],
+    remote_breakpoints: tuple[KeilBreakpointIntent, ...],
+    operations: tuple[KeilBreakpointSyncOperation, ...],
+    *,
+    snapshot_complete: bool,
+    snapshot_error: str,
+) -> str:
+    return _breakpoint_summary_digest(
+        local_breakpoints,
+        remote_breakpoints,
+        operations,
+        snapshot_complete=snapshot_complete,
+        snapshot_error=snapshot_error,
+    )
+
+
+def _breakpoint_operation_command(operation: KeilBreakpointSyncOperation) -> str:
+    line = f"{operation.path}:{operation.line}"
+    if operation.action == KeilBreakpointSyncAction.ADD:
+        suffix = f", condition={operation.local_condition!r}" if operation.local_condition else ""
+        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint add {line}{suffix}")'
+    if operation.action == KeilBreakpointSyncAction.REMOVE:
+        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint remove {line}")'
+    if operation.action == KeilBreakpointSyncAction.ENABLE:
+        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint enable {line}")'
+    if operation.action == KeilBreakpointSyncAction.DISABLE:
+        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint disable {line}")'
+    if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
+        suffix = f" condition={operation.local_condition!r}" if operation.local_condition else ""
+        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint update {line}{suffix}")'
+    return f'# noop {line}'
 
 
 def _write_guards(variable_writes: tuple[KeilVariableWriteIntent, ...]) -> tuple[KeilCommandGuard, ...]:
@@ -605,6 +999,54 @@ def _project_path(value: str | Path | None) -> Path | None:
     if value is None or str(value) == "":
         return None
     return Path(value).expanduser().resolve()
+
+
+def _breakpoint_key(item: KeilBreakpointIntent | object) -> tuple[str, int]:
+    intent = item if isinstance(item, KeilBreakpointIntent) else _breakpoint_intent(item)
+    return _normalise_path(intent.path), int(intent.line)
+
+
+def _remote_breakpoint(item: object) -> KeilRemoteBreakpoint:
+    if isinstance(item, KeilRemoteBreakpoint):
+        return item
+    path = getattr(item, "path", None)
+    if path is None:
+        raw_location = str(getattr(item, "raw_location", "") or "")
+        path_value = Path(raw_location or f"remote-{getattr(item, 'remote_id', '') or 'unknown'}")
+        if raw_location == "":
+            path_value = Path(f"remote-{getattr(item, 'remote_id', '') or 'unknown'}")
+    else:
+        path_value = Path(path)
+    return KeilRemoteBreakpoint(
+        path=path_value,
+        line=int(getattr(item, "line", 0) or 0),
+        enabled=getattr(item, "enabled", None),
+        condition=None if getattr(item, "condition", None) is None else str(getattr(item, "condition", "") or ""),
+        remote_id=str(getattr(item, "remote_id", "") or ""),
+        raw_location=str(getattr(item, "raw_location", "") or ""),
+        verified=bool(getattr(item, "verified", True)),
+        message=str(getattr(item, "message", "") or ""),
+    )
+
+
+def _breakpoint_validity(
+    item: KeilBreakpointIntent,
+    source_keys: set[str],
+) -> tuple[bool, str]:
+    if item.line <= 0:
+        return False, "断点行号必须大于 0"
+    normalized = _normalise_path(item.path)
+    if source_keys and normalized not in source_keys:
+        return False, f"断点文件不在工程源码中: {item.path}"
+    return True, ""
+
+
+def _normalise_path(path: str | Path) -> str:
+    return str(Path(path).expanduser().resolve()).lower()
+
+
+def _duplicate_count(keys: list[tuple[str, int]]) -> int:
+    return max(0, len(keys) - len(set(keys)))
 
 
 def _stable_id(payload: dict[str, Any]) -> str:

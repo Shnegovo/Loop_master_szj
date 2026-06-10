@@ -17,13 +17,16 @@ from src.core.keil.project import (
     project_summary_lines,
 )
 from src.core.keil.commands import (
+    KeilBreakpointDiffSummary,
     KeilBreakpointIntent,
+    KeilBreakpointRemoteSnapshot,
     KeilCommandGuard,
     KeilCommandGuardState,
     KeilCommandHistory,
     KeilCommandHistoryEntry,
     KeilCommandKind,
     KeilCommandTransaction,
+    KeilRemoteBreakpoint,
     KeilVariableWriteIntent,
     append_keil_audit_log,
     build_keil_debug_transactions,
@@ -49,8 +52,10 @@ from src.core.keil.uvsock import (
 
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
+    "KeilBreakpointDiffSummary",
     "KeilDiscovery",
     "KeilBreakpointIntent",
+    "KeilBreakpointRemoteSnapshot",
     "KeilCommandGuard",
     "KeilCommandGuardState",
     "KeilCommandHistory",
@@ -63,6 +68,7 @@ __all__ = [
     "KeilProject",
     "KeilProjectFile",
     "KeilTarget",
+    "KeilRemoteBreakpoint",
     "UvscConnectionResult",
     "UvscLaunchPlan",
     "UvscLaunchResult",

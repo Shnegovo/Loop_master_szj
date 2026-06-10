@@ -421,6 +421,7 @@ class MainWindow(QMainWindow):
         self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
         self._debug_uvsock_port = 4827
         self._debug_command_history = KeilCommandHistory(max_entries=64)
+        self._debug_remote_breakpoint_snapshot = None
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -2036,6 +2037,8 @@ class MainWindow(QMainWindow):
             project_path=status.project_path,
             target_name=status.target_name,
             breakpoints=tab.local_breakpoints(),
+            source_paths=tab.local_source_paths(),
+            remote_breakpoint_snapshot=getattr(self, "_debug_remote_breakpoint_snapshot", None),
             execution_gate=False,
         )
         tab.set_command_transactions(transactions)
@@ -2043,6 +2046,10 @@ class MainWindow(QMainWindow):
         if focused is not None:
             self._debug_command_history.record(focused, event="previewed", source="ui_sync")
         tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
+
+    def set_debug_remote_breakpoint_snapshot(self, snapshot):
+        self._debug_remote_breakpoint_snapshot = snapshot
+        self._sync_debug_command_preview()
 
     def _focused_debug_transaction(self, transactions):
         priority = (
