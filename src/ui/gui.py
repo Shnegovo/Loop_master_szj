@@ -39,6 +39,7 @@ from src.core.debug_workbench import (
     make_debug_status,
 )
 from src.core.debug_backend_registry import create_default_debug_backend_registry
+from src.core.debug_session_controller import DebugSessionController
 from src.core.debug_sources import (
     SourceManifest,
     SourcePathRemapPreview,
@@ -486,6 +487,10 @@ class MainWindow(QMainWindow):
         )
         self._debug_backend_kind = self._debug_backend_registry.default_kind()
         self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
+        self._debug_session_controller = DebugSessionController(
+            self._debug_backend_registry,
+            backend=self._debug_backend_kind,
+        )
 
         self._plot_panes: list[ScopePane] = []
         self._workspace_pages: list[WorkspacePage] = []
@@ -2030,7 +2035,7 @@ class MainWindow(QMainWindow):
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
-        self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
         self._sync_debug_source_manifest_preview()
         self._sync_debug_command_preview()
 
@@ -2064,6 +2069,7 @@ class MainWindow(QMainWindow):
             return
         self._debug_backend_kind = kind
         self._debug_backend = backend
+        self._debug_session_controller.set_backend(kind)
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         tab = self._tab_debug_workbench
@@ -2078,7 +2084,7 @@ class MainWindow(QMainWindow):
         try:
             tab.set_debug_status(status, controls_ready=True)
             self._sync_debug_source_manifest_preview()
-            tab.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+            tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
         finally:
             self._debug_command_preview_suspended = False
         self._debug_command_history.clear()
@@ -2713,6 +2719,7 @@ class MainWindow(QMainWindow):
             diagnostics = snapshot.diagnostic_rows()
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
+            self._debug_session_controller.apply_backend_snapshot(snapshot)
         except Exception as exc:
             message = f"{self._debug_backend_display_name()} 预检失败：{exc}"
             status = make_debug_status(
@@ -2724,10 +2731,15 @@ class MainWindow(QMainWindow):
                 error=message,
             )
             diagnostics = self._debug_workbench_error_diagnostics(message)
+            self._debug_session_controller.mark_error(
+                message,
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+            )
         finally:
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
-        tab.set_backend_diagnostics(diagnostics)
+        tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
@@ -2758,6 +2770,7 @@ class MainWindow(QMainWindow):
             diagnostics = snapshot.diagnostic_rows()
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
+            self._debug_session_controller.apply_backend_snapshot(snapshot)
         except Exception as exc:
             message = f"{self._debug_backend_display_name()} 只读连接失败：{exc}"
             status = make_debug_status(
@@ -2769,10 +2782,15 @@ class MainWindow(QMainWindow):
                 error=message,
             )
             diagnostics = self._debug_workbench_error_diagnostics(message)
+            self._debug_session_controller.mark_error(
+                message,
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+            )
         finally:
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
-        tab.set_backend_diagnostics(diagnostics)
+        tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
@@ -2865,6 +2883,27 @@ class MainWindow(QMainWindow):
             ("UVSOCK 端口", str(self._debug_uvsock_port)),
             ("错误", message),
         )
+
+    def _with_debug_session_contract_diagnostics(
+        self,
+        diagnostics: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+    ) -> tuple[tuple[str, str], ...]:
+        controller = getattr(self, "_debug_session_controller", None)
+        if controller is None:
+            return tuple(diagnostics)
+        snapshot = controller.snapshot
+        commands = controller.commands
+        enabled = [command.key for command in commands if command.enabled_by_state]
+        executable = [command.key for command in commands if command.execution_enabled]
+        policy = controller.safety_policy
+        rows = tuple(diagnostics) + (
+            ("会话合同", f"{snapshot.display_name} / {snapshot.state.value}"),
+            ("目标状态", snapshot.target_state.value),
+            ("安全策略", "dry-run" if policy.dry_run else policy.label),
+            ("合同命令", ", ".join(enabled) if enabled else "--"),
+            ("可执行命令", ", ".join(executable) if executable else "无"),
+        )
+        return rows
 
     def _debug_backend_display_name(self) -> str:
         try:

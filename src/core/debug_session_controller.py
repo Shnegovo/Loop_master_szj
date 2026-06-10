@@ -164,6 +164,42 @@ class DebugSessionController:
         self._state = self._from_backend_snapshot(spec, backend_snapshot)
         return self._state
 
+    def apply_backend_snapshot(
+        self,
+        backend_snapshot: DebugBackendSessionSnapshot,
+    ) -> DebugSessionControllerState:
+        spec = self._spec(
+            project_path=backend_snapshot.project_path,
+            target_name=backend_snapshot.target_name,
+        )
+        self._state = self._from_backend_snapshot(spec, backend_snapshot)
+        return self._state
+
+    def mark_error(
+        self,
+        detail: str,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> DebugSessionControllerState:
+        spec = self._spec(
+            project_path=project_path,
+            target_name=target_name,
+        )
+        snapshot = make_debug_session_snapshot(
+            backend=spec.backend,
+            display_name=spec.display_name,
+            state=DebugSessionState.ERROR,
+            project_path=spec.project_path,
+            target_name=spec.target_name,
+            detail=str(detail),
+            safety_policy=self._safety_policy,
+            diagnostics=(("后端", spec.display_name), ("错误", str(detail))),
+            metadata=spec.metadata,
+        )
+        self._state = self._build_state(spec, snapshot)
+        return self._state
+
     def record_event(self, kind: str, detail: str) -> dict[str, object]:
         return event_from_session(self.snapshot, kind=kind, detail=detail).to_record()
 

@@ -3139,3 +3139,54 @@ Add a small controller layer that owns backend selection, session contract snaps
   - mirror backend selection into the controller
   - surface contract diagnostics/command matrix without changing live behavior
   - keep existing UI probes passing
+
+## Milestone 35 Update - Session Contract UI Mirror
+
+### Goal
+
+Expose the new dry-run session controller in the Debug Workbench diagnostics without changing existing backend behavior.
+
+### Completed
+
+- `MainWindow` now creates a `DebugSessionController` beside the existing backend registry.
+- Backend selection is mirrored into the controller.
+- Backend discovery and read-only snapshot results are applied to the controller via the neutral session contract.
+- Discovery/read-only errors are mirrored as controller error snapshots.
+- Backend diagnostics now append neutral contract rows:
+  - `会话合同`
+  - `目标状态`
+  - `安全策略`
+  - `合同命令`
+  - `可执行命令`
+- Added controller APIs for:
+  - applying an existing backend snapshot
+  - marking a controller error without touching hardware
+- Extended `tools\debug_session_controller_probe.py` for those APIs.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py src\core\debug_session_controller.py tools\debug_session_controller_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir %TEMP%\loopmaster-ui-session-controller-rerun --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- This still does not perform live Halt/Run/Step/write-variable operations.
+- The next stage should stop expanding dry-run scaffolding and introduce a real debugger path with a strictly read-only first smoke.
+
+### Next Target
+
+- Add a real read-only debugger smoke path:
+  - first try Keil UVSOCK/Debug Commands against an already-open Keil debug session
+  - read session/target status only
+  - do not Halt/Run/Step/sync breakpoints/write variables
+  - if Keil is not reachable, add an OpenOCD/GDB or pyOCD read-only discovery path next

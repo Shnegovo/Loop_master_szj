@@ -245,6 +245,21 @@ def main() -> int:
     _assert(event["backend"] == "offline", "controller event backend mismatch")
     json.dumps(event, ensure_ascii=False, sort_keys=True)
 
+    external = _fake_snapshot(
+        state=DebugRuntimeState.PAUSED,
+        project_path="D:/demo/external.uvprojx",
+        target_name="ExternalTarget",
+        attempted=True,
+        connected=True,
+    )
+    state = fake.apply_backend_snapshot(external)
+    _assert(state.snapshot.backend_snapshot_id == external.snapshot_id, "external snapshot id should flow through apply")
+    _assert(state.spec.target_name == "ExternalTarget", "external snapshot target should update spec")
+    error_state = fake.mark_error("synthetic controller error", project_path="D:/demo/error.uvprojx", target_name="ErrTarget")
+    _assert(error_state.snapshot.state == DebugSessionState.ERROR, "mark_error should set error state")
+    _assert("synthetic controller error" in error_state.snapshot.detail, "mark_error should keep detail")
+    state = fake.apply_backend_snapshot(external)
+
     run_policy = DebugSessionSafetyPolicy(
         dry_run=False,
         read_only=False,
