@@ -39,6 +39,11 @@ from src.core.debug_workbench import (
     make_debug_status,
 )
 from src.core.debug_backend_registry import create_default_debug_backend_registry
+from src.core.debug_sources import (
+    SourceManifest,
+    source_manifest_from_compile_commands,
+    source_manifest_from_roots,
+)
 from src.core.debug_transactions import (
     DebugCommandHistory,
     build_unavailable_debug_transactions,
@@ -428,6 +433,8 @@ class MainWindow(QMainWindow):
         self._debug_command_history = DebugCommandHistory(max_entries=64)
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
+        self._debug_source_preview_manifest: SourceManifest | None = None
+        self._debug_command_preview_suspended = False
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -1991,6 +1998,7 @@ class MainWindow(QMainWindow):
         self._refresh_debug_backend_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        self._sync_debug_source_manifest_preview()
         self._sync_debug_command_preview()
 
     def _on_debug_workbench_action(self, action_key: str):
@@ -2023,7 +2031,6 @@ class MainWindow(QMainWindow):
             return
         self._debug_backend_kind = kind
         self._debug_backend = backend
-        self._debug_command_history.clear()
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         tab = self._tab_debug_workbench
@@ -2034,12 +2041,109 @@ class MainWindow(QMainWindow):
             project_path=tab.debug_status.project_path,
             target_name=tab.debug_status.target_name,
         )
-        tab.set_debug_status(status, controls_ready=True)
-        tab.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        self._debug_command_preview_suspended = True
+        try:
+            tab.set_debug_status(status, controls_ready=True)
+            self._sync_debug_source_manifest_preview()
+            tab.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        finally:
+            self._debug_command_preview_suspended = False
+        self._debug_command_history.clear()
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(f"已切换调试后端：{descriptor.display_name}")
         self._refresh_hero()
+
+    def _sync_debug_source_manifest_preview(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        if self._debug_backend_kind == DebugBackendKind.KEIL:
+            tab.restore_project_source_manifest()
+            self._debug_source_preview_manifest = tab.source_manifest
+            return
+        manifest = self._build_debug_source_preview_manifest()
+        self._debug_source_preview_manifest = manifest
+        tab.set_source_manifest(manifest, mode=self._debug_backend_kind.value)
+
+    def _build_debug_source_preview_manifest(self) -> SourceManifest:
+        provider_name = self._debug_backend_display_name()
+        diagnostics: list[tuple[str, str]] = []
+        existing = getattr(self._tab_debug_workbench, "source_manifest", None)
+        if existing is not None and existing.source_count:
+            entries = existing.entries
+            return SourceManifest(
+                name=f"{provider_name} 复用源码预览",
+                root=existing.root,
+                provider=f"{self._debug_backend_kind.value}_preview",
+                entries=entries,
+                project_path=existing.project_path,
+                diagnostics=(
+                    ("来源", existing.provider),
+                    ("说明", "复用当前工作台源码树，仅用于非 Keil 后端占位预览"),
+                    ("安全边界", "不启动进程、不连接探针、不写目标"),
+                ) + tuple(diagnostics),
+                metadata={"backend": self._debug_backend_kind.value, "preview": "reuse"},
+            )
+        compile_commands = self._find_compile_commands_file()
+        if compile_commands is not None:
+            try:
+                manifest = source_manifest_from_compile_commands(
+                    compile_commands,
+                    name=f"{provider_name} 编译数据库预览",
+                )
+                return manifest
+            except Exception as exc:
+                diagnostics.append(("compile_commands", f"不可用：{exc}"))
+        roots = self._debug_source_roots()
+        if roots:
+            manifest = source_manifest_from_roots(
+                roots,
+                name=f"{provider_name} 源码根预览",
+                provider=f"{self._debug_backend_kind.value}_roots_preview",
+                max_files=1200,
+            )
+            if manifest.source_count:
+                return manifest
+        return SourceManifest(
+            name=f"{provider_name} 源码预览",
+            root=self._elf_path.parent if self._elf_path else None,
+            provider=f"{self._debug_backend_kind.value}_preview",
+            entries=(),
+            diagnostics=(
+                ("后端", provider_name),
+                ("源码来源", "未找到 ELF/DWARF、compile_commands 或源码根"),
+                ("安全边界", "不会启动进程、连接探针或写目标"),
+            ) + tuple(diagnostics),
+            metadata={"backend": self._debug_backend_kind.value, "preview": "empty"},
+        )
+
+    def _debug_source_roots(self) -> tuple[Path, ...]:
+        roots: list[Path] = []
+        if self._elf_path is not None:
+            for candidate in (
+                self._elf_path.parent,
+                self._elf_path.parent.parent,
+                self._elf_path.parent.parent.parent,
+            ):
+                if candidate.exists() and candidate not in roots:
+                    roots.append(candidate)
+        return tuple(roots)
+
+    def _find_compile_commands_file(self) -> Path | None:
+        for root in self._debug_source_roots():
+            for candidate in (
+                root / "compile_commands.json",
+                root / "build" / "compile_commands.json",
+                root / "cmake-build-debug" / "compile_commands.json",
+            ):
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    continue
+                if resolved.exists():
+                    return resolved
+        return None
 
     def _discover_debug_backend_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -2131,6 +2235,8 @@ class MainWindow(QMainWindow):
 
     def _sync_debug_command_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
+            return
+        if getattr(self, "_debug_command_preview_suspended", False):
             return
         tab = self._tab_debug_workbench
         status = tab.debug_status

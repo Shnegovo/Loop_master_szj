@@ -399,6 +399,15 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"backend selector did not switch main window: {getattr(window, '_debug_backend_kind', None)!r}")
                 if "OpenOCD / GDB" not in tab.status_text.text():
                     issues.append(f"OpenOCD placeholder status mismatch: {tab.status_text.text()!r}")
+                source_manifest = getattr(tab, "source_manifest", None)
+                if source_manifest is None or not source_manifest.provider.endswith("_preview"):
+                    issues.append(f"OpenOCD source manifest preview missing: {source_manifest!r}")
+                elif source_manifest.source_count < 4:
+                    issues.append(f"OpenOCD source preview should reuse Keil sources: {source_manifest.source_count}")
+                if tab.source_tree.topLevelItemCount() < 2:
+                    issues.append(f"OpenOCD source preview tree missing groups: {tab.source_tree.topLevelItemCount()}")
+                if "OpenOCD / GDB 复用源码预览" not in tab.summary_label.text():
+                    issues.append(f"OpenOCD summary did not show source preview: {tab.summary_label.text()!r}")
                 diag = {
                     tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
                     for row in range(tab.diagnostics_table.rowCount())
@@ -429,6 +438,11 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 if keil_index >= 0:
                     tab.backend_combo.setCurrentIndex(keil_index)
                     _pump(app, 0.15)
+                    restored_manifest = getattr(tab, "source_manifest", None)
+                    if restored_manifest is None or restored_manifest.provider != "keil":
+                        issues.append(f"Keil source manifest was not restored: {restored_manifest!r}")
+                    if "DebugDemo.uvprojx" not in tab.summary_label.text():
+                        issues.append(f"Keil summary was not restored: {tab.summary_label.text()!r}")
         source_dir = project_path.parent.parent / "Core" / "Src"
         remote_snapshot = _remote_snapshot(project_path, source_dir)
         tab._debug_remote_breakpoint_snapshot = remote_snapshot

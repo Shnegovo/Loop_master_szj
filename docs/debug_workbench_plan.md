@@ -85,6 +85,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已加入 `compile_commands.json` provider，可从 CMake/VSCode/CubeIDE 风格工程生成 `SourceManifest`，不调用编译器或外部工具。
 - `SourceManifest` 已加入来源/诊断字段：provider 原始路径、解析方式、compile directory、诊断计数和 metadata，为后续 DWARF/GDB 路径映射做准备。
 - 已加入 ELF/DWARF source provider，可解析已捕获的 `readelf -wl` 行号表，或通过现有 readelf 路径从 AXF/ELF 生成同一套 `SourceManifest`。
+- 已把非 Keil `SourceManifest` 接入 Debug Workbench 源码树预览：OpenOCD/GDB、pyOCD、离线回放占位后端能复用当前源码树或安全 fallback，不再只有空后端下拉框。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -96,7 +97,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
 
 2. 架构底座
-   - 把非 Keil source manifest 接入后端占位快照或安全选择器的 UI 预览，并增加 DWARF/GDB 缺失源码路径映射诊断。
+   - 增加 source provider 选择器/路径诊断面板，支持显式 ELF/DWARF、`compile_commands.json`、GDB text 和手动根目录预览，并提示 DWARF/GDB 缺失源码映射。
    - 继续把 Keil transaction UI typing 迁移到通用 `DebugCommandTransaction`，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。
    - 抽出 `Decoder`：Raw、CSV、FireWater、JustFloat、HEX、后续自定义协议注册。

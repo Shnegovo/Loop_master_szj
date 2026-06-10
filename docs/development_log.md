@@ -2433,3 +2433,51 @@ Add an ELF/DWARF-adjacent source provider so Keil AXF/ELF, OpenOCD/GDB, pyOCD an
 ### Next Target
 
 - Expose non-Keil `SourceManifest` previews through backend placeholder snapshots or a safe workbench selector, then add path-mapping diagnostics for missing DWARF/GDB sources.
+
+## Milestone 30 Update - Non-Keil Source Preview UI
+
+### Goal
+
+Let the Debug Workbench consume non-Keil source manifests in the UI so OpenOCD/GDB, pyOCD and offline replay paths can show a real source tree before their live executors are implemented.
+
+### Completed
+
+- `DebugWorkbenchTab` now has a backend-neutral `set_source_manifest()` path.
+- Keil target switching still regenerates the Keil project manifest, while external manifests are no longer overwritten by Keil-only rebuild logic.
+- MainWindow now synchronizes a safe source preview when the user switches debug backends:
+  - Keil restores the project manifest.
+  - Non-Keil placeholders reuse the current source tree when available.
+  - If no current tree exists, the preview can fall back to nearby `compile_commands.json` or lightweight source roots.
+  - Empty previews still show diagnostics instead of leaving the tree in a stale state.
+- Command-history synchronization is paused while backend/source/diagnostics are being switched so dry-run history does not capture intermediate UI state.
+- Extended `tools\ui_debug_workbench_probe.py` to assert:
+  - OpenOCD/GDB backend selection keeps a populated source preview.
+  - the summary reflects the non-Keil preview.
+  - switching back to Keil restores the Keil source manifest.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS with an existing `src/ui/gui.py` CRLF normalization warning only.
+
+### Notes
+
+- Backend switching still does not launch OpenOCD, pyOCD, GDB, Keil or readelf, and does not connect probes.
+- The ELF/DWARF live wrapper remains available as a provider, but the UI preview does not run it automatically on backend switch to avoid freezes and hidden process launches.
+- This is a UI consumption layer, not a path-mapping dialog yet.
+
+### Next Target
+
+- Add a small source-provider selector/path diagnostics surface for explicit ELF/DWARF, `compile_commands.json`, GDB text and manual-root previews, then use it to show missing-source path mapping hints.

@@ -293,6 +293,7 @@ class DebugWorkbenchTab(QWidget):
         super().__init__(parent)
         self._project: KeilProject | None = None
         self._source_manifest: SourceManifest | None = None
+        self._source_manifest_mode = "empty"
         self._source_tree: SourceTreeNode | None = None
         self._breakpoints = BreakpointStore()
         self._current_document: CodeDocument | None = None
@@ -330,6 +331,10 @@ class DebugWorkbenchTab(QWidget):
         return self._source_manifest.source_count
 
     @property
+    def source_manifest(self) -> SourceManifest | None:
+        return self._source_manifest
+
+    @property
     def breakpoint_count(self) -> int:
         return len(self._breakpoints.all())
 
@@ -358,10 +363,12 @@ class DebugWorkbenchTab(QWidget):
         return tuple(paths)
 
     def hero_summary(self) -> tuple[str, str, str]:
-        if self._project is None:
+        if self._source_manifest is None:
+            return "未加载源码清单", "只读预览", "0 个断点"
+        if self._project is None and self._source_manifest_mode == "empty":
             return "未打开 Keil 工程", "只读预览", "0 个断点"
         return (
-            self._project.path.name,
+            self._source_manifest.name,
             f"{self.source_count} 个源码文件",
             f"{self.breakpoint_count} 个本地断点",
         )
@@ -372,6 +379,7 @@ class DebugWorkbenchTab(QWidget):
 
     def set_project(self, project: KeilProject) -> None:
         self._project = project
+        self._source_manifest_mode = "keil"
         self._source_manifest = source_manifest_from_keil_project(project)
         self._session.set_project(project)
         self._breakpoints.clear()
@@ -389,6 +397,38 @@ class DebugWorkbenchTab(QWidget):
         self._load_first_existing_source()
         self._apply_debug_status(self._session.status)
         self._refresh_summary()
+
+    def set_source_manifest(
+        self,
+        manifest: SourceManifest,
+        *,
+        mode: str = "external",
+        clear_breakpoints: bool = False,
+    ) -> None:
+        self._source_manifest_mode = str(mode or "external")
+        self._source_manifest = manifest
+        if clear_breakpoints:
+            self._breakpoints.clear()
+        self._current_document = None
+        self._active_search_line = None
+        self._search_index = -1
+        self._rebuild_source_tree()
+        self._load_first_existing_source()
+        self._refresh_summary()
+
+    def restore_project_source_manifest(self) -> bool:
+        self._source_manifest_mode = "keil"
+        if self._project is None:
+            self._source_manifest = None
+            self._current_document = None
+            self._rebuild_source_tree()
+            self._load_first_existing_source()
+            self._refresh_summary()
+            return False
+        self._rebuild_source_tree()
+        self._load_first_existing_source()
+        self._refresh_summary()
+        return True
 
     def set_runtime_markers(self, current_pc_line: int | None = None, run_line: int | None = None) -> None:
         self._current_pc_line = current_pc_line
@@ -787,17 +827,31 @@ class DebugWorkbenchTab(QWidget):
 
     def _rebuild_source_tree(self) -> None:
         self.source_tree.clear()
-        if self._project is None:
-            placeholder = QTreeWidgetItem(["未打开工程"])
+        if self._source_manifest_mode == "keil":
+            if self._project is None:
+                self._source_manifest = None
+                self._source_tree = None
+                placeholder = QTreeWidgetItem(["未打开工程"])
+                placeholder.setDisabled(True)
+                self.source_tree.addTopLevelItem(placeholder)
+                return
+            target_name = self.target_combo.currentData() or self.target_combo.currentText() or None
+            if target_name:
+                self._session.set_project(self._project, str(target_name))
+                self._apply_debug_status(self._session.status)
+            self._source_manifest = source_manifest_from_keil_project(self._project, str(target_name) if target_name else None)
+        if self._source_manifest is None:
+            self._source_tree = None
+            placeholder = QTreeWidgetItem(["未加载源码清单"])
             placeholder.setDisabled(True)
             self.source_tree.addTopLevelItem(placeholder)
             return
-        target_name = self.target_combo.currentData() or self.target_combo.currentText() or None
-        if self._project is not None and target_name:
-            self._session.set_project(self._project, str(target_name))
-            self._apply_debug_status(self._session.status)
-        self._source_manifest = source_manifest_from_keil_project(self._project, str(target_name) if target_name else None)
         self._source_tree = self._source_manifest.tree
+        if not self._source_tree.children:
+            placeholder = QTreeWidgetItem([f"{self._source_manifest.name} 无源码文件"])
+            placeholder.setDisabled(True)
+            self.source_tree.addTopLevelItem(placeholder)
+            return
         for group in self._source_tree.children:
             group_item = QTreeWidgetItem([group.name])
             group_item.setExpanded(True)
@@ -813,6 +867,9 @@ class DebugWorkbenchTab(QWidget):
         self.source_tree.expandToDepth(0)
 
     def _on_target_changed(self) -> None:
+        if self._source_manifest_mode != "keil":
+            self._refresh_summary()
+            return
         self._rebuild_source_tree()
         self._load_first_existing_source()
         self._refresh_summary()
