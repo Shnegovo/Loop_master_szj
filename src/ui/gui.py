@@ -44,6 +44,7 @@ from src.core.debug_sources import (
     source_manifest_from_compile_commands,
     source_manifest_from_roots,
 )
+from src.core.lifecycle import ShutdownSequence
 from src.core.debug_transactions import (
     DebugCommandHistory,
     build_unavailable_debug_transactions,
@@ -428,6 +429,7 @@ class MainWindow(QMainWindow):
         self._hero_roxy_frames: list[QPixmap] = []
         self._hero_roxy_index = 0
         self._shutdown_complete = False
+        self._shutdown_report = None
         self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
         self._debug_uvsock_port = 4827
         self._debug_command_history = DebugCommandHistory(max_entries=64)
@@ -4750,14 +4752,10 @@ class MainWindow(QMainWindow):
         if getattr(self, "_shutting_down", False):
             return
         self._shutting_down = True
-
-        def step(label: str, fn):
-            try:
-                fn()
-            except Exception:
-                logger.exception("关闭步骤失败：%s", label)
+        sequence = ShutdownSequence()
 
         def stop_timers():
+            stopped = []
             for name in (
                 "_plot_timer",
                 "_sample_timer",
@@ -4771,36 +4769,55 @@ class MainWindow(QMainWindow):
                 timer = getattr(self, name, None)
                 if timer is not None:
                     timer.stop()
+                    stopped.append(name)
+            return True, f"{len(stopped)} timers"
 
         def request_backend_shutdown():
             request = getattr(self._backend, "request_shutdown", None)
             if callable(request):
                 request()
+                return True, "requested"
+            return True, "no request hook"
 
         def stop_sampling():
             self._unlimited_mode = False
             stopped = self._collector.stop(timeout=0.8)
             if not stopped:
                 logger.warning("Sampling thread did not stop before shutdown timeout")
+                return False, "sampling thread timeout"
+            return True, "sampling stopped"
 
         def stop_serial():
-            if not self._serial_controller.shutdown(timeout=0.6):
+            stopped = self._serial_controller.shutdown(timeout=0.6)
+            if not stopped:
                 logger.warning("Serial worker did not stop before shutdown timeout")
             if hasattr(self, "_tab_serial"):
                 self._tab_serial.set_connected(False)
+            return stopped, "serial stopped" if stopped else "serial worker timeout"
 
         def disconnect_backend():
             try:
                 self._backend.disconnect(timeout=0.45)
             except TypeError:
                 self._backend.disconnect()
+            return True, "backend disconnect requested"
 
-        step("stop timers", stop_timers)
-        step("request backend shutdown", request_backend_shutdown)
-        step("stop sampling", stop_sampling)
-        step("stop serial", stop_serial)
-        step("save config", self._save_config)
-        step("disconnect backend", disconnect_backend)
+        sequence.run("stop timers", stop_timers)
+        sequence.run("request backend shutdown", request_backend_shutdown)
+        sequence.run("stop sampling", stop_sampling)
+        sequence.run("stop serial", stop_serial)
+        sequence.run("save config", self._save_config)
+        sequence.run("disconnect backend", disconnect_backend)
+        self._shutdown_report = sequence.report()
+        for result in self._shutdown_report.steps:
+            if not result.ok:
+                logger.warning(
+                    "关闭步骤未完全完成：%s detail=%s error=%s elapsed=%.1fms",
+                    result.label,
+                    result.detail,
+                    result.error,
+                    result.elapsed_ms,
+                )
         self._shutdown_complete = True
 
     def closeEvent(self, event):

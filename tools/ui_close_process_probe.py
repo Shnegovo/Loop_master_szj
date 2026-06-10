@@ -562,7 +562,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--log-tail-lines", type=int, default=60, help="Child stdout/stderr tail lines to show on failure")
     parser.add_argument(
         "--scenario",
-        choices=("idle", "sampling", "slow-sampling", "serial-worker"),
+        choices=("idle", "sampling", "slow-sampling", "serial-worker", "stuck-serial-worker"),
         default="idle",
         help="Use a synthetic MainWindow scenario before closing the process.",
     )

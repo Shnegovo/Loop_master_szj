@@ -2539,3 +2539,65 @@ Make source provenance visible and controllable in the Debug Workbench without c
 ### Next Target
 
 - Move to lifecycle/exit hardening: centralize worker shutdown registration and add close probes for sampling, serial and debug-worker stuck scenarios.
+
+## Milestone 30 Update - Lifecycle Shutdown Report
+
+### Goal
+
+Make shutdown behavior auditable and keep process-exit probes covering real active-worker scenarios, so close-window regressions are caught before adding more debug backends.
+
+### Completed
+
+- Added `src\core\lifecycle.py`:
+  - `ShutdownSequence`
+  - `ShutdownStepResult`
+  - `ShutdownReport`
+- `MainWindow._shutdown()` now runs the existing shutdown steps through `ShutdownSequence` and stores `self._shutdown_report`.
+- Shutdown steps now record per-step timing, detail, soft failures and exceptions while still continuing later cleanup.
+- Existing shutdown order is preserved:
+  - stop timers
+  - request backend shutdown
+  - stop sampling
+  - stop serial
+  - save config
+  - disconnect backend
+- Added `tools\lifecycle_shutdown_probe.py` for fast no-Qt lifecycle sequencing checks.
+- Extended close-process scenarios with `stuck-serial-worker`, a worker that intentionally ignores the shutdown flag.
+- Updated `tools\ui_close_process_probe.py` to accept the new stuck-worker scenario.
+
+### Verified
+
+- `python -m py_compile src\core\lifecycle.py src\ui\gui.py tools\lifecycle_shutdown_probe.py tools\ui_close_process_probe.py tools\ui_close_scenario_entry.py`
+  - PASS.
+- `python tools\lifecycle_shutdown_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\serial_controller_probe.py`
+  - PASS.
+- `python tools\ui_close_process_probe.py --entry main.py --exit-timeout 10`
+  - PASS, close-to-exit about `1573.3ms`.
+- `python tools\ui_close_process_probe.py --scenario sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `817.0ms`.
+- `python tools\ui_close_process_probe.py --scenario slow-sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `726.2ms`.
+- `python tools\ui_close_process_probe.py --scenario serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `779.4ms`.
+- `python tools\ui_close_process_probe.py --scenario stuck-serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `1716.6ms`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS with an existing `src/ui/gui.py` CRLF normalization warning only.
+
+### Notes
+
+- The stuck-worker scenario verifies that a daemon worker ignoring shutdown does not keep the process alive.
+- `self._shutdown_report` is now available for future probes or diagnostic UI if a close step becomes slow or incomplete.
+- This does not add new live debug actions and does not touch ST-Link, Keil, OpenOCD, pyOCD or GDB.
+
+### Next Target
+
+- Continue lifecycle hardening by registering future debug/backend workers through the same shutdown-report vocabulary, then return to explicit source file/path mapping actions.

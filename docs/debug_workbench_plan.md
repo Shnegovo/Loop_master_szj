@@ -92,10 +92,10 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 ## 下一轮优先级
 
 1. 退出残留硬化
-   - 关闭期先禁止新的 pyOCD/Keil/串口读写进入。
-   - 采样线程、串口 worker、调试 worker 统一登记生命周期。
-   - 后端断开需要真实超时，不能只给锁等待设置 timeout。
-   - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
+   - 已加入 shutdown report，关闭步骤会记录 stop timers、backend shutdown request、sampling、serial、config save、backend disconnect 的耗时和失败原因。
+   - 已补充 sampling、slow-sampling、serial-worker、stuck-serial-worker 进程级关闭探针。
+   - 下一步把未来 Keil/OpenOCD/pyOCD debug worker 也登记到同一套 lifecycle/report 里。
+   - 继续保持关闭期禁止新的 pyOCD/Keil/串口读写进入。
 
 2. 架构底座
    - 在源码来源选择器后续接入显式文件/目录选择、GDB text 导入和 DWARF/GDB 缺失源码映射提示。

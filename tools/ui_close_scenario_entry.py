@@ -85,10 +85,12 @@ def _seed_scope(window: MainWindow) -> None:
     window._show_workspace_page("scope")
 
 
-def _start_serial_worker(window: MainWindow, seconds: float) -> None:
+def _start_serial_worker(window: MainWindow, seconds: float, *, ignore_shutdown: bool = False) -> None:
     def worker():
         deadline = time.perf_counter() + max(0.0, float(seconds))
-        while time.perf_counter() < deadline and not getattr(window, "_shutting_down", False):
+        while time.perf_counter() < deadline:
+            if not ignore_shutdown and getattr(window, "_shutting_down", False):
+                break
             time.sleep(0.02)
 
     window._start_serial_worker(worker, "LoopMaster-close-probe-serial-worker")
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a LoopMaster close scenario window.")
     parser.add_argument(
         "--scenario",
-        choices=("idle", "sampling", "slow-sampling", "serial-worker"),
+        choices=("idle", "sampling", "slow-sampling", "serial-worker", "stuck-serial-worker"),
         default="idle",
     )
     args = parser.parse_args(argv)
@@ -124,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         QTimer.singleShot(100, window._on_start)
     elif args.scenario == "serial-worker":
         QTimer.singleShot(100, lambda: _start_serial_worker(window, 12.0))
+    elif args.scenario == "stuck-serial-worker":
+        QTimer.singleShot(100, lambda: _start_serial_worker(window, 12.0, ignore_shutdown=True))
 
     window.show()
     return app.exec()
