@@ -1301,3 +1301,67 @@ Make breakpoint synchronization explainable before any Keil execution path exist
   - refresh dry-run diff previews immediately after each local breakpoint edit
   - preserve the compact VSCode-like workbench feel without adding a heavy panel
   - keep all Keil sync execution dry-run only until the controller/smoke stage is deliberately started
+
+## Stage 23 - Local Breakpoint Editing UX
+
+### Goal
+
+Make the debug workbench breakpoint table behave like a real debugger control surface: toggle enable state, edit conditions, remove entries, and keep source decorations plus dry-run previews in sync immediately.
+
+### Completed
+
+- Expanded the breakpoint table in `src/ui/debug_workbench_tab.py` from 3 columns to 5:
+  - 启用
+  - 文件
+  - 行
+  - 条件
+  - 操作
+- Added table-driven breakpoint editing:
+  - check the 启用 column to flip `BreakpointStore.set_enabled()`
+  - edit the 条件 column to call `BreakpointStore.set_condition()`
+  - click 删除 to remove the breakpoint via `BreakpointStore.remove()`
+- Kept the existing gutter breakpoint toggle working.
+- Added a compact breakpoint-refresh helper so edits update:
+  - source decorations
+  - summary text
+  - `summaryChanged`
+  - dry-run command previews
+- Prevented breakpoint-table click navigation from fighting the edit/action columns.
+- Added a small danger-style delete button so the table still fits the modern UI language without adding a new panel.
+- Extended the debug workbench screenshot probe to exercise:
+  - enable/disable toggles
+  - condition editing
+  - row deletion
+  - immediate dry-run diff refresh after each edit
+- Kept the core breakpoint model unchanged; the new behavior reuses the existing store APIs.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py src\ui\gui.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The edit flow is intentionally still table-based rather than a large right-side editor, to keep the workbench compact.
+- The gutter remains the quickest add/remove path; the table is now the structured edit path.
+
+### Next Target
+
+- Add a breakpoint quick-add / inline edit path from the source gutter and table selection:
+  - make the condition field feel less like a spreadsheet cell and more like a debugger control
+  - keep row edits reflected in the code gutter instantly
+  - continue preserving the compact, modern, VSCode-like layout
+  - stay dry-run only for any future Keil controller execution

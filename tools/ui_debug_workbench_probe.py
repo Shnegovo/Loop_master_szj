@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pyqtgraph as pg
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -197,6 +198,14 @@ def _plan_rows(tab) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _row_for_line(tab, line: int) -> int:
+    for row in range(tab.breakpoint_table.rowCount()):
+        item = tab.breakpoint_table.item(row, 2)
+        if item is not None and item.text() == str(line):
+            return row
+    return -1
+
+
 def _sync_command_transactions(tab, history: KeilCommandHistory | None = None, port: int = 4827) -> None:
     status = tab.debug_status
     transactions = build_keil_debug_transactions(
@@ -325,8 +334,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
         tab.add_breakpoint(48)
         tab.add_breakpoint(72)
-        tab.breakpoint_table.setCurrentCell(2, 0)
-        tab.breakpoint_table.cellClicked.emit(2, 0)
+        tab.breakpoint_table.setCurrentCell(2, 2)
+        tab.breakpoint_table.cellClicked.emit(2, 2)
         _pump(app, 0.1)
         if tab.editor.textCursor().blockNumber() + 1 != 24:
             issues.append(f"breakpoint table did not navigate to line 24: {tab.editor.textCursor().blockNumber() + 1}")
@@ -371,6 +380,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
         if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=1, noop=1)" not in tab.plan_guard_label.toolTip():
             issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
+        if tab.breakpoint_table.columnCount() != 5:
+            issues.append(f"breakpoint table should expose edit columns: {tab.breakpoint_table.columnCount()}")
         if "历史 " not in tab.plan_history_label.text() or tab.plan_history_label.text() == "历史 0":
             issues.append(f"history chip did not record running preview: {tab.plan_history_label.text()!r}")
         history_tip = tab.plan_history_label.toolTip()
@@ -384,6 +395,62 @@ def run(output_dir: Path, width: int, height: int) -> int:
         for phrase in ("RAM", "类型", "回读", "范围"):
             if phrase not in write_tip:
                 issues.append(f"write variable plan tooltip missing {phrase}: {write_tip!r}")
+        row12 = _row_for_line(tab, 12)
+        if row12 < 0:
+            issues.append("condition edit row for line 12 was not found")
+        else:
+            condition_item = tab.breakpoint_table.item(row12, 3)
+            if condition_item is None:
+                issues.append("condition edit item for line 12 missing")
+            else:
+                condition_item.setText("")
+                _pump(app, 0.1)
+                _sync_command_transactions(tab, history)
+                if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=0, noop=2)" not in tab.plan_guard_label.toolTip():
+                    issues.append(f"condition edit did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+        row3 = _row_for_line(tab, 3)
+        if row3 < 0:
+            issues.append("enable-toggle row for line 3 was not found")
+        else:
+            enable_item = tab.breakpoint_table.item(row3, 0)
+            if enable_item is None:
+                issues.append("enable-toggle item for line 3 missing")
+            else:
+                enable_item.setCheckState(Qt.Unchecked)
+                _pump(app, 0.1)
+                _sync_command_transactions(tab, history)
+                if "diff_breakpoints(add=1, remove=1, enable=0, disable=1, update_condition=1, noop=2)" not in tab.plan_guard_label.toolTip():
+                    issues.append(f"enable toggle did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+        row24 = _row_for_line(tab, 24)
+        if row24 < 0:
+            issues.append("enable-toggle row for line 24 was not found")
+        else:
+            checked_item = tab.breakpoint_table.item(row24, 0)
+            if checked_item is None:
+                issues.append("enable-toggle item for line 24 missing")
+            else:
+                checked_item.setCheckState(Qt.Checked)
+                _pump(app, 0.1)
+                _sync_command_transactions(tab, history)
+                if "diff_breakpoints(add=1, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
+                    issues.append(f"enable toggle for line 24 did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+        row72 = _row_for_line(tab, 72)
+        if row72 < 0:
+            issues.append("delete row for line 72 was not found")
+        else:
+            delete_button = tab.breakpoint_table.cellWidget(row72, 4)
+            if delete_button is None:
+                issues.append("delete button for line 72 missing")
+            else:
+                delete_button.click()
+                _pump(app, 0.1)
+                _sync_command_transactions(tab, history)
+                if tab.breakpoint_table.rowCount() != 4:
+                    issues.append(f"delete button did not remove row: {tab.breakpoint_table.rowCount()}")
+                if "4 个本地断点" not in tab.summary_label.text():
+                    issues.append(f"summary did not update after deletion: {tab.summary_label.text()!r}")
+                if "diff_breakpoints(add=0, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
+                    issues.append(f"delete action did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
         _pump(app, 0.35)
         screenshots.append(_save(window, output_dir, "01_debug_workbench_project"))
 
@@ -449,8 +516,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append("current document did not load enough source lines")
         elif len(search_document(tab.current_document, "speed")) < 10:
             issues.append("search hits for speed are unexpectedly low")
-        if tab.breakpoint_table.rowCount() != 5:
-            issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=5")
+        if tab.breakpoint_table.rowCount() != 4:
+            issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=4")
         if "PC" not in tab.marker_label.text() or "运行行" not in tab.marker_label.text():
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
         if "目标已暂停" not in tab.status_text.text():

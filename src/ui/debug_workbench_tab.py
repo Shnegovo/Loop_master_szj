@@ -259,6 +259,7 @@ class DebugWorkbenchTab(QWidget):
         self._plan_rows: tuple[DebugCommandPlan, ...] = ()
         self._command_transactions: tuple[KeilCommandTransaction, ...] = ()
         self._command_history_entries: tuple[KeilCommandHistoryEntry, ...] = ()
+        self._breakpoint_table_syncing = False
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -385,9 +386,7 @@ class DebugWorkbenchTab(QWidget):
         if breakpoint_path is None:
             return
         self._breakpoints.add(breakpoint_path, line, enabled=enabled, condition=condition)
-        self._refresh_breakpoint_table()
-        self._refresh_decorations()
-        self._refresh_summary()
+        self._refresh_breakpoint_views()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -573,18 +572,21 @@ class DebugWorkbenchTab(QWidget):
 
         self.breakpoint_table = QTableWidget()
         self.breakpoint_table.setObjectName("debugBreakpointTable")
-        self.breakpoint_table.setColumnCount(3)
-        self.breakpoint_table.setHorizontalHeaderLabels(["状态", "文件", "行"])
+        self.breakpoint_table.setColumnCount(5)
+        self.breakpoint_table.setHorizontalHeaderLabels(["启用", "文件", "行", "条件", "操作"])
         self.breakpoint_table.horizontalHeader().setStretchLastSection(False)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.breakpoint_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.breakpoint_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.breakpoint_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.breakpoint_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.breakpoint_table.verticalHeader().setVisible(False)
-        self.breakpoint_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.breakpoint_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.breakpoint_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.breakpoint_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.breakpoint_table.setAlternatingRowColors(True)
         self.breakpoint_table.cellClicked.connect(self._on_breakpoint_table_clicked)
+        self.breakpoint_table.itemChanged.connect(self._on_breakpoint_table_item_changed)
         self.breakpoint_table.setMinimumHeight(108)
         layout.addWidget(self.breakpoint_table, 1)
         self._refresh_diagnostics_table()
@@ -693,7 +695,9 @@ class DebugWorkbenchTab(QWidget):
         if self._current_document is None:
             return
         self._breakpoints.toggle(self._current_document.path, line)
-        self._refresh_breakpoint_table()
+        self._refresh_breakpoint_views()
+
+    def _refresh_breakpoint_views(self) -> None:
         self._refresh_decorations()
         self._refresh_summary()
 
@@ -719,11 +723,37 @@ class DebugWorkbenchTab(QWidget):
     def _refresh_breakpoint_table(self) -> None:
         breakpoints = self._breakpoints.all()
         self._breakpoint_rows = breakpoints
+        self._breakpoint_table_syncing = True
+        self.breakpoint_table.blockSignals(True)
         self.breakpoint_table.setRowCount(len(breakpoints))
         for row, breakpoint in enumerate(breakpoints):
-            self._set_table_item(row, 0, "启用" if breakpoint.enabled else "停用")
-            self._set_table_item(row, 1, breakpoint.path.name)
+            self._set_table_item(
+                row,
+                0,
+                "",
+                checkable=True,
+                checked=breakpoint.enabled,
+                tooltip="启用或停用这个本地断点",
+            )
+            self._set_table_item(row, 1, breakpoint.path.name, tooltip=str(breakpoint.path))
             self._set_table_item(row, 2, str(breakpoint.line))
+            self._set_table_item(
+                row,
+                3,
+                breakpoint.condition,
+                editable=True,
+                tooltip="双击编辑条件表达式；留空表示普通断点",
+            )
+            remove_button = QPushButton("删除")
+            remove_button.setObjectName("debugTableDangerButton")
+            remove_button.setCursor(Qt.PointingHandCursor)
+            remove_button.setToolTip("移除这个本地断点")
+            remove_button.clicked.connect(
+                lambda _checked=False, path=breakpoint.path, line=breakpoint.line: self._remove_breakpoint(path, line)
+            )
+            self.breakpoint_table.setCellWidget(row, 4, remove_button)
+        self.breakpoint_table.blockSignals(False)
+        self._breakpoint_table_syncing = False
 
     def _on_search_changed(self) -> None:
         self._active_search_line = None
@@ -763,12 +793,38 @@ class DebugWorkbenchTab(QWidget):
         self._scroll_editor_to_line(match.line)
         self._refresh_decorations()
 
-    def _on_breakpoint_table_clicked(self, row: int, _column: int) -> None:
+    def _on_breakpoint_table_clicked(self, row: int, column: int) -> None:
         if not (0 <= int(row) < len(self._breakpoint_rows)):
+            return
+        if int(column) in {0, 3, 4}:
             return
         breakpoint = self._breakpoint_rows[int(row)]
         self._load_source(breakpoint.path)
         self._scroll_editor_to_line(breakpoint.line)
+
+    def _on_breakpoint_table_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._breakpoint_table_syncing:
+            return
+        row = int(item.row())
+        column = int(item.column())
+        if not (0 <= row < len(self._breakpoint_rows)):
+            return
+        breakpoint = self._breakpoint_rows[row]
+        try:
+            if column == 0:
+                self._breakpoints.set_enabled(breakpoint.path, breakpoint.line, item.checkState() == Qt.Checked)
+            elif column == 3:
+                self._breakpoints.set_condition(breakpoint.path, breakpoint.line, item.text().strip())
+            else:
+                return
+        except KeyError:
+            return
+        self._refresh_breakpoint_views()
+
+    def _remove_breakpoint(self, path: Path, line: int) -> None:
+        if not self._breakpoints.remove(path, line):
+            return
+        self._refresh_breakpoint_views()
 
     def _scroll_editor_to_line(self, line: int) -> None:
         block = self.editor.document().findBlockByNumber(max(0, int(line) - 1))
@@ -803,9 +859,28 @@ class DebugWorkbenchTab(QWidget):
                 return found
         return None
 
-    def _set_table_item(self, row: int, column: int, text: str) -> None:
+    def _set_table_item(
+        self,
+        row: int,
+        column: int,
+        text: str,
+        *,
+        editable: bool = False,
+        checkable: bool = False,
+        checked: bool = False,
+        tooltip: str = "",
+    ) -> None:
         item = QTableWidgetItem(text)
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        flags = item.flags()
+        if not editable:
+            flags &= ~Qt.ItemIsEditable
+        if checkable:
+            flags |= Qt.ItemIsUserCheckable
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            item.setTextAlignment(Qt.AlignCenter)
+        item.setFlags(flags)
+        if tooltip:
+            item.setToolTip(tooltip)
         self.breakpoint_table.setItem(row, column, item)
 
     def _refresh_diagnostics_table(self) -> None:
@@ -1209,6 +1284,21 @@ class DebugWorkbenchTab(QWidget):
                 background: #f3f6fa;
                 border-color: #dce6f0;
                 color: #a8b3c0;
+            }
+            QPushButton#debugTableDangerButton {
+                min-height: 22px;
+                border-radius: 6px;
+                padding: 2px 8px;
+                font-size: 9pt;
+                font-weight: 560;
+                background: #fff5f5;
+                border: 1px solid #fecaca;
+                color: #b91c1c;
+            }
+            QPushButton#debugTableDangerButton:hover {
+                background: #fee2e2;
+                border-color: #fca5a5;
+                color: #991b1b;
             }
             QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable,
             QTableWidget#debugDiagnosticsTable, QPlainTextEdit#debugCodeEditor {
