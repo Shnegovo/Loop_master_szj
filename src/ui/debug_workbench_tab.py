@@ -1296,6 +1296,25 @@ class DebugWorkbenchTab(QWidget):
                     ),
                 ]
             )
+        if transaction.backend_snapshot_id:
+            snapshot = transaction.backend_snapshot or {}
+            sections.extend(
+                [
+                    "后端快照:",
+                    f"- ID: {transaction.backend_snapshot_id}",
+                    (
+                        "- 状态: "
+                        f"{snapshot.get('state', '--')} · "
+                        f"连接={'是' if snapshot.get('connection_established') else '否'} · "
+                        f"只读={'是' if snapshot.get('read_only', True) else '否'}"
+                    ),
+                    (
+                        "- 远端断点: "
+                        f"{snapshot.get('remote_breakpoint_snapshot_id', '--')} · "
+                        f"{'完成' if snapshot.get('remote_breakpoint_complete') else '等待'}"
+                    ),
+                ]
+            )
         sections.extend([
             "Guard:",
             *guard_lines,
@@ -1332,8 +1351,9 @@ class DebugWorkbenchTab(QWidget):
                     f" unverified={summary.get('unverified_count', 0)}"
                     f" pending={summary.get('pending_verify_count', 0)}"
                 )
+            snapshot = f" · snapshot={entry.backend_snapshot_id}" if entry.backend_snapshot_id else ""
             lines.append(
-                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}"
+                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}{snapshot}"
             )
         return "\n".join(lines)
 

@@ -202,6 +202,8 @@ class KeilCommandTransaction:
     guards: tuple[KeilCommandGuard, ...]
     audit_summary: str
     breakpoint_diff_summary: KeilBreakpointDiffSummary | None = None
+    backend_snapshot_id: str = ""
+    backend_snapshot: dict[str, Any] | None = None
 
     @property
     def action_key(self) -> str:
@@ -254,6 +256,8 @@ class KeilCommandTransaction:
             ],
             "audit_summary": self.audit_summary,
             "breakpoint_diff": self.breakpoint_diff_summary.to_record() if self.breakpoint_diff_summary is not None else None,
+            "backend_snapshot_id": self.backend_snapshot_id,
+            "backend_snapshot": self.backend_snapshot,
         }
 
 
@@ -285,6 +289,8 @@ class KeilCommandHistoryEntry:
     audit_summary: str
     dedupe_key: str
     breakpoint_diff_summary: dict[str, Any] | None = None
+    backend_snapshot_id: str = ""
+    backend_snapshot: dict[str, Any] | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -314,6 +320,8 @@ class KeilCommandHistoryEntry:
             "audit_summary": self.audit_summary,
             "dedupe_key": self.dedupe_key,
             "breakpoint_diff": self.breakpoint_diff_summary,
+            "backend_snapshot_id": self.backend_snapshot_id,
+            "backend_snapshot": self.backend_snapshot,
         }
 
 
@@ -384,6 +392,8 @@ class KeilCommandHistory:
             audit_summary=transaction.audit_summary,
             dedupe_key=dedupe_key,
             breakpoint_diff_summary=transaction.breakpoint_diff_summary.to_record() if transaction.breakpoint_diff_summary is not None else None,
+            backend_snapshot_id=transaction.backend_snapshot_id,
+            backend_snapshot=transaction.backend_snapshot,
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
@@ -421,6 +431,7 @@ def build_keil_debug_transactions(
     breakpoints: Iterable[object] = (),
     remote_breakpoints: Iterable[object] = (),
     remote_breakpoint_snapshot: KeilBreakpointRemoteSnapshot | object | None = None,
+    backend_snapshot: dict[str, Any] | object | None = None,
     source_paths: Iterable[str | Path] = (),
     variable_writes: Iterable[KeilVariableWriteIntent | object] = (),
     execution_gate: bool = False,
@@ -448,6 +459,7 @@ def build_keil_debug_transactions(
         source_paths=source_paths,
     )
     write_intents = tuple(_variable_write_intent(item) for item in variable_writes)
+    backend_snapshot_record = _backend_snapshot_record(backend_snapshot)
     return tuple(
         _build_transaction(
             plan,
@@ -459,6 +471,7 @@ def build_keil_debug_transactions(
             breakpoint_diff_summary=breakpoint_diff_summary,
             variable_writes=write_intents,
             execution_gate=execution_gate,
+            backend_snapshot=backend_snapshot_record,
         )
         for plan in plans
     )
@@ -483,6 +496,44 @@ def transaction_by_key(
         if transaction.kind.value == wanted:
             return transaction
     return None
+
+
+def _backend_snapshot_record(snapshot: dict[str, Any] | object | None) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    if isinstance(snapshot, dict):
+        record = dict(snapshot)
+    elif hasattr(snapshot, "to_record") and callable(getattr(snapshot, "to_record")):
+        record = dict(snapshot.to_record())
+    else:
+        record = {
+            "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
+            "backend": str(getattr(getattr(snapshot, "backend", ""), "value", getattr(snapshot, "backend", ""))),
+            "adapter_name": str(getattr(snapshot, "adapter_name", "") or ""),
+            "captured_at": str(getattr(snapshot, "captured_at", "") or ""),
+        }
+    status = record.get("status") if isinstance(record.get("status"), dict) else {}
+    pc = record.get("pc_location") if isinstance(record.get("pc_location"), dict) else None
+    remote = record.get("remote_breakpoint_snapshot") if isinstance(record.get("remote_breakpoint_snapshot"), dict) else None
+    return {
+        "schema_version": int(record.get("schema_version", 1) or 1),
+        "snapshot_id": str(record.get("snapshot_id", "") or ""),
+        "backend": str(record.get("backend", "") or ""),
+        "adapter_name": str(record.get("adapter_name", "") or ""),
+        "captured_at": str(record.get("captured_at", "") or ""),
+        "read_only": bool(record.get("read_only", True)),
+        "connection_attempted": bool(record.get("connection_attempted", False)),
+        "connection_established": bool(record.get("connection_established", False)),
+        "target_running": record.get("target_running"),
+        "project_path": str(record.get("project_path", "") or ""),
+        "target_name": str(record.get("target_name", "") or ""),
+        "state": str(status.get("state", "") or ""),
+        "detail": str(status.get("detail", "") or ""),
+        "pc_location": pc,
+        "remote_breakpoint_snapshot_id": str(record.get("remote_breakpoint_snapshot_id", "") or ""),
+        "remote_breakpoint_complete": bool(remote.get("complete", False)) if remote else False,
+        "remote_breakpoint_error": str(remote.get("error", "") or "") if remote else "",
+    }
 
 
 def diff_keil_breakpoints(
@@ -637,6 +688,7 @@ def _build_transaction(
     breakpoint_diff_summary: KeilBreakpointDiffSummary | None,
     variable_writes: tuple[KeilVariableWriteIntent, ...],
     execution_gate: bool,
+    backend_snapshot: dict[str, Any] | None,
 ) -> KeilCommandTransaction:
     kind = KeilCommandKind(str(getattr(plan, "key", "")))
     preconditions_met = bool(getattr(plan, "preconditions_met", False))
@@ -654,6 +706,7 @@ def _build_transaction(
         "commands": command_preview,
         "guards": [(guard.key, guard.state.value, guard.detail) for guard in guards],
         "breakpoint_diff": transaction_breakpoint_diff_summary.to_record() if transaction_breakpoint_diff_summary is not None else None,
+        "backend_snapshot_id": str((backend_snapshot or {}).get("snapshot_id", "")),
     }
     return KeilCommandTransaction(
         schema_version=1,
@@ -673,6 +726,8 @@ def _build_transaction(
         guards=guards,
         audit_summary=_audit_summary(kind, command_preview, dry_run),
         breakpoint_diff_summary=transaction_breakpoint_diff_summary,
+        backend_snapshot_id=str((backend_snapshot or {}).get("snapshot_id", "")),
+        backend_snapshot=backend_snapshot,
     )
 
 

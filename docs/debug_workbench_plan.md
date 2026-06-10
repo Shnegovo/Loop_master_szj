@@ -54,6 +54,15 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 断点、变量写入和运行控制统一先走 transaction/dry-run，再由后端决定是否可以执行，防止 UI 直接调用某个后端的危险动作。
 - OpenOCD/pyOCD 优先走 GDB remote 或各自稳定 API；Keil 优先走 UVSOCK/Debug Commands；高速波形仍优先使用串口、SWO/ITM、RTT、USB 或网络流。
 
+### 近期架构拆分要求
+
+- `DebugBackendSessionSnapshot` 只能保留通用字段；远端断点、PC、变量和 target 状态要抽成 backend-neutral 类型，不能继续引用 Keil 专属 snapshot。
+- `DebugRuntimeState` 要逐步从 `KEIL_DISCOVERED` / `KEIL_ATTACHED` 改到通用 `DISCOVERED` / `ATTACHED`，Keil/OpenOCD/pyOCD/GDB 只作为 backend identity。
+- 当前 `KeilCommandTransaction` 的 dry-run/audit/history 能力要沉到通用 `DebugCommandTransaction`；Keil 只保留 UVSOCK/Debug Commands 的 preview formatter。
+- 断点 diff 逻辑要从 `src\core\keil\commands.py` 抽为通用 breakpoint planner；不同后端只负责命令翻译和远端回读解析。
+- Source provider 要从 Keil `.uvprojx` 扩展成通用 `SourceManifest`：Keil 工程、ELF/DWARF、compile_commands、GDB `info sources` 和手动 source roots 都能喂同一个源码视图。
+- 主窗口不能长期直接持有单个 `KeilUvSockBackendAdapter`；需要 `DebugBackendRegistry` / controller / backend selector，为 OpenOCD、pyOCD、GDB server 和 offline replay 留入口。
+
 ## 下一大里程碑
 
 `Debug Backend Adapter + Keil Read-Only Session Snapshot`
@@ -62,6 +71,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已新增 Keil backend adapter probe，验证 discover 不连接、只读 snapshot 不启用 Halt/Run/Step/写变量/同步断点。
 - 已接入 `连接` 动作为显式 opt-in 的 Keil 只读连接快照：用户点击连接时才执行 `OpenConnection -> DBG_STATUS -> CloseConnection`，并且只显示状态/诊断，不开放运行控制。
 - 已加入 PC 和远端断点只读占位：当前标记为 incomplete，诊断显示“待 Keil 回读/枚举”，并喂给现有 dry-run diff，让同步断点保持等待而不是误判 ready。
+- 已把 backend snapshot ID 和精简证据写入 dry-run transaction、history、tooltip 和 JSONL audit，后续 live smoke 能追溯每个 UI 决策来自哪次只读快照。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -73,6 +83,9 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
 
 2. 架构底座
+   - 抽出 `DebugBackendRegistry` 和 backend selector：`Keil 主控`、`OpenOCD/GDB`、`pyOCD`、`离线回放` 共用同一个工作台入口。
+   - 抽出通用 `DebugCommandTransaction`：dry-run、audit、history、guard 通用化，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
+   - 抽出通用 `RemoteBreakpointSnapshot`、`PcLocation`、`SourceManifest`，先用 fake backend 探针验证 UI 不再依赖 Keil 类型。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。
    - 抽出 `Decoder`：Raw、CSV、FireWater、JustFloat、HEX、后续自定义协议注册。
    - 抽出 `AcquisitionSession`：统一日志、样本、时间戳、错误状态和缓冲区。

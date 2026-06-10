@@ -230,6 +230,7 @@ def _sync_command_transactions(
         breakpoints=tab.local_breakpoints(),
         source_paths=tab.local_source_paths(),
         remote_breakpoint_snapshot=getattr(tab, "_debug_remote_breakpoint_snapshot", None),
+        backend_snapshot=getattr(tab, "_debug_backend_snapshot_record", None),
         execution_gate=False,
     )
     tab.set_command_transactions(transactions)
@@ -412,6 +413,10 @@ def run(output_dir: Path, width: int, height: int) -> int:
             _pump(app, 0.15)
             if fake_backend.calls != 1:
                 issues.append(f"attach action did not request one read-only snapshot: {fake_backend.calls}")
+            backend_record = getattr(window, "_debug_backend_snapshot_record", None)
+            tab._debug_backend_snapshot_record = backend_record
+            if not backend_record or backend_record.get("snapshot_id") != "debug-backend-ui-fake":
+                issues.append(f"read-only attach backend snapshot evidence missing: {backend_record!r}")
             if "只读快照" not in tab.status_text.text() or "目标运行中" not in tab.status_text.text():
                 issues.append(f"read-only attach status mismatch: {tab.status_text.text()!r}")
             diag = {
@@ -434,6 +439,10 @@ def run(output_dir: Path, width: int, height: int) -> int:
             sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
             if "waiting_remote_snapshot=true" not in sync_text and "等待远端断点快照" not in sync_text:
                 issues.append(f"read-only attach should keep remote breakpoint snapshot incomplete: {sync_text!r}")
+            if sync_transaction is None or sync_transaction.backend_snapshot_id != "debug-backend-ui-fake":
+                issues.append(f"read-only attach sync transaction should retain backend snapshot id: {sync_transaction!r}")
+            elif "debug-backend-ui-fake" not in tab.plan_guard_label.toolTip() or "后端快照" not in tab.plan_guard_label.toolTip():
+                issues.append(f"read-only attach transaction tooltip missing backend snapshot evidence: {tab.plan_guard_label.toolTip()!r}")
         tab.search_edit.setText("speed")
         if not tab.search_next_button.isEnabled():
             issues.append("search next button should be enabled after a query with matches")
@@ -583,11 +592,11 @@ def run(output_dir: Path, width: int, height: int) -> int:
         _assert_phrases(
             issues,
             history_tip,
-            ("verified=1", "unverified=1", "pending=3"),
+            ("verified=1", "unverified=1", "pending=3", "snapshot=debug-backend-ui-fake"),
             "running history tooltip",
         )
         running_tooltip = tab.plan_guard_label.toolTip()
-        for phrase in ("UVSC_DBG_STOP_EXECUTION", "DebugDemo.uvprojx", "DebugDemo", "4827"):
+        for phrase in ("UVSC_DBG_STOP_EXECUTION", "DebugDemo.uvprojx", "DebugDemo", "4827", "后端快照", "debug-backend-ui-fake"):
             if phrase not in running_tooltip:
                 issues.append(f"running transaction tooltip missing {phrase}: {running_tooltip!r}")
         write_tip = running_plans.get("写变量", {}).get("tooltip", "")

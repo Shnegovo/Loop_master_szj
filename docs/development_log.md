@@ -1896,3 +1896,82 @@ Continue the read-only backend milestone by making PC and remote breakpoint evid
   - preserve snapshot IDs in history/audit records where useful
   - model mismatch/stale reasons for project/target/port
   - prepare the future live UVSOCK smoke to replace placeholders with real PC and breakpoint readback
+
+## Milestone 29 Update - Backend Snapshot Evidence in Dry-Run Audit
+
+### Goal
+
+Continue the read-only backend milestone by making backend session evidence visible in every relevant dry-run transaction, history entry and JSONL audit record, so future live Keil smoke tests can be traced back to the exact read-only snapshot that produced the UI state.
+
+### Completed
+
+- Extended Keil dry-run transactions with backend snapshot evidence:
+  - `backend_snapshot_id`
+  - trimmed `backend_snapshot` record
+- Preserved backend snapshot evidence in:
+  - transaction IDs
+  - transaction audit records
+  - dry-run command history entries
+  - JSONL audit output
+- Trimmed backend snapshot records to data-only fields:
+  - backend, adapter, capture time
+  - read-only and connection state
+  - project, target, status detail
+  - PC placeholder record
+  - remote breakpoint snapshot id/completeness/error
+- Wired `MainWindow` to store adapter snapshot records after both Keil discover and explicit read-only attach.
+- Fed the stored backend snapshot record into the dry-run transaction builder.
+- Updated Debug Workbench tooltips:
+  - focused transaction tooltip now shows `后端快照`
+  - history tooltip now includes `snapshot=<id>`
+- Hardened probes so snapshot evidence must survive through transaction, UI tooltip, history and JSONL audit paths.
+- Ran a parallel read-only architecture review for future OpenOCD/pyOCD/GDB support. The review confirmed the current adapter foundation is useful, but `DebugRuntimeState`, remote breakpoint snapshots, source providers and command transactions still need a backend-neutral split before direct OpenOCD/pyOCD/GDB adapters are clean.
+- Re-checked Keil debug-chain feasibility against official Keil UVSOCK/Debug Commands documentation and the local `UVSC64.dll` exports; the approach remains viable, but live target behavior still requires a separate opt-in smoke stage.
+
+### Verified
+
+- `python -m py_compile src\core\debug_backend.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO`
+  - PASS; no-connect adapter snapshot reported `attempted=False`, `connected=False`, with PC/remote-breakpoint placeholders incomplete.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO --attempt-existing --status`
+  - PASS; current machine has no running uVision, so it failed safely with `attempted=False`, `connected=False`.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports`
+  - PASS; selected `UVSC64.dll`, found 103 exports and all important exports.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS; DLL loaded, no running uVision, no live connection attempted.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS; parsed one target and 19 source files.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This update still does not launch Keil, access ST-Link/F401CCU6, halt/run the target, sync breakpoints, or write variables.
+- The snapshot evidence proves traceability of dry-run decisions, not successful Keil PC readback or real breakpoint enumeration.
+- Backend snapshot data remains deliberately JSON/data-only; no DLL handles, subprocesses, callbacks, thread objects or executors are stored in transaction/history/audit records.
+- Keil remains the first proven local backend path, but the next architecture work must avoid baking Keil names and UVSOCK assumptions into the common workbench model.
+
+### Next Target
+
+- Continue the large debug-backend milestone with a backend-neutral architecture slice:
+  - extract common `RemoteBreakpointSnapshot` / `RemoteBreakpoint` types out of Keil-specific commands
+  - introduce a generic `DebugCommandTransaction` shell while keeping Keil UVSOCK preview formatting backend-specific
+  - add backend registry/controller plumbing so UI selection can later switch between Keil, OpenOCD/GDB, pyOCD and offline replay
+  - add no-hardware fake OpenOCD/GDB and pyOCD adapter probes before any live probe collision risk
+  - then run a separate opt-in Keil live read-only smoke only after uVision is already open in Debug mode

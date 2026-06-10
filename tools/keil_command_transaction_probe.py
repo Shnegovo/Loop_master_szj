@@ -85,6 +85,65 @@ def _remote_snapshot(project_path: Path, source_dir: Path, *, complete: bool = T
     )
 
 
+def _backend_snapshot(project_path: Path) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "backend": "keil",
+        "adapter_name": "Keil / UVSOCK",
+        "snapshot_id": "debug-backend-transaction-demo",
+        "captured_at": "2026-06-10T00:00:00+00:00",
+        "read_only": True,
+        "connection_attempted": True,
+        "connection_established": True,
+        "target_running": True,
+        "port": 4827,
+        "project_path": str(project_path),
+        "target_name": "DebugDemo",
+        "pc_location": {
+            "path": "",
+            "line": None,
+            "address": None,
+            "function": "",
+            "source": "keil_uvsock",
+            "complete": False,
+            "message": "Keil PC 位置读取尚未实现",
+        },
+        "remote_breakpoint_snapshot_id": "keil-remote-transaction-demo",
+        "remote_breakpoint_snapshot": {
+            "schema_version": 1,
+            "snapshot_id": "keil-remote-transaction-demo",
+            "project_path": str(project_path),
+            "target_name": "DebugDemo",
+            "captured_at": "2026-06-10T00:00:00+00:00",
+            "complete": False,
+            "error": "Keil 只读快照尚未实现断点枚举解析",
+            "breakpoints": [],
+        },
+        "status": {
+            "backend": "keil",
+            "state": "running",
+            "label": "目标运行中",
+            "detail": "UVSOCK 只读快照已连接，目标运行中",
+            "project_path": str(project_path),
+            "target_name": "DebugDemo",
+            "current_pc_line": None,
+            "run_line": None,
+            "error": "",
+            "capabilities": {
+                "can_discover": True,
+                "can_attach": True,
+                "can_disconnect": False,
+                "can_read_variables": True,
+                "can_write_variables": False,
+                "can_halt": False,
+                "can_run": False,
+                "can_step": False,
+                "can_sync_breakpoints": False,
+            },
+        },
+    }
+
+
 def _assert_data_only(value: object, path: str = "transaction") -> None:
     _assert(not callable(value), f"{path} must not be callable")
     if is_dataclass(value):
@@ -180,15 +239,23 @@ def main() -> int:
             SimpleNamespace(path=source_dir / "main.c", line=72, enabled=True, condition=""),
             SimpleNamespace(path=source_dir / "main.c", line=0, enabled=True, condition=""),
         )
+        backend_snapshot = _backend_snapshot(project_path)
         running = _transaction_map(
             session,
             project_path=project_path,
             target_name="DebugDemo",
             breakpoints=breakpoints,
             remote_breakpoint_snapshot=_remote_snapshot(project_path, source_dir),
+            backend_snapshot=backend_snapshot,
             source_paths=(source_dir / "main.c",),
         )
         _assert_all_dry_run(running)
+        for key, transaction in running.items():
+            _assert(transaction.backend_snapshot_id == "debug-backend-transaction-demo", f"{key} backend snapshot id missing")
+            _assert(transaction.backend_snapshot["snapshot_id"] == "debug-backend-transaction-demo", f"{key} backend snapshot record missing")
+            _assert(transaction.backend_snapshot["remote_breakpoint_snapshot_id"] == "keil-remote-transaction-demo", f"{key} remote snapshot evidence missing")
+            _assert(transaction.backend_snapshot["state"] == "running", f"{key} backend state should be flattened")
+            _assert(transaction.backend_snapshot["connection_established"], f"{key} backend connection evidence missing")
         _assert(running["halt"].preconditions_met, "halt should be precondition-ready while running")
         _assert(not running["run"].preconditions_met, "run should be blocked while already running")
         _assert(not running["step"].preconditions_met, "step should be blocked while running")
@@ -215,6 +282,9 @@ def main() -> int:
         _assert(sync_record["breakpoint_diff"]["verified_count"] == 1, "audit verified count missing")
         _assert(sync_record["breakpoint_diff"]["unverified_count"] == 1, "audit unverified count missing")
         _assert(sync_record["breakpoint_diff"]["pending_verify_count"] == 3, "audit pending count missing")
+        _assert(sync_record["backend_snapshot_id"] == "debug-backend-transaction-demo", "audit backend snapshot id missing")
+        _assert(sync_record["backend_snapshot"]["snapshot_id"] == "debug-backend-transaction-demo", "audit backend snapshot record missing")
+        _assert(sync_record["backend_snapshot"]["remote_breakpoint_complete"] is False, "audit should preserve incomplete remote breakpoint evidence")
         _assert(
             _guard_state(running["sync_breakpoints"], "breakpoint_locations") == KeilCommandGuardState.BLOCKED,
             "invalid breakpoint line should block sync transaction",
@@ -231,6 +301,8 @@ def main() -> int:
         sync_history = history.record(running["sync_breakpoints"], timestamp="2026-06-10T00:00:02+00:00")
         _assert(sync_history.breakpoint_diff_summary["verified_count"] == 1, "history should retain verification counts")
         _assert(sync_history.breakpoint_diff_summary["pending_verify_count"] == 3, "history should retain pending verification counts")
+        _assert(sync_history.backend_snapshot_id == "debug-backend-transaction-demo", "history should retain backend snapshot id")
+        _assert(sync_history.backend_snapshot["snapshot_id"] == "debug-backend-transaction-demo", "history should retain backend snapshot record")
         history.record(discovered["attach"], timestamp="2026-06-10T00:00:03+00:00")
         _assert(len(history) == 3, "history should preserve bounded segments")
         _assert([entry.title for entry in history.all()] == ["暂停目标", "同步断点", "连接调试会话"], "history order changed")
@@ -361,6 +433,8 @@ def main() -> int:
             sync_audit = json.loads(lines[0])
             write_audit = json.loads(lines[1])
             _assert(sync_audit["kind"] == "sync_breakpoints" and sync_audit["breakpoint_diff"]["verified_count"] == 1, "sync audit record shape mismatch")
+            _assert(sync_audit["backend_snapshot_id"] == "debug-backend-transaction-demo", "sync audit should retain backend snapshot id")
+            _assert(sync_audit["backend_snapshot"]["remote_breakpoint_snapshot_id"] == "keil-remote-transaction-demo", "sync audit should retain remote snapshot evidence")
             _assert(write_audit["kind"] == "write_variables" and write_audit["dry_run"], "write audit record shape mismatch")
 
     print("PASS keil command transaction probe")

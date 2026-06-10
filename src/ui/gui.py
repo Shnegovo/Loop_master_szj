@@ -421,6 +421,7 @@ class MainWindow(QMainWindow):
         self._debug_uvsock_port = 4827
         self._debug_command_history = KeilCommandHistory(max_entries=64)
         self._debug_remote_breakpoint_snapshot = None
+        self._debug_backend_snapshot_record = None
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -2009,6 +2010,7 @@ class MainWindow(QMainWindow):
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
+            self._debug_backend_snapshot_record = snapshot.to_record()
         except Exception as exc:
             message = f"Keil 预检失败：{exc}"
             status = make_debug_status(
@@ -2050,6 +2052,7 @@ class MainWindow(QMainWindow):
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
+            self._debug_backend_snapshot_record = snapshot.to_record()
         except Exception as exc:
             message = f"Keil 只读连接失败：{exc}"
             status = make_debug_status(
@@ -2084,6 +2087,7 @@ class MainWindow(QMainWindow):
             breakpoints=tab.local_breakpoints(),
             source_paths=tab.local_source_paths(),
             remote_breakpoint_snapshot=getattr(self, "_debug_remote_breakpoint_snapshot", None),
+            backend_snapshot=getattr(self, "_debug_backend_snapshot_record", None),
             execution_gate=False,
         )
         tab.set_command_transactions(transactions)
