@@ -660,6 +660,7 @@ class DebugWorkbenchTab(QWidget):
             ("discover", "发现后端"),
             ("build_project", "构建"),
             ("launch_uvsock", "启动Keil"),
+            ("auto_debug", "自动调试"),
             ("attach", "连接"),
             ("disconnect", "断开"),
             ("halt", "暂停"),
@@ -1684,7 +1685,7 @@ class DebugWorkbenchTab(QWidget):
                 and status.state.value in {"keil_attached", "paused", "running"}
             )
             explicit_keil_profile_action = (
-                key in {"build_project", "launch_uvsock"}
+                key in {"build_project", "launch_uvsock", "auto_debug"}
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.project_path is not None

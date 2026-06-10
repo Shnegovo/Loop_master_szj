@@ -34,9 +34,11 @@ from src.core.keil.commands import (  # noqa: E402
     build_keil_debug_transactions,
     transaction_by_key,
 )
+from src.core.keil.live_write import KeilLiveVariableWriteResult  # noqa: E402
 from src.core.keil.profile import KeilBuildResult, make_keil_debug_profile  # noqa: E402
 from src.core.keil.uvsock import UvscLaunchResult  # noqa: E402
 from src.ui.gui import MainWindow  # noqa: E402
+import src.ui.gui as gui_module  # noqa: E402
 from src.ui.pcl_theme import apply_pcl_theme  # noqa: E402
 
 
@@ -258,6 +260,20 @@ def _sync_command_transactions(
         tab.set_command_history_entries(history.recent(limit=5))
 
 
+def _patch_confirmation(ok: bool):
+    original = gui_module.ask_pcl_confirmation
+
+    def fake_confirm(*_args, **_kwargs):
+        return ok
+
+    gui_module.ask_pcl_confirmation = fake_confirm
+
+    def restore() -> None:
+        gui_module.ask_pcl_confirmation = original
+
+    return restore
+
+
 def _focused_transaction(transactions):
     priority = (
         "attach",
@@ -283,6 +299,7 @@ class _FakeReadOnlyBackend:
         self.profile_calls = 0
         self.build_calls = 0
         self.launch_calls = 0
+        self.write_calls = 0
 
     def debug_profile(
         self,
@@ -310,13 +327,12 @@ class _FakeReadOnlyBackend:
         return KeilBuildResult(
             plan=profile.build_plan,
             attempted=True,
-            succeeded=False,
-            returncode=1,
+            succeeded=True,
+            returncode=0,
             log_path=profile.build_plan.log_path,
-            output_tail="fake build path: UI probe does not invoke uVision.com",
+            output_tail="fake build path: UI probe does not invoke uVision.com; 0 Error(s), 0 Warning(s).",
             axf_path=profile.axf_path,
-            axf_exists=profile.axf_exists,
-            error="fake build path: no external process launched",
+            axf_exists=True,
         )
 
     def launch_uvsock(
@@ -329,8 +345,19 @@ class _FakeReadOnlyBackend:
         profile = self.debug_profile(project_path=project_path or self.project_path, target_name=target_name)
         return UvscLaunchResult(
             plan=profile.launch_plan,
-            launched=False,
-            error="fake launch path: UI probe does not start uVision",
+            launched=True,
+            pid=4242,
+        )
+
+    def write_live_variable(self, request, *, require_debug: bool = True):
+        self.write_calls += 1
+        return KeilLiveVariableWriteResult(
+            attempted=True,
+            written=True,
+            expression=request.expression,
+            value_text=request.value_text,
+            method="fake",
+            readback_value=request.value_text,
         )
 
     def read_only_session_snapshot(
@@ -461,6 +488,10 @@ def run(output_dir: Path, width: int, height: int) -> int:
         project_path = _write_fixture(Path(tmp))
         window = MainWindow()
         window._config_path = output_dir / "probe-loopmaster.json"
+        window._probe_infos = []
+        window._probe_warnings = []
+        window._show_info = lambda title, message: window._probe_infos.append((title, message))
+        window._show_warning = lambda title, message: window._probe_warnings.append((title, message))
         window.resize(width, height)
         window.show()
         _pump(app, 0.35)
@@ -648,7 +679,7 @@ Raw dump of debug contents of section .debug_line:
         for key, expected in (("Keil 档案", "可用"), ("AXF 状态", "未生成"), ("构建状态", "可构建"), ("启动状态", "可启动")):
             if diag.get(key) != expected:
                 issues.append(f"profile diagnostic mismatch {key}: {diag!r}")
-        for key in ("build_project", "launch_uvsock"):
+        for key in ("build_project", "launch_uvsock", "auto_debug"):
             button = getattr(tab, "_action_buttons", {}).get(key)
             if button is None or not button.isEnabled():
                 issues.append(f"{key} action should be enabled after Keil profile discovery")
@@ -682,7 +713,7 @@ Raw dump of debug contents of section .debug_line:
             for key in ("Keil 档案", "AXF", "AXF 状态", "构建命令", "构建状态", "启动命令", "启动状态"):
                 if key not in diag:
                     issues.append(f"read-only attach profile diagnostic missing {key}: {diag!r}")
-            for key in ("build_project", "launch_uvsock"):
+            for key in ("build_project", "launch_uvsock", "auto_debug"):
                 button = getattr(tab, "_action_buttons", {}).get(key)
                 if button is None or not button.isEnabled():
                     issues.append(f"read-only attach should keep {key} action enabled")
@@ -712,6 +743,28 @@ Raw dump of debug contents of section .debug_line:
                 issues.append(f"read-only attach sync transaction should retain backend snapshot id: {sync_transaction!r}")
             elif "debug-backend-ui-fake" not in tab.plan_guard_label.toolTip() or "后端快照" not in tab.plan_guard_label.toolTip():
                 issues.append(f"read-only attach transaction tooltip missing backend snapshot evidence: {tab.plan_guard_label.toolTip()!r}")
+            auto_button = getattr(tab, "_action_buttons", {}).get("auto_debug")
+            if auto_button is None:
+                issues.append("auto debug action button missing")
+            else:
+                restore_confirm = _patch_confirmation(True)
+                try:
+                    auto_button.click()
+                    _pump(app, 0.15)
+                finally:
+                    restore_confirm()
+                if fake_backend.build_calls != 1:
+                    issues.append(f"auto debug should request one fake build: {fake_backend.build_calls}")
+                if fake_backend.launch_calls != 1:
+                    issues.append(f"auto debug should request one fake launch: {fake_backend.launch_calls}")
+                if fake_backend.write_calls != 1:
+                    issues.append(f"auto debug should request one fake write: {fake_backend.write_calls}")
+                auto_result = getattr(window, "_debug_keil_auto_debug_result", None)
+                if auto_result is None or not auto_result.succeeded:
+                    issues.append(f"auto debug result missing or failed: {auto_result!r}")
+                auto_diag = _diagnostics(tab)
+                if auto_diag.get("自动调试") != "成功" or auto_diag.get("自动写入结果") != "成功":
+                    issues.append(f"auto debug diagnostics mismatch: {auto_diag!r}")
         tab.search_edit.setText("speed")
         if not tab.search_next_button.isEnabled():
             issues.append("search next button should be enabled after a query with matches")

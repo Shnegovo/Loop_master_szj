@@ -3794,3 +3794,113 @@ Reference project:
   - scope presets
   - risk hints
   - one-click fill into the existing write dialog.
+
+## Milestone 42 Update - Keil Auto Debug Transaction Skeleton
+
+### Goal
+
+Start turning the manual Keil sequence into one explicit audited transaction:
+profile, build when needed, launch UVSOCK, wait for connection, then run a
+guarded live-write/readback smoke variable.
+
+### Completed
+
+- Added `src/core/keil/auto_debug.py`:
+  - `KeilAutoDebugRequest`
+  - `KeilAutoDebugStep`
+  - `KeilAutoDebugResult`
+  - `run_keil_auto_debug_transaction(...)`
+- The transaction service uses the existing backend adapter methods instead of
+  creating a parallel Keil implementation:
+  - `debug_profile(...)`
+  - `build_project(...)`
+  - `launch_uvsock(...)`
+  - `read_only_session_snapshot(...)`
+  - `write_live_variable(...)`
+- Transaction behavior:
+  - creates a Keil debug profile
+  - builds only when AXF is missing and `build_if_missing=True`
+  - launches uVision/UVSOCK when requested
+  - polls the read-only session snapshot until UVSOCK connection is established
+  - chooses the smoke variable from the project-aware preset layer
+    - F401 probe: `debug_setpoint` / `6000`
+    - balance-car F103: `SpeedLevel` / `5`
+  - writes through the existing Keil live-write service, preserving AXF/RAM
+    readback and command fallback behavior.
+- Added `自动调试` to the Debug Workbench action bar.
+- Wired `MainWindow._run_keil_auto_debug_from_workbench()`:
+  - explicit confirmation
+  - runs the auto transaction
+  - applies returned read-only backend snapshot
+  - records live write audit when a smoke write is attempted
+  - refreshes diagnostics, command preview and hero state.
+- Added auto-debug diagnostics rows to the Debug Workbench:
+  - overall transaction result
+  - project/target/AXF
+  - per-step success/failure
+  - smoke write target/readback/error.
+- Added `tools/keil_auto_debug_transaction_probe.py`:
+  - fake backend with no real Keil launch and no hardware access
+  - verifies AXF-present path skips build
+  - verifies AXF-missing path builds first
+  - verifies connection polling
+  - verifies connection timeout failure.
+- Updated UI screenshot probe so `自动调试` follows the same explicit
+  Keil-profile action rules as build and launch.
+- Extended the UI screenshot probe to click `自动调试` with a fake backend and
+  patched confirmation dialogs, verifying fake build/launch/connect/write
+  without starting uVision.
+
+### Verified
+
+- `python -m py_compile src/core/keil/auto_debug.py src/core/keil/__init__.py src/ui/gui.py src/ui/debug_workbench_tab.py tools/keil_auto_debug_transaction_probe.py tools/ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-auto-debug-click --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-auto-debug-click\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-auto-debug-click\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-auto-debug-click\03_debug_workbench_narrow.png`
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools/keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/debug_session_contract_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage adds the real orchestration layer and UI entry, but the verification
+  uses a fake backend to avoid starting Keil or touching the connected ST-Link
+  without a dedicated hardware smoke run.
+- The auto transaction is intentionally explicit and confirmed. It can start
+  Keil and write RAM variables, so it is not run automatically on page open.
+- The next hardware-facing run should use the F401 probe first because its AXF
+  already exists and the write target is a purpose-built RAM variable.
+
+### Next Target
+
+- Run a controlled hardware smoke on the F401 probe:
+  - launch Keil/UVSOCK
+  - wait for connection
+  - write `debug_setpoint`
+  - read back and log audit.
+- Add `.uvoptx` debug adapter summary parsing to the profile diagnostics:
+  - ST-Link/SWD
+  - debug clock
+  - flash algorithm
+  - SVD/device hints
+  - warnings such as F103C8 plus 128K flash algorithm.
+- Add the real variable preset panel:
+  - visible write/scope preset lists
+  - one-click fill into the write dialog
+  - risk hints for `RunFlag`, PID gains and motor-output-adjacent variables.

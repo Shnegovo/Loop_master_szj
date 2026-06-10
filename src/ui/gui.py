@@ -57,6 +57,11 @@ from src.core.debug_transactions import (
     debug_transaction_by_key,
 )
 from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
+from src.core.keil.auto_debug import (
+    KeilAutoDebugRequest,
+    KeilAutoDebugResult,
+    run_keil_auto_debug_transaction,
+)
 from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
 from src.core.keil.presets import (
     KeilVariablePresetProfile,
@@ -2071,6 +2076,9 @@ class MainWindow(QMainWindow):
         if action_key == "launch_uvsock":
             self._launch_keil_uvsock_for_workbench()
             return
+        if action_key == "auto_debug":
+            self._run_keil_auto_debug_from_workbench()
+            return
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
@@ -2789,6 +2797,13 @@ class MainWindow(QMainWindow):
     def _discover_keil_for_debug_workbench(self):
         self._discover_debug_backend_for_workbench()
 
+    def _apply_debug_backend_snapshot(self, snapshot) -> None:
+        self._debug_backend_diagnostics = tuple(snapshot.diagnostic_rows())
+        self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
+        self._debug_backend_snapshot_record = snapshot.to_record()
+        self._debug_session_controller.apply_backend_snapshot(snapshot)
+        self._tab_debug_workbench.set_debug_status(snapshot.status, controls_ready=True)
+
     def _connect_debug_backend_read_only_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
@@ -3052,6 +3067,87 @@ class MainWindow(QMainWindow):
             self._show_warning("Keil 启动失败", message)
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(message)
+
+    def _run_keil_auto_debug_from_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 自动调试", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        required = ("debug_profile", "build_project", "launch_uvsock", "read_only_session_snapshot", "write_live_variable")
+        missing = [name for name in required if not hasattr(self._debug_backend, name)]
+        if missing:
+            self._show_warning("Keil 自动调试", f"当前 Keil 后端缺少执行器：{', '.join(missing)}。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if not status.project_path:
+            self._show_warning("Keil 自动调试", "请先打开 Keil 工程。")
+            return
+        profile = self._make_current_keil_profile()
+        if profile is None:
+            self._show_warning("Keil 自动调试", "无法生成 Keil 调试档案。")
+            return
+        preset_profile = self._current_keil_variable_preset_profile()
+        expression, value_text = keil_live_write_seed(preset_profile)
+        message = (
+            f"工程：{profile.project_path or '--'}\n"
+            f"Target：{profile.target_name or '--'}\n"
+            f"AXF：{profile.axf_path or '--'}\n"
+            f"变量：{expression}\n"
+            f"写入值：{value_text or '--'}\n\n"
+            "将按顺序执行：构建缺失 AXF -> 启动 Keil/UVSOCK -> 等待连接 -> 写入并回读变量。\n"
+            "这会启动外部 Keil 进程，并可能改变真实 MCU 调试会话中的 RAM 变量。"
+        )
+        if not ask_pcl_confirmation(
+            self,
+            "确认 Keil 自动调试",
+            message,
+            confirm_text="开始",
+            cancel_text="取消",
+            kind="warning",
+        ):
+            return
+
+        request = KeilAutoDebugRequest(
+            project_path=profile.project_path or status.project_path,
+            target_name=profile.target_name or status.target_name,
+            build_if_missing=True,
+            launch_if_needed=True,
+            write_smoke=True,
+            expression=expression,
+            value_text=value_text,
+            connection_name="LoopMasterAutoDebug",
+        )
+        tab.set_debug_controls_ready(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在执行 Keil 自动调试事务...")
+        try:
+            result = run_keil_auto_debug_transaction(self._debug_backend, request)
+        except Exception as exc:
+            result = KeilAutoDebugResult(request=request, profile=profile, error=str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_keil_auto_debug_result = result
+        self._debug_keil_profile = result.profile or self._make_current_keil_profile()
+        self._debug_keil_build_result = result.build or getattr(self, "_debug_keil_build_result", None)
+        self._debug_keil_launch_result = result.launch or getattr(self, "_debug_keil_launch_result", None)
+        if result.snapshot is not None:
+            self._apply_debug_backend_snapshot(result.snapshot)
+        if result.write is not None:
+            self._debug_last_live_write_result = result.write
+            self._append_keil_live_write_audit(result.write)
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        summary = result.summary()
+        if result.succeeded:
+            self._show_info("Keil 自动调试完成", summary)
+        else:
+            self._show_warning("Keil 自动调试失败", summary)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(summary)
+        self._refresh_hero()
 
     def _write_keil_live_variable_from_workbench(self):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
@@ -3330,6 +3426,12 @@ class MainWindow(QMainWindow):
             rows.append(("写入错误", result.error))
         return tuple(rows)
 
+    def _keil_auto_debug_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_keil_auto_debug_result", None)
+        if result is None:
+            return ()
+        return result.diagnostic_rows()
+
     @staticmethod
     def _keil_runtime_control_diagnostics(result) -> tuple[tuple[str, str], ...]:
         if result is None:
@@ -3454,6 +3556,7 @@ class MainWindow(QMainWindow):
             + self._keil_variable_preset_diagnostics()
             + self._keil_build_diagnostics()
             + self._keil_launch_diagnostics()
+            + self._keil_auto_debug_diagnostics()
             + self._keil_live_write_diagnostics()
         )
         rows = diagnostic_rows + (

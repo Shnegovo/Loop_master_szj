@@ -77,6 +77,12 @@ from src.core.keil.presets import (
     keil_live_write_seed,
     keil_variable_preset_profile,
 )
+from src.core.keil.auto_debug import (
+    KeilAutoDebugRequest,
+    KeilAutoDebugResult,
+    KeilAutoDebugStep,
+    run_keil_auto_debug_transaction,
+)
 
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
@@ -103,6 +109,9 @@ __all__ = [
     "KeilBuildPlan",
     "KeilBuildResult",
     "KeilDebugProfile",
+    "KeilAutoDebugRequest",
+    "KeilAutoDebugResult",
+    "KeilAutoDebugStep",
     "KeilVariablePreset",
     "KeilVariablePresetProfile",
     "KeilUvscLiveSession",
@@ -135,6 +144,7 @@ __all__ = [
     "project_summary_lines",
     "read_pe_exports",
     "resolve_keil_live_variable",
+    "run_keil_auto_debug_transaction",
     "run_uvsock_smoke",
     "run_keil_project_build",
     "start_uvision_uvsock",
