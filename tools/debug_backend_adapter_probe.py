@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core.debug_workbench import DebugRuntimeState  # noqa: E402
+from src.core.debug_session_contract import DebugSessionState, command_matrix_for_session  # noqa: E402
 from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter  # noqa: E402
 from src.core.keil.uvsock import UvscConnectionResult  # noqa: E402
 
@@ -121,8 +122,15 @@ def main() -> int:
         _assert(discover.remote_breakpoint_snapshot is not None, "discover should carry a remote breakpoint placeholder")
         _assert(not discover.remote_breakpoint_snapshot.complete, "discover remote breakpoint placeholder must be incomplete")
         _assert(discover.pc_location is not None and not discover.pc_location.complete, "discover PC placeholder must be incomplete")
+        discover_contract = discover.to_session_contract()
+        _assert(discover_contract.state == DebugSessionState.DISCOVERED, "discover contract state mismatch")
+        _assert(discover_contract.safety_policy.dry_run, "discover contract should stay dry-run")
+        _assert(discover_contract.backend_snapshot_id == discover.snapshot_id, "discover contract snapshot id mismatch")
+        _assert(not command_matrix_for_session(discover_contract)[1].execution_enabled, "discover contract attach must stay blocked")
         json.dumps(discover.to_record(), ensure_ascii=False, sort_keys=True)
+        json.dumps(discover_contract.to_record(), ensure_ascii=False, sort_keys=True)
         _assert_data_only(discover)
+        _assert_data_only(discover_contract)
 
         snapshot = adapter.read_only_session_snapshot(
             project_path="D:/demo/demo.uvprojx",
@@ -143,10 +151,19 @@ def main() -> int:
         _assert(not caps.can_write_variables, "read-only snapshot must not allow writes")
         _assert(not caps.can_halt and not caps.can_run and not caps.can_step, "read-only snapshot must not allow run control")
         _assert(not caps.can_sync_breakpoints, "read-only snapshot must not allow breakpoint sync")
+        contract = snapshot.to_session_contract()
+        _assert(contract.state == DebugSessionState.RUNNING, "running contract state mismatch")
+        _assert(contract.connection_established, "contract should preserve connection state")
+        _assert(contract.safety_policy.dry_run, "contract default should keep dry-run")
+        command_map = {command.key: command for command in command_matrix_for_session(contract)}
+        _assert(not command_map["halt"].execution_enabled, "contract halt must stay execution-disabled")
+        _assert(not command_map["write_variables"].execution_enabled, "contract write must stay execution-disabled")
         record = snapshot.to_record()
         _assert(record["connection_established"], "record should preserve connection state")
         json.dumps(record, ensure_ascii=False, sort_keys=True)
+        json.dumps(contract.to_record(), ensure_ascii=False, sort_keys=True)
         _assert_data_only(snapshot)
+        _assert_data_only(contract)
 
         preview = adapter.read_only_session_snapshot(
             project_path="D:/demo/demo.uvprojx",

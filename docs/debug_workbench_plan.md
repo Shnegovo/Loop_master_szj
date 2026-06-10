@@ -21,7 +21,8 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已有截图和流程探针覆盖：combo popup、串口助手集成、工作区导航、Halt/Run、分隔条、窄窗口、侧栏、轴按钮。
 - 已验证源码入口和打包 exe 关闭流程，LoopMaster 主进程关闭后不残留。
 - GitHub 仓库已公开，`v2.1.0` Release 的 `LoopMaster_v2.1.exe` 已通过未登录 HEAD 请求验证可下载。
-- 仓库根目录还缺少明确的 `LICENSE` 文件，后续需要补齐许可证和面向公开用户的 README/release notes。
+- 已补 MIT `LICENSE` 和面向公开用户的 README；仍需补 release checksum、公开用户指南、截图、故障排查、`pyproject.toml` 和更可复现的依赖锁定策略。
+- 已新增 backend-neutral debug session contract，后续 Keil/OpenOCD-GDB/pyOCD/offline replay 都应先转换成统一 `DebugSessionSnapshot` 再进入 UI/审计链。
 
 ## 长期推进规则
 

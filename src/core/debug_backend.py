@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from src.core.debug_snapshots import DebugPcLocation, RemoteBreakpointSnapshot, to_record
+from src.core.debug_session_contract import (
+    DebugSessionBackend,
+    DebugSessionCapabilities,
+    DebugSessionDiagnostic,
+    DebugSessionSafetyPolicy,
+    DebugSessionSnapshot,
+    DebugSessionState,
+    DebugTargetState,
+    make_debug_session_snapshot,
+)
 
 if TYPE_CHECKING:
     from src.core.debug_workbench import DebugBackendKind, DebugWorkbenchStatus
@@ -81,6 +91,46 @@ class DebugBackendSessionSnapshot:
 
     def capability_enabled(self, key: str) -> bool:
         return dict(self.capabilities).get(str(key), False)
+
+    def to_session_contract(self) -> DebugSessionSnapshot:
+        return make_debug_session_snapshot(
+            backend=_session_backend_from_kind(self.backend.value),
+            display_name=self.adapter_name,
+            state=_session_state_from_workbench_state(self.status.state.value),
+            target_state=_target_state_from_snapshot(self),
+            project_path=self.project_path,
+            target_name=self.target_name,
+            detail=self.status.detail,
+            connection_attempted=self.connection_attempted,
+            connection_established=self.connection_established,
+            capabilities=DebugSessionCapabilities(
+                can_discover=self.status.capabilities.can_discover,
+                can_attach=self.status.capabilities.can_attach,
+                can_disconnect=self.status.capabilities.can_disconnect,
+                can_read_variables=self.status.capabilities.can_read_variables,
+                can_write_variables=self.status.capabilities.can_write_variables,
+                can_halt=self.status.capabilities.can_halt,
+                can_run=self.status.capabilities.can_run,
+                can_step=self.status.capabilities.can_step,
+                can_sync_breakpoints=self.status.capabilities.can_sync_breakpoints,
+            ),
+            safety_policy=DebugSessionSafetyPolicy(
+                dry_run=True,
+                read_only=self.read_only,
+                label="后端快照默认安全策略",
+                notes="从后端快照导出的合同默认不启动进程、不连接探针、不写目标、不改变运行状态",
+            ),
+            diagnostics=tuple(
+                DebugSessionDiagnostic(item.key, item.value)
+                for item in self.diagnostics
+            ),
+            backend_snapshot_id=self.snapshot_id,
+            metadata={
+                "source": "DebugBackendSessionSnapshot",
+                "status_state": self.status.state.value,
+                "remote_breakpoint_snapshot_id": self.remote_breakpoint_snapshot_id,
+            },
+        )
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -162,3 +212,34 @@ def backend_snapshot_id(payload: dict[str, object]) -> str:
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
     return f"debug-backend-{digest[:16]}"
+
+
+def _session_backend_from_kind(value: str) -> DebugSessionBackend:
+    try:
+        return DebugSessionBackend(str(value))
+    except ValueError:
+        return DebugSessionBackend.NONE
+
+
+def _session_state_from_workbench_state(value: str) -> DebugSessionState:
+    mapping = {
+        "disconnected": DebugSessionState.DISCONNECTED,
+        "keil_discovered": DebugSessionState.DISCOVERED,
+        "keil_attached": DebugSessionState.ATTACHED,
+        "paused": DebugSessionState.PAUSED,
+        "running": DebugSessionState.RUNNING,
+        "error": DebugSessionState.ERROR,
+    }
+    return mapping.get(str(value), DebugSessionState.ERROR)
+
+
+def _target_state_from_snapshot(snapshot: DebugBackendSessionSnapshot) -> DebugTargetState:
+    if snapshot.status.state.value == "paused":
+        return DebugTargetState.PAUSED
+    if snapshot.status.state.value == "running":
+        return DebugTargetState.RUNNING
+    if snapshot.status.state.value == "error":
+        return DebugTargetState.ERROR
+    if snapshot.connection_established:
+        return DebugTargetState.UNKNOWN
+    return DebugTargetState.DISCONNECTED

@@ -3003,3 +3003,82 @@ Make the now-public repository understandable and legally usable for outside use
   - support Keil/OpenOCD-GDB/pyOCD/offline replay without live execution
   - add no-hardware probes for contract behavior
   - keep UI integration modular and avoid growing `gui.py`
+
+## Milestone 33 Update - Backend-Neutral Session Contract
+
+### Goal
+
+Introduce a backend-neutral debug session contract so Keil, OpenOCD/GDB, pyOCD and offline replay can share the same lifecycle, capability and safety-policy vocabulary before any live debugger control is enabled.
+
+### Completed
+
+- Added `src\core\debug_session_contract.py`.
+- New data-only contract types include:
+  - `DebugSessionBackend`
+  - `DebugSessionState`
+  - `DebugTargetState`
+  - `DebugCommandSafety`
+  - `DebugSessionSpec`
+  - `DebugSessionSnapshot`
+  - `DebugSessionCapabilities`
+  - `DebugSessionSafetyPolicy`
+  - `DebugSessionCommand`
+  - `DebugSessionEvent`
+- Added `command_matrix_for_session()` so a snapshot can produce a generic command availability matrix for:
+  - discover
+  - attach
+  - disconnect
+  - halt
+  - run
+  - step
+  - sync breakpoints
+  - write variables
+- Default policy remains dry-run/read-only:
+  - `dry_run=True`
+  - no process launch
+  - no probe connection
+  - no run control
+  - no target writes
+- `DebugBackendSessionSnapshot` now exports `to_session_contract()` so existing Keil and placeholder backend snapshots can feed the new contract without a disruptive UI rewrite.
+- Extended probes to assert:
+  - contract JSON serialization
+  - no handles/callables/process/thread objects in contract data
+  - default safety gates block live attach/run-control/write commands
+  - Keil adapter snapshots convert to the new contract
+  - OpenOCD/GDB, pyOCD and offline placeholder snapshots convert to the new contract
+
+### Verified
+
+- `python -m py_compile src\core\debug_session_contract.py src\core\debug_backend.py tools\debug_session_contract_probe.py tools\debug_backend_adapter_probe.py tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This is an architecture/data-contract slice only.
+- It does not launch Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access.
+- Existing UI still consumes the old workbench status/transaction objects; the new session contract is now available as the next migration target.
+- Public repo audit follow-up still needed:
+  - add release checksum and verification note
+  - improve public release notes/user guide/screenshots/troubleshooting
+  - add package/build metadata such as `pyproject.toml`
+  - consider pinned/locked dependency set for reproducible public installs
+
+### Next Target
+
+- Build the dry-run debug session controller:
+  - own selected backend, current contract snapshot, safety policy and command matrix
+  - adapt Keil/OpenOCD-GDB/pyOCD/offline snapshots into the controller
+  - expose a compact API for UI refresh without adding more orchestration to `gui.py`
+  - keep all actions no-hardware and blocked by the default safety policy

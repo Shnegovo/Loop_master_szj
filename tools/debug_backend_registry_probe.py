@@ -21,6 +21,7 @@ from src.core.debug_backend import (  # noqa: E402
     DebugBackendWorkerState,
 )
 from src.core.debug_workbench import DebugBackendKind  # noqa: E402
+from src.core.debug_session_contract import DebugSessionState, command_matrix_for_session  # noqa: E402
 from src.core.keil.backend import KeilUvSockBackendAdapter  # noqa: E402
 
 
@@ -144,6 +145,13 @@ def main() -> int:
         _assert(not snapshot.status.capabilities.can_run, f"{kind.value} placeholder must not allow run")
         _assert(not snapshot.status.capabilities.can_write_variables, f"{kind.value} placeholder must not allow writes")
         _assert("尚未接入" in " ".join(value for _, value in snapshot.diagnostic_rows()), f"{kind.value} diagnostics mismatch")
+        contract = snapshot.to_session_contract()
+        _assert(contract.state == DebugSessionState.ERROR, f"{kind.value} contract state mismatch")
+        _assert(contract.safety_policy.dry_run, f"{kind.value} contract must stay dry-run")
+        _assert(contract.backend_snapshot_id == snapshot.snapshot_id, f"{kind.value} contract snapshot id mismatch")
+        _assert(not any(command.execution_enabled for command in command_matrix_for_session(contract) if command.key != "discover"), f"{kind.value} contract must not enable execution")
+        json.dumps(contract.to_record(), ensure_ascii=False, sort_keys=True)
+        _assert_data_only(contract)
 
     custom = DebugBackendRegistry()
     factory_calls = 0
