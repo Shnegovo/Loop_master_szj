@@ -382,6 +382,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
         if tab.breakpoint_table.columnCount() != 5:
             issues.append(f"breakpoint table should expose edit columns: {tab.breakpoint_table.columnCount()}")
+        if not hasattr(tab, "breakpoint_editor_condition"):
+            issues.append("breakpoint quick editor was not created")
         if "历史 " not in tab.plan_history_label.text() or tab.plan_history_label.text() == "历史 0":
             issues.append(f"history chip did not record running preview: {tab.plan_history_label.text()!r}")
         history_tip = tab.plan_history_label.toolTip()
@@ -399,28 +401,28 @@ def run(output_dir: Path, width: int, height: int) -> int:
         if row12 < 0:
             issues.append("condition edit row for line 12 was not found")
         else:
-            condition_item = tab.breakpoint_table.item(row12, 3)
-            if condition_item is None:
-                issues.append("condition edit item for line 12 missing")
-            else:
-                condition_item.setText("")
-                _pump(app, 0.1)
-                _sync_command_transactions(tab, history)
-                if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=0, noop=2)" not in tab.plan_guard_label.toolTip():
-                    issues.append(f"condition edit did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            tab.breakpoint_table.setCurrentCell(row12, 3)
+            _pump(app, 0.1)
+            if "main.c:12" not in tab.breakpoint_editor_label.text():
+                issues.append(f"quick editor did not follow selected breakpoint: {tab.breakpoint_editor_label.text()!r}")
+            if tab.breakpoint_editor_condition.text() != "speed_error > 40":
+                issues.append(f"quick editor condition did not load selected breakpoint: {tab.breakpoint_editor_condition.text()!r}")
+            tab.breakpoint_editor_clear.click()
+            _pump(app, 0.1)
+            _sync_command_transactions(tab, history)
+            if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=0, noop=2)" not in tab.plan_guard_label.toolTip():
+                issues.append(f"quick condition clear did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
         row3 = _row_for_line(tab, 3)
         if row3 < 0:
             issues.append("enable-toggle row for line 3 was not found")
         else:
-            enable_item = tab.breakpoint_table.item(row3, 0)
-            if enable_item is None:
-                issues.append("enable-toggle item for line 3 missing")
-            else:
-                enable_item.setCheckState(Qt.Unchecked)
-                _pump(app, 0.1)
-                _sync_command_transactions(tab, history)
-                if "diff_breakpoints(add=1, remove=1, enable=0, disable=1, update_condition=1, noop=2)" not in tab.plan_guard_label.toolTip():
-                    issues.append(f"enable toggle did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            tab.breakpoint_table.setCurrentCell(row3, 0)
+            _pump(app, 0.1)
+            tab.breakpoint_editor_enabled.setChecked(False)
+            _pump(app, 0.1)
+            _sync_command_transactions(tab, history)
+            if "diff_breakpoints(add=1, remove=1, enable=0, disable=1, update_condition=1, noop=2)" not in tab.plan_guard_label.toolTip():
+                issues.append(f"quick enable toggle did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
         row24 = _row_for_line(tab, 24)
         if row24 < 0:
             issues.append("enable-toggle row for line 24 was not found")
@@ -438,19 +440,19 @@ def run(output_dir: Path, width: int, height: int) -> int:
         if row72 < 0:
             issues.append("delete row for line 72 was not found")
         else:
-            delete_button = tab.breakpoint_table.cellWidget(row72, 4)
-            if delete_button is None:
+            if tab.breakpoint_table.cellWidget(row72, 4) is None:
                 issues.append("delete button for line 72 missing")
-            else:
-                delete_button.click()
-                _pump(app, 0.1)
-                _sync_command_transactions(tab, history)
-                if tab.breakpoint_table.rowCount() != 4:
-                    issues.append(f"delete button did not remove row: {tab.breakpoint_table.rowCount()}")
-                if "4 个本地断点" not in tab.summary_label.text():
-                    issues.append(f"summary did not update after deletion: {tab.summary_label.text()!r}")
-                if "diff_breakpoints(add=0, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
-                    issues.append(f"delete action did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            tab.breakpoint_table.setCurrentCell(row72, 4)
+            _pump(app, 0.1)
+            tab.breakpoint_editor_delete.click()
+            _pump(app, 0.1)
+            _sync_command_transactions(tab, history)
+            if tab.breakpoint_table.rowCount() != 4:
+                issues.append(f"quick delete did not remove row: {tab.breakpoint_table.rowCount()}")
+            if "4 个本地断点" not in tab.summary_label.text():
+                issues.append(f"summary did not update after deletion: {tab.summary_label.text()!r}")
+            if "diff_breakpoints(add=0, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
+                issues.append(f"quick delete action did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
         _pump(app, 0.35)
         screenshots.append(_save(window, output_dir, "01_debug_workbench_project"))
 

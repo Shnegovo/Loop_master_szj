@@ -260,6 +260,7 @@ class DebugWorkbenchTab(QWidget):
         self._command_transactions: tuple[KeilCommandTransaction, ...] = ()
         self._command_history_entries: tuple[KeilCommandHistoryEntry, ...] = ()
         self._breakpoint_table_syncing = False
+        self._breakpoint_quick_syncing = False
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -586,11 +587,50 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.breakpoint_table.setAlternatingRowColors(True)
         self.breakpoint_table.cellClicked.connect(self._on_breakpoint_table_clicked)
+        self.breakpoint_table.currentCellChanged.connect(self._on_breakpoint_table_current_changed)
         self.breakpoint_table.itemChanged.connect(self._on_breakpoint_table_item_changed)
         self.breakpoint_table.setMinimumHeight(108)
         layout.addWidget(self.breakpoint_table, 1)
+        layout.addWidget(self._build_breakpoint_quick_editor())
         self._refresh_diagnostics_table()
         return panel
+
+    def _build_breakpoint_quick_editor(self) -> QFrame:
+        editor = QFrame()
+        editor.setObjectName("debugBreakpointEditor")
+        row = QHBoxLayout(editor)
+        row.setContentsMargins(8, 7, 8, 7)
+        row.setSpacing(7)
+
+        self.breakpoint_editor_label = QLabel("未选择断点")
+        self.breakpoint_editor_label.setObjectName("debugBreakpointEditorLabel")
+        row.addWidget(self.breakpoint_editor_label)
+
+        self.breakpoint_editor_enabled = QPushButton("启用")
+        self.breakpoint_editor_enabled.setObjectName("debugMiniToggleButton")
+        self.breakpoint_editor_enabled.setCheckable(True)
+        self.breakpoint_editor_enabled.setCursor(Qt.PointingHandCursor)
+        self.breakpoint_editor_enabled.toggled.connect(self._on_breakpoint_quick_enabled_toggled)
+        row.addWidget(self.breakpoint_editor_enabled)
+
+        self.breakpoint_editor_condition = QLineEdit()
+        self.breakpoint_editor_condition.setObjectName("debugBreakpointConditionEdit")
+        self.breakpoint_editor_condition.setPlaceholderText("条件表达式")
+        self.breakpoint_editor_condition.editingFinished.connect(self._apply_breakpoint_quick_condition)
+        row.addWidget(self.breakpoint_editor_condition, 1)
+
+        self.breakpoint_editor_clear = QPushButton("清空")
+        self.breakpoint_editor_clear.setObjectName("debugMiniButton")
+        self.breakpoint_editor_clear.setCursor(Qt.PointingHandCursor)
+        self.breakpoint_editor_clear.clicked.connect(self._clear_breakpoint_quick_condition)
+        row.addWidget(self.breakpoint_editor_clear)
+
+        self.breakpoint_editor_delete = QPushButton("删除")
+        self.breakpoint_editor_delete.setObjectName("debugMiniDangerButton")
+        self.breakpoint_editor_delete.setCursor(Qt.PointingHandCursor)
+        self.breakpoint_editor_delete.clicked.connect(self._remove_selected_breakpoint)
+        row.addWidget(self.breakpoint_editor_delete)
+        return editor
 
     def _build_editor_panel(self) -> QFrame:
         panel = QFrame()
@@ -754,6 +794,7 @@ class DebugWorkbenchTab(QWidget):
             self.breakpoint_table.setCellWidget(row, 4, remove_button)
         self.breakpoint_table.blockSignals(False)
         self._breakpoint_table_syncing = False
+        self._refresh_breakpoint_quick_editor()
 
     def _on_search_changed(self) -> None:
         self._active_search_line = None
@@ -802,6 +843,9 @@ class DebugWorkbenchTab(QWidget):
         self._load_source(breakpoint.path)
         self._scroll_editor_to_line(breakpoint.line)
 
+    def _on_breakpoint_table_current_changed(self, _current_row: int, _current_column: int, _previous_row: int, _previous_column: int) -> None:
+        self._refresh_breakpoint_quick_editor()
+
     def _on_breakpoint_table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._breakpoint_table_syncing:
             return
@@ -825,6 +869,71 @@ class DebugWorkbenchTab(QWidget):
         if not self._breakpoints.remove(path, line):
             return
         self._refresh_breakpoint_views()
+
+    def _selected_breakpoint(self):
+        row = self.breakpoint_table.currentRow() if hasattr(self, "breakpoint_table") else -1
+        if not (0 <= int(row) < len(self._breakpoint_rows)):
+            return None
+        return self._breakpoint_rows[int(row)]
+
+    def _refresh_breakpoint_quick_editor(self) -> None:
+        if not hasattr(self, "breakpoint_editor_label"):
+            return
+        breakpoint = self._selected_breakpoint()
+        enabled = breakpoint is not None
+        self._breakpoint_quick_syncing = True
+        if breakpoint is None:
+            self.breakpoint_editor_label.setText("未选择断点")
+            self.breakpoint_editor_enabled.setChecked(False)
+            self.breakpoint_editor_enabled.setText("启用")
+            self.breakpoint_editor_condition.setText("")
+        else:
+            self.breakpoint_editor_label.setText(f"{breakpoint.path.name}:{breakpoint.line}")
+            self.breakpoint_editor_enabled.setChecked(breakpoint.enabled)
+            self.breakpoint_editor_enabled.setText("启用" if breakpoint.enabled else "停用")
+            self.breakpoint_editor_condition.setText(breakpoint.condition)
+        self.breakpoint_editor_enabled.setEnabled(enabled)
+        self.breakpoint_editor_condition.setEnabled(enabled)
+        self.breakpoint_editor_clear.setEnabled(enabled)
+        self.breakpoint_editor_delete.setEnabled(enabled)
+        self._breakpoint_quick_syncing = False
+
+    def _on_breakpoint_quick_enabled_toggled(self, checked: bool) -> None:
+        self.breakpoint_editor_enabled.setText("启用" if checked else "停用")
+        if self._breakpoint_quick_syncing:
+            return
+        breakpoint = self._selected_breakpoint()
+        if breakpoint is None:
+            return
+        try:
+            self._breakpoints.set_enabled(breakpoint.path, breakpoint.line, bool(checked))
+        except KeyError:
+            return
+        self._refresh_breakpoint_views()
+
+    def _apply_breakpoint_quick_condition(self) -> None:
+        if self._breakpoint_quick_syncing:
+            return
+        breakpoint = self._selected_breakpoint()
+        if breakpoint is None:
+            return
+        try:
+            self._breakpoints.set_condition(breakpoint.path, breakpoint.line, self.breakpoint_editor_condition.text().strip())
+        except KeyError:
+            return
+        self._refresh_breakpoint_views()
+
+    def _clear_breakpoint_quick_condition(self) -> None:
+        if not self.breakpoint_editor_condition.isEnabled():
+            return
+        self.breakpoint_editor_condition.setText("")
+        self._apply_breakpoint_quick_condition()
+
+    def _remove_selected_breakpoint(self) -> None:
+        breakpoint = self._selected_breakpoint()
+        if breakpoint is None:
+            return
+        self._remove_breakpoint(breakpoint.path, breakpoint.line)
 
     def _scroll_editor_to_line(self, line: int) -> None:
         block = self.editor.document().findBlockByNumber(max(0, int(line) - 1))
@@ -1219,6 +1328,17 @@ class DebugWorkbenchTab(QWidget):
                 border: 1px solid #d2deea;
                 border-radius: 5px;
             }
+            QFrame#debugBreakpointEditor {
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
+            QLabel#debugBreakpointEditorLabel {
+                color: #475569;
+                font-size: 9pt;
+                font-weight: 600;
+                min-width: 86px;
+            }
             QComboBox#debugCombo, QLineEdit#debugSearch {
                 background: #f8fbff;
                 border: 1px solid #d2deea;
@@ -1233,6 +1353,22 @@ class DebugWorkbenchTab(QWidget):
             QComboBox#debugCombo:focus, QLineEdit#debugSearch:focus {
                 border-color: #2563eb;
                 background: #ffffff;
+            }
+            QLineEdit#debugBreakpointConditionEdit {
+                background: #ffffff;
+                border: 1px solid #d2deea;
+                border-radius: 6px;
+                padding: 4px 7px;
+                color: #0f172a;
+                selection-background-color: #2563eb;
+                selection-color: white;
+            }
+            QLineEdit#debugBreakpointConditionEdit:focus {
+                border-color: #2563eb;
+            }
+            QLineEdit#debugBreakpointConditionEdit:disabled {
+                background: #f3f6fa;
+                color: #94a3b8;
             }
             QPushButton#debugPrimaryButton {
                 min-height: 34px;
@@ -1281,6 +1417,51 @@ class DebugWorkbenchTab(QWidget):
                 color: #1d4ed8;
             }
             QPushButton#debugSearchNavButton:disabled {
+                background: #f3f6fa;
+                border-color: #dce6f0;
+                color: #a8b3c0;
+            }
+            QPushButton#debugMiniButton, QPushButton#debugMiniToggleButton {
+                min-height: 24px;
+                border-radius: 6px;
+                padding: 2px 8px;
+                font-size: 9pt;
+                font-weight: 560;
+                background: #ffffff;
+                border: 1px solid #d2deea;
+                color: #334155;
+            }
+            QPushButton#debugMiniButton:hover, QPushButton#debugMiniToggleButton:hover {
+                background: #eef6ff;
+                border-color: #9fb8d4;
+                color: #1d4ed8;
+            }
+            QPushButton#debugMiniToggleButton:checked {
+                background: #eff6ff;
+                border-color: #93c5fd;
+                color: #1d4ed8;
+            }
+            QPushButton#debugMiniButton:disabled, QPushButton#debugMiniToggleButton:disabled {
+                background: #f3f6fa;
+                border-color: #dce6f0;
+                color: #a8b3c0;
+            }
+            QPushButton#debugMiniDangerButton {
+                min-height: 24px;
+                border-radius: 6px;
+                padding: 2px 8px;
+                font-size: 9pt;
+                font-weight: 560;
+                background: #fff5f5;
+                border: 1px solid #fecaca;
+                color: #b91c1c;
+            }
+            QPushButton#debugMiniDangerButton:hover {
+                background: #fee2e2;
+                border-color: #fca5a5;
+                color: #991b1b;
+            }
+            QPushButton#debugMiniDangerButton:disabled {
                 background: #f3f6fa;
                 border-color: #dce6f0;
                 color: #a8b3c0;

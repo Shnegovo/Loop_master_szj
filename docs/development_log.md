@@ -1365,3 +1365,64 @@ Make the debug workbench breakpoint table behave like a real debugger control su
   - keep row edits reflected in the code gutter instantly
   - continue preserving the compact, modern, VSCode-like layout
   - stay dry-run only for any future Keil controller execution
+
+## Stage 24 - Breakpoint Quick Editor Strip
+
+### Goal
+
+Make breakpoint editing feel less like spreadsheet editing and more like a modern debugger: selecting a breakpoint should expose a compact, focused control strip for enable state, condition editing, clearing, and removal.
+
+### Completed
+
+- Added a compact breakpoint quick editor below the local breakpoint table in `src/ui/debug_workbench_tab.py`.
+- The quick editor follows the currently selected breakpoint row and shows:
+  - file and line
+  - enable/disable toggle
+  - condition expression input
+  - clear-condition action
+  - delete action
+- Wired the quick editor to the existing `BreakpointStore` APIs:
+  - `set_enabled()`
+  - `set_condition()`
+  - `remove()`
+- Added signal guards so table rebuilds and quick-editor refreshes do not recurse.
+- Kept the existing table edit path and gutter toggle path working.
+- Kept the UI compact by adding a tool-strip style row instead of a separate properties panel.
+- Styled the quick editor to match the current light VSCode-like workbench theme.
+- Extended the debug workbench UI probe so it now exercises:
+  - selected-breakpoint quick editor state
+  - quick condition clear
+  - quick enable/disable toggle
+  - quick delete
+  - dry-run diff refresh after each quick-editor mutation
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The quick editor is intentionally local-only and dry-run-aware; it updates the same local breakpoint model that the future Keil sync controller will consume.
+- The source gutter remains add/remove focused; condition editing is now easier through the selected-row strip.
+
+### Next Target
+
+- Add source-side breakpoint affordances:
+  - make gutter-created breakpoints auto-select themselves in the table and quick editor
+  - add a lightweight condition-edit shortcut for the current source line
+  - keep source decorations, table selection, and dry-run diff preview synchronized
+  - continue no-hardware until a deliberately scoped UVSOCK controller/smoke stage
