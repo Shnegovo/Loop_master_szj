@@ -42,6 +42,8 @@ from src.core.debug_backend_registry import create_default_debug_backend_registr
 from src.core.debug_sources import (
     SourceManifest,
     source_manifest_from_compile_commands,
+    source_manifest_from_gdb_sources,
+    source_manifest_from_readelf_line_table_text,
     source_manifest_from_roots,
 )
 from src.core.lifecycle import ShutdownSequence
@@ -438,6 +440,11 @@ class MainWindow(QMainWindow):
         self._debug_source_preview_manifest: SourceManifest | None = None
         self._debug_command_preview_suspended = False
         self._debug_source_provider_key = "auto"
+        self._debug_compile_commands_path: Path | None = None
+        self._debug_manual_source_roots: tuple[Path, ...] = ()
+        self._debug_gdb_sources_text = ""
+        self._debug_dwarf_line_table_text = ""
+        self._debug_dwarf_text_elf_path: Path | None = None
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -466,6 +473,7 @@ class MainWindow(QMainWindow):
                     for name, color in saved_colors.items()
                     if QColor(str(color)).isValid()
                 }
+            self._restore_debug_source_config(cfg)
         self._debug_backend_registry = create_default_debug_backend_registry(
             keil_root=self._keil_root,
             uvsock_port=self._debug_uvsock_port,
@@ -1056,6 +1064,19 @@ class MainWindow(QMainWindow):
         dialog.setOption(QFileDialog.DontUseNativeDialog, True)
         dialog.setFont(QFont("Microsoft YaHei UI", 10))
         dialog.setLabelText(QFileDialog.Accept, "打开")
+        dialog.setLabelText(QFileDialog.Reject, "取消")
+        if dialog.exec() == QFileDialog.Accepted:
+            selected = dialog.selectedFiles()
+            return selected[0] if selected else ""
+        return ""
+
+    def _choose_existing_directory(self, title: str) -> str:
+        dialog = QFileDialog(self, title)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setFont(QFont("Microsoft YaHei UI", 10))
+        dialog.setLabelText(QFileDialog.Accept, "选择")
         dialog.setLabelText(QFileDialog.Reject, "取消")
         if dialog.exec() == QFileDialog.Accepted:
             selected = dialog.selectedFiles()
@@ -1999,6 +2020,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
         self._tab_debug_workbench.backendSelectionChanged.connect(self._on_debug_backend_selected)
         self._tab_debug_workbench.sourceProviderSelectionChanged.connect(self._on_debug_source_provider_selected)
+        self._tab_debug_workbench.sourceProviderConfigureRequested.connect(self._on_debug_source_provider_configure_requested)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
@@ -2083,6 +2105,111 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(f"源码来源：{self._debug_source_provider_label(provider_key)}")
         self._refresh_hero()
 
+    def _on_debug_source_provider_configure_requested(self, provider_key: str):
+        provider_key = str(provider_key or self._debug_source_provider_key or "auto")
+        if provider_key == "auto":
+            provider_key = self._debug_source_provider_key
+        if provider_key == "compile_commands":
+            path = self._choose_open_file("选择 compile_commands.json", "编译数据库 (compile_commands.json);;JSON 文件 (*.json);;所有文件 (*.*)")
+            if not path:
+                return
+            self.configure_debug_compile_commands(path)
+            return
+        if provider_key == "manual_roots":
+            root = self._choose_existing_directory("选择源码根目录")
+            if not root:
+                return
+            self.configure_debug_manual_source_roots((root,))
+            return
+        if provider_key == "gdb_text":
+            text, ok = QInputDialog.getMultiLineText(
+                self,
+                "导入 GDB info sources",
+                "粘贴已捕获的 GDB info sources 输出：",
+                self._debug_gdb_sources_text,
+            )
+            if not ok:
+                return
+            self.configure_debug_gdb_sources_text(text)
+            return
+        if provider_key == "elf_dwarf":
+            text, ok = QInputDialog.getMultiLineText(
+                self,
+                "导入 readelf -wl 文本",
+                "粘贴已捕获的 readelf -wl 行号表文本（不会自动启动 readelf）：",
+                self._debug_dwarf_line_table_text,
+            )
+            if not ok:
+                return
+            self.configure_debug_dwarf_line_table_text(text)
+            return
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("当前源码来源不需要额外配置。")
+
+    def configure_debug_compile_commands(self, path: str | Path) -> SourceManifest:
+        self._debug_compile_commands_path = Path(path).expanduser()
+        self._debug_source_provider_key = "compile_commands"
+        manifest = self._sync_configured_debug_source_provider()
+        self._refresh_debug_source_provider_options()
+        self._save_config()
+        return manifest
+
+    def configure_debug_manual_source_roots(self, roots: tuple[str | Path, ...] | list[str | Path]) -> SourceManifest:
+        self._debug_manual_source_roots = tuple(Path(root).expanduser() for root in roots)
+        self._debug_source_provider_key = "manual_roots"
+        manifest = self._sync_configured_debug_source_provider()
+        self._refresh_debug_source_provider_options()
+        self._save_config()
+        return manifest
+
+    def configure_debug_gdb_sources_text(
+        self,
+        text: str,
+        *,
+        root: str | Path | None = None,
+    ) -> SourceManifest:
+        self._debug_gdb_sources_text = str(text or "")
+        if root is not None:
+            self._debug_manual_source_roots = (Path(root).expanduser(),)
+        self._debug_source_provider_key = "gdb_text"
+        manifest = self._sync_configured_debug_source_provider()
+        self._refresh_debug_source_provider_options()
+        self._save_config()
+        return manifest
+
+    def configure_debug_dwarf_line_table_text(
+        self,
+        text: str,
+        *,
+        elf_path: str | Path | None = None,
+        source_roots: tuple[str | Path, ...] | list[str | Path] | None = None,
+    ) -> SourceManifest:
+        self._debug_dwarf_line_table_text = str(text or "")
+        if elf_path is not None:
+            self._debug_dwarf_text_elf_path = Path(elf_path).expanduser()
+        elif self._elf_path is not None:
+            self._debug_dwarf_text_elf_path = self._elf_path
+        if source_roots is not None:
+            self._debug_manual_source_roots = tuple(Path(root).expanduser() for root in source_roots)
+        self._debug_source_provider_key = "elf_dwarf"
+        manifest = self._sync_configured_debug_source_provider()
+        self._refresh_debug_source_provider_options()
+        self._save_config()
+        return manifest
+
+    def _sync_configured_debug_source_provider(self) -> SourceManifest:
+        self._sync_debug_source_manifest_preview()
+        self._sync_debug_command_preview()
+        self._refresh_hero()
+        manifest = self._debug_source_preview_manifest or self._empty_debug_source_manifest(
+            self._debug_backend_display_name(),
+            "源码配置未生成有效清单",
+            (),
+        )
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"源码来源：{self._debug_source_provider_label(self._debug_source_provider_key)}")
+        return manifest
+
     def _sync_debug_source_manifest_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
@@ -2093,7 +2220,7 @@ class MainWindow(QMainWindow):
             return
         manifest = self._build_debug_source_preview_manifest()
         self._debug_source_preview_manifest = manifest
-        tab.set_source_manifest(manifest, mode=self._debug_backend_kind.value)
+        tab.set_source_manifest(manifest, mode=manifest.provider)
 
     def _build_debug_source_preview_manifest(self) -> SourceManifest:
         provider_name = self._debug_backend_display_name()
@@ -2115,13 +2242,17 @@ class MainWindow(QMainWindow):
         if provider_key == "manual_roots":
             return self._build_manual_roots_source_preview(provider_name, diagnostics)
         if provider_key == "elf_dwarf":
+            if self._debug_dwarf_line_table_text.strip():
+                return self._build_dwarf_text_source_preview(provider_name, diagnostics)
             return self._empty_debug_source_manifest(
                 provider_name,
-                "ELF/DWARF 需要显式加载，当前不会在切换后端时自动运行 readelf",
+                "ELF/DWARF 需要显式导入 readelf -wl 文本，当前不会自动运行 readelf",
                 diagnostics,
                 provider="elf_dwarf_pending",
             )
         if provider_key == "gdb_text":
+            if self._debug_gdb_sources_text.strip():
+                return self._build_gdb_text_source_preview(provider_name, diagnostics)
             return self._empty_debug_source_manifest(
                 provider_name,
                 "GDB info sources 文本导入尚未接入",
@@ -2172,7 +2303,7 @@ class MainWindow(QMainWindow):
         provider_name: str,
         diagnostics: list[tuple[str, str]],
     ) -> SourceManifest:
-        compile_commands = self._find_compile_commands_file()
+        compile_commands = self._debug_compile_commands_path or self._find_compile_commands_file()
         if compile_commands is not None:
             try:
                 return source_manifest_from_compile_commands(
@@ -2223,6 +2354,80 @@ class MainWindow(QMainWindow):
             metadata={"backend": self._debug_backend_kind.value, "preview": "manual_roots"},
         )
 
+    def _build_gdb_text_source_preview(
+        self,
+        provider_name: str,
+        diagnostics: list[tuple[str, str]],
+    ) -> SourceManifest:
+        root = self._debug_source_roots()[0] if self._debug_source_roots() else None
+        try:
+            manifest = source_manifest_from_gdb_sources(
+                self._debug_gdb_sources_text,
+                root=root,
+                name=f"{provider_name} GDB 文本预览",
+            )
+        except Exception as exc:
+            return self._empty_debug_source_manifest(
+                provider_name,
+                f"GDB info sources 文本解析失败：{exc}",
+                diagnostics,
+                provider="gdb_text_error",
+            )
+        return SourceManifest(
+            name=manifest.name,
+            root=manifest.root,
+            provider=manifest.provider,
+            entries=manifest.entries,
+            target_name=manifest.target_name,
+            project_path=manifest.project_path,
+            diagnostics=manifest.diagnostics + (
+                ("输入方式", "显式 GDB 文本"),
+                ("安全边界", "只解析已粘贴文本，不启动 GDB/OpenOCD/pyOCD"),
+            ),
+            metadata=dict(manifest.metadata or {}) | {
+                "backend": self._debug_backend_kind.value,
+                "preview": "gdb_text",
+            },
+        )
+
+    def _build_dwarf_text_source_preview(
+        self,
+        provider_name: str,
+        diagnostics: list[tuple[str, str]],
+    ) -> SourceManifest:
+        elf_path = self._debug_dwarf_text_elf_path or self._elf_path
+        roots = self._debug_source_roots()
+        try:
+            manifest = source_manifest_from_readelf_line_table_text(
+                self._debug_dwarf_line_table_text,
+                elf_path=elf_path,
+                source_roots=roots,
+                name=f"{provider_name} DWARF 文本预览",
+            )
+        except Exception as exc:
+            return self._empty_debug_source_manifest(
+                provider_name,
+                f"readelf -wl 文本解析失败：{exc}",
+                diagnostics,
+                provider="elf_dwarf_error",
+            )
+        return SourceManifest(
+            name=manifest.name,
+            root=manifest.root,
+            provider=manifest.provider,
+            entries=manifest.entries,
+            target_name=manifest.target_name,
+            project_path=manifest.project_path,
+            diagnostics=manifest.diagnostics + (
+                ("输入方式", "显式 readelf -wl 文本"),
+                ("安全边界", "只解析已导入文本，不自动运行 readelf"),
+            ),
+            metadata=dict(manifest.metadata or {}) | {
+                "backend": self._debug_backend_kind.value,
+                "preview": "elf_dwarf_text",
+            },
+        )
+
     def _empty_debug_source_manifest(
         self,
         provider_name: str,
@@ -2261,6 +2466,9 @@ class MainWindow(QMainWindow):
 
     def _debug_source_roots(self) -> tuple[Path, ...]:
         roots: list[Path] = []
+        for root in self._debug_manual_source_roots:
+            if root not in roots:
+                roots.append(root)
         if self._elf_path is not None:
             for candidate in (
                 self._elf_path.parent,
@@ -4727,6 +4935,7 @@ class MainWindow(QMainWindow):
             "hidden_displayed_variables": sorted(self._hidden_displayed_variables),
             "monitored_variables": remembered_variables,
             "keil_root": str(getattr(self, "_keil_root", Path("D:\\Keil"))),
+            "debug_sources": self._debug_source_config_record(),
             "serial_port": self._tab_serial.port_combo.currentData() if hasattr(self, "_tab_serial") else "",
             "serial_baudrate": int(self._tab_serial.baud_combo.currentText()) if hasattr(self, "_tab_serial") else 115200,
             "serial_protocol": self._tab_serial.protocol_combo.currentText() if hasattr(self, "_tab_serial") else "FireWater CSV",
@@ -4736,6 +4945,35 @@ class MainWindow(QMainWindow):
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _restore_debug_source_config(self, cfg: dict):
+        debug_sources = cfg.get("debug_sources", {}) if isinstance(cfg, dict) else {}
+        if not isinstance(debug_sources, dict):
+            return
+        provider_key = str(debug_sources.get("provider_key", "") or "")
+        if provider_key in {"auto", "keil", "compile_commands", "manual_roots", "elf_dwarf", "gdb_text"}:
+            self._debug_source_provider_key = provider_key
+        compile_path = str(debug_sources.get("compile_commands_path", "") or "")
+        if compile_path:
+            self._debug_compile_commands_path = Path(compile_path)
+        roots = debug_sources.get("manual_source_roots", ())
+        if isinstance(roots, (list, tuple)):
+            self._debug_manual_source_roots = tuple(Path(str(root)) for root in roots if str(root or ""))
+        self._debug_gdb_sources_text = str(debug_sources.get("gdb_sources_text", "") or "")
+        self._debug_dwarf_line_table_text = str(debug_sources.get("dwarf_line_table_text", "") or "")
+        dwarf_elf = str(debug_sources.get("dwarf_elf_path", "") or "")
+        if dwarf_elf:
+            self._debug_dwarf_text_elf_path = Path(dwarf_elf)
+
+    def _debug_source_config_record(self) -> dict[str, object]:
+        return {
+            "provider_key": self._debug_source_provider_key,
+            "compile_commands_path": str(self._debug_compile_commands_path or ""),
+            "manual_source_roots": [str(root) for root in self._debug_manual_source_roots],
+            "gdb_sources_text": self._debug_gdb_sources_text,
+            "dwarf_line_table_text": self._debug_dwarf_line_table_text,
+            "dwarf_elf_path": str(self._debug_dwarf_text_elf_path or ""),
+        }
 
     def _restore_selected_items(self, parent: QTreeWidgetItem, saved: list[str]):
         for i in range(parent.childCount()):

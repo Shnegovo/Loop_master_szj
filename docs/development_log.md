@@ -2707,3 +2707,57 @@ Add data-only backend lifecycle metadata so Keil, OpenOCD/GDB, pyOCD and offline
   - show missing-source diagnostics and path-mapping hints
   - keep all providers backend-neutral so Keil, OpenOCD/GDB and pyOCD share the same `SourceManifest` route
   - later surface lifecycle metadata in diagnostics without changing backend selector tuple shape
+
+## Milestone 30 Update - Explicit Source Provider Configuration
+
+### Goal
+
+Let the Debug Workbench accept explicit source-provider inputs without launching external tools, so Keil, OpenOCD/GDB, pyOCD and offline replay can share the same source tree and missing-path diagnostics.
+
+### Completed
+
+- Added a compact `配置` button next to the source-provider selector.
+- Added explicit configuration methods for:
+  - `compile_commands.json`
+  - manual source roots
+  - pasted GDB `info sources` text
+  - pasted `readelf -wl` DWARF line-table text
+- Kept ELF/DWARF safe: the UI parses already captured text and still does not auto-run `readelf`.
+- GDB text and compile commands now report missing source counts so the existing source chip can show `缺失 N`.
+- Manual source roots now report invalid-root and truncation diagnostics.
+- GDB relative paths can now resolve against an explicit source root instead of the current working directory.
+- Fixed a UI state bug where an external source manifest on the Keil backend could be silently restored to the Keil project manifest by target-combo refresh events.
+- Persisted debug source-provider configuration in `loopmaster.json`.
+- Added `tools\ui_debug_source_provider_probe.py` for a focused no-dialog/no-process UI regression test.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py src\ui\gui.py src\ui\debug_workbench_tab.py tools\debug_source_manifest_probe.py tools\ui_debug_source_provider_probe.py tools\ui_debug_workbench_probe.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir %TEMP%\loopmaster-ui-debug-workbench-source-config-rerun --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\ui_close_process_probe.py --entry main.py --exit-timeout 10`
+  - PASS, close-to-exit about `376.6ms`.
+
+### Notes
+
+- This stage does not launch Keil, OpenOCD, pyOCD, GDB or `readelf`.
+- This stage does not access ST-Link, serial hardware or the target MCU.
+- It is a source-provider configuration slice, not a full path-mapping rule editor yet.
+- The source tree already disables missing files and appends `(缺失)`, so users can see which files need mapping before live debug is enabled.
+
+### Next Target
+
+- Add a lightweight path-mapping hint/action layer:
+  - show the most common missing directories from DWARF/GDB/imported manifests
+  - let the user remap one missing prefix to a local source root
+  - keep remapping data-only and previewable before any live backend work
+  - keep the new focused source-provider probe separate from the larger Debug Workbench visual probe

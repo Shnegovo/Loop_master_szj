@@ -120,17 +120,23 @@ def source_entries_from_paths(
     for item in paths:
         path = Path(item).expanduser()
         raw_path = str(item)
-        try:
-            resolved = path.resolve()
-        except OSError:
-            resolved = path
         group_name = group
-        resolved_from = "absolute" if path.is_absolute() else "unresolved"
+        if root_path is not None and not path.is_absolute():
+            try:
+                resolved = (root_path / path).resolve()
+            except OSError:
+                resolved = root_path / path
+            resolved_from = "root_relative"
+        else:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            resolved_from = "absolute" if path.is_absolute() else "unresolved"
         if root_path is not None:
             try:
                 relative = resolved.relative_to(root_path)
                 group_name = str(relative.parent) if str(relative.parent) != "." else group
-                resolved_from = "root_relative" if not path.is_absolute() else "absolute"
             except ValueError:
                 group_name = group
         entries.append(
@@ -158,29 +164,38 @@ def source_manifest_from_roots(
 ) -> SourceManifest:
     root_paths = tuple(Path(root).expanduser().resolve() for root in roots)
     entries: list[SourceEntry] = []
+    invalid_roots = sum(1 for root in root_paths if not root.exists())
+    truncated = False
     for root in root_paths:
         if not root.exists():
             continue
         if root.is_file():
             if _is_source_path(root):
+                if len(entries) >= max_files:
+                    truncated = True
+                    break
                 entries.extend(source_entries_from_paths((root,), root=root.parent, origin=provider))
             continue
         for path in sorted(root.rglob("*")):
-            if len(entries) >= max_files:
-                break
             if path.is_file() and _is_source_path(path):
+                if len(entries) >= max_files:
+                    truncated = True
+                    break
                 entries.extend(source_entries_from_paths((path,), root=root, origin=provider))
         if len(entries) >= max_files:
+            truncated = True
             break
+    entries = entries[:max_files]
     return SourceManifest(
         name=name,
         root=root_paths[0] if root_paths else None,
         provider=provider,
-        entries=tuple(entries[:max_files]),
+        entries=tuple(entries),
         diagnostics=(
             ("输入根", str(len(root_paths))),
-            ("源码文件", str(min(len(entries), max_files))),
-            ("截断", "是" if len(entries) > max_files else "否"),
+            ("无效根", str(invalid_roots)),
+            ("源码文件", str(len(entries))),
+            ("截断", "是" if truncated else "否"),
         ),
         metadata={"max_files": str(max_files)},
     )
@@ -193,15 +208,20 @@ def source_manifest_from_gdb_sources(
     name: str = "GDB Sources",
     max_files: int = 5000,
 ) -> SourceManifest:
-    paths = _paths_from_gdb_info_sources(text)
+    paths, filtered, duplicate = _parse_gdb_info_sources(text)
+    entries = source_entries_from_paths(paths[:max_files], root=root, origin="gdb_info_sources")
+    missing = sum(1 for entry in entries if not entry.exists)
     return SourceManifest(
         name=name,
         root=Path(root).expanduser().resolve() if root else None,
         provider="gdb_info_sources",
-        entries=source_entries_from_paths(paths[:max_files], root=root, origin="gdb_info_sources"),
+        entries=entries,
         diagnostics=(
             ("解析路径", str(len(paths))),
             ("源码文件", str(min(len(paths), max_files))),
+            ("过滤", str(filtered)),
+            ("重复", str(duplicate)),
+            ("缺失", str(missing)),
             ("截断", "是" if len(paths) > max_files else "否"),
         ),
         metadata={"max_files": str(max_files)},
@@ -262,6 +282,7 @@ def source_manifest_from_compile_commands(
         )
         for entry, (_path, raw_path, _directory) in zip(entries, paths)
     )
+    missing = sum(1 for entry in entries if not entry.exists)
     return SourceManifest(
         name=name,
         root=compile_path.parent,
@@ -273,6 +294,7 @@ def source_manifest_from_compile_commands(
             ("源码文件", str(len(entries))),
             ("过滤", str(filtered)),
             ("重复", str(duplicate)),
+            ("缺失", str(missing)),
             ("截断", "是" if len(paths) >= max_files and len(data) > max_files else "否"),
         ),
         metadata={"max_files": str(max_files)},
@@ -423,19 +445,28 @@ def _is_source_path(path: Path) -> bool:
 
 
 def _paths_from_gdb_info_sources(text: str) -> tuple[Path, ...]:
+    paths, _filtered, _duplicate = _parse_gdb_info_sources(text)
+    return paths
+
+
+def _parse_gdb_info_sources(text: str) -> tuple[tuple[Path, ...], int, int]:
     paths: list[Path] = []
     seen: set[str] = set()
+    filtered = 0
+    duplicate = 0
     for raw_line in str(text).splitlines():
         for token in _candidate_path_tokens(raw_line):
             path = Path(token)
             if not _is_source_path(path):
+                filtered += 1
                 continue
             key = str(path).lower()
             if key in seen:
+                duplicate += 1
                 continue
             seen.add(key)
             paths.append(path)
-    return tuple(paths)
+    return tuple(paths), filtered, duplicate
 
 
 def _candidate_path_tokens(line: str) -> tuple[str, ...]:

@@ -289,6 +289,7 @@ class DebugWorkbenchTab(QWidget):
     debugActionRequested = Signal(str)
     backendSelectionChanged = Signal(str)
     sourceProviderSelectionChanged = Signal(str)
+    sourceProviderConfigureRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -430,6 +431,7 @@ class DebugWorkbenchTab(QWidget):
             self._refresh_diagnostics_table()
             self._refresh_summary()
             return False
+        self._source_manifest = source_manifest_from_keil_project(self._project)
         self._rebuild_source_tree()
         self._load_first_existing_source()
         self._refresh_diagnostics_table()
@@ -721,6 +723,12 @@ class DebugWorkbenchTab(QWidget):
         self.source_provider_combo.setToolTip("选择源码来源预览")
         self.source_provider_combo.currentIndexChanged.connect(self._on_source_provider_combo_changed)
         source_header.addWidget(self.source_provider_combo)
+        self.source_provider_configure_button = QPushButton("配置")
+        self.source_provider_configure_button.setObjectName("debugMiniButton")
+        self.source_provider_configure_button.setCursor(Qt.PointingHandCursor)
+        self.source_provider_configure_button.setToolTip("配置当前源码来源")
+        self.source_provider_configure_button.clicked.connect(self._on_source_provider_configure_clicked)
+        source_header.addWidget(self.source_provider_configure_button)
         layout.addLayout(source_header)
 
         layout.addWidget(self._build_source_manifest_strip())
@@ -797,6 +805,10 @@ class DebugWorkbenchTab(QWidget):
         key = self.source_provider_combo.currentData()
         if key:
             self.sourceProviderSelectionChanged.emit(str(key))
+
+    def _on_source_provider_configure_clicked(self) -> None:
+        key = self.source_provider_combo.currentData() if hasattr(self, "source_provider_combo") else ""
+        self.sourceProviderConfigureRequested.emit(str(key or "auto"))
 
     def _build_source_manifest_strip(self) -> QFrame:
         strip = QFrame()

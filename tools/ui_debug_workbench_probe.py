@@ -150,6 +150,7 @@ def _write_fixture(root: Path) -> Path:
             [
                 {"directory": str(root), "command": "cc -c Core/Src/main.c", "file": "Core/Src/main.c"},
                 {"directory": str(root), "command": "cc -c Core/Src/pid.c", "file": "Core/Src/pid.c"},
+                {"directory": str(root), "command": "cc -c Core/Src/missing.c", "file": "Core/Src/missing.c"},
                 {"directory": str(root), "command": "cc -c Core/Inc/pid.h", "file": "Core/Inc/pid.h"},
             ],
             ensure_ascii=False,
@@ -370,6 +371,24 @@ def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
     return path
 
 
+def _diagnostics(tab) -> dict[str, str]:
+    return {
+        tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+        for row in range(tab.diagnostics_table.rowCount())
+        if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+    }
+
+
+def _source_tree_texts(tab) -> list[str]:
+    texts: list[str] = []
+    for index in range(tab.source_tree.topLevelItemCount()):
+        group = tab.source_tree.topLevelItem(index)
+        texts.append(group.text(0))
+        for child_index in range(group.childCount()):
+            texts.append(group.child(child_index).text(0))
+    return texts
+
+
 def run(output_dir: Path, width: int, height: int) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication([])
@@ -438,11 +457,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"OpenOCD summary did not show source preview: {tab.summary_label.text()!r}")
                 if "preview" not in tab.source_provider_state_label.text().lower() and "预览" not in tab.summary_label.text():
                     issues.append(f"OpenOCD source provider chip did not reflect preview: {tab.source_provider_state_label.text()!r}")
-                diag = {
-                    tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
-                    for row in range(tab.diagnostics_table.rowCount())
-                    if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
-                }
+                diag = _diagnostics(tab)
                 if diag.get("源码文件") != str(source_manifest.source_count):
                     issues.append(f"OpenOCD source diagnostics missing source rows: {diag!r}")
                 if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
@@ -456,17 +471,17 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     compile_manifest = getattr(tab, "source_manifest", None)
                     if compile_manifest is None or compile_manifest.provider != "compile_commands":
                         issues.append(f"compile_commands source preview mismatch: {compile_manifest!r}")
-                    elif compile_manifest.source_count != 3:
+                    elif compile_manifest.source_count != 4:
                         issues.append(f"compile_commands source count mismatch: {compile_manifest.source_count}")
                     if "编译数据库" not in tab.source_provider_state_label.text():
                         issues.append(f"compile_commands source chip mismatch: {tab.source_provider_state_label.text()!r}")
-                    diag = {
-                        tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
-                        for row in range(tab.diagnostics_table.rowCount())
-                        if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
-                    }
-                    if diag.get("源码来源") != "编译数据库" or diag.get("源码文件") != "3":
+                    diag = _diagnostics(tab)
+                    if diag.get("源码来源") != "编译数据库" or diag.get("源码文件") != "4" or diag.get("源码缺失") != "1":
                         issues.append(f"compile_commands source diagnostics mismatch: {diag!r}")
+                    if "缺失 1" not in tab.source_provider_missing_label.text():
+                        issues.append(f"compile_commands missing chip mismatch: {tab.source_provider_missing_label.text()!r}")
+                    if not any("(缺失)" in text for text in _source_tree_texts(tab)):
+                        issues.append(f"compile_commands source tree should show missing node: {_source_tree_texts(tab)!r}")
                 roots_index = tab.source_provider_combo.findData("manual_roots")
                 if roots_index < 0:
                     issues.append("source provider selector missing manual_roots data")
@@ -480,6 +495,45 @@ def run(output_dir: Path, width: int, height: int) -> int:
                         issues.append(f"manual roots source count mismatch: {roots_manifest.source_count}")
                     if "源码根" not in tab.source_provider_state_label.text() and "roots preview" not in tab.source_provider_state_label.text():
                         issues.append(f"manual roots source chip mismatch: {tab.source_provider_state_label.text()!r}")
+                gdb_text = (
+                    "Source files for which symbols have been read in:\n\n"
+                    "Core/Src/main.c, Core/Src/missing_gdb.c, Core/Src/ignore.txt, Core/Src/main.c\n"
+                )
+                gdb_manifest = window.configure_debug_gdb_sources_text(gdb_text, root=project_path.parent.parent)
+                _pump(app, 0.15)
+                if gdb_manifest.provider != "gdb_info_sources" or gdb_manifest.source_count != 2:
+                    issues.append(f"explicit GDB text manifest mismatch: {gdb_manifest!r}")
+                diag = _diagnostics(tab)
+                if diag.get("源码来源") != "GDB 源码表" or diag.get("源码缺失") != "1" or diag.get("源码重复") != "1" or diag.get("源码过滤") != "1":
+                    issues.append(f"explicit GDB diagnostics mismatch: {diag!r}")
+                if "缺失 1" not in tab.source_provider_missing_label.text():
+                    issues.append(f"explicit GDB missing chip mismatch: {tab.source_provider_missing_label.text()!r}")
+                dwarf_text = f"""
+Raw dump of debug contents of section .debug_line:
+
+  The Directory Table:
+  0     {project_path.parent.parent}
+  1     Core/Src
+
+  The File Name Table:
+  Entry Dir Name
+  0     1   main.c
+  1     1   missing_dwarf.c
+  2     1   ignore.txt
+
+  Line Number Statements:
+"""
+                dwarf_manifest = window.configure_debug_dwarf_line_table_text(
+                    dwarf_text,
+                    elf_path=project_path.parent.parent / "build" / "DebugDemo.elf",
+                    source_roots=(project_path.parent.parent,),
+                )
+                _pump(app, 0.15)
+                if dwarf_manifest.provider != "elf_dwarf" or dwarf_manifest.source_count != 2:
+                    issues.append(f"explicit DWARF text manifest mismatch: {dwarf_manifest!r}")
+                diag = _diagnostics(tab)
+                if diag.get("源码来源") != "ELF/DWARF" or diag.get("源码缺失") != "1" or diag.get("源码过滤") != "1":
+                    issues.append(f"explicit DWARF diagnostics mismatch: {diag!r}")
                 auto_index = tab.source_provider_combo.findData("auto")
                 if auto_index >= 0:
                     tab.source_provider_combo.setCurrentIndex(auto_index)

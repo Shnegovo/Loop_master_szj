@@ -86,29 +86,38 @@ def main() -> int:
         _assert(path_entries[0].language == "c", "source path language mismatch")
         _assert(path_entries[1].language == "c-header", "header path language mismatch")
 
-        manual = source_manifest_from_roots((root / "Core",), name="Manual Core", max_files=2)
+        manual = source_manifest_from_roots((root / "Core", root / "missing-root"), name="Manual Core", max_files=2)
         _assert(manual.provider == "manual_roots", "manual manifest provider mismatch")
         _assert(manual.source_count == 2, f"manual manifest max_files mismatch: {manual.source_count}")
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in manual.entries), "manual manifest should ignore text files")
         _assert(all(entry.origin == "manual_roots" for entry in manual.entries), "manual entry origin mismatch")
-        _assert(dict(manual.diagnostics).get("截断") == "否", "manual diagnostics should report no truncation")
+        manual_diag = dict(manual.diagnostics)
+        _assert(manual_diag.get("无效根") == "1", f"manual diagnostics should count invalid roots: {manual_diag!r}")
+        _assert(manual_diag.get("截断") == "是", f"manual diagnostics should report truncation: {manual_diag!r}")
         manual_record = manual.to_record()
         json.dumps(manual_record, ensure_ascii=False, sort_keys=True)
+        manual_file = source_manifest_from_roots((src_dir / "main.c",), name="Manual File", max_files=10)
+        _assert(manual_file.source_count == 1 and manual_file.entries[0].name == "main.c", "manual roots should accept a single source file")
 
         gdb_text = f"""
 Source files for which symbols have been read in:
 
-{src_dir / 'main.c'}, {src_dir / 'pid.cpp'}, {src_dir / 'ignore.txt'}
+Core/Src/main.c, {src_dir / 'pid.cpp'}, Core/Src/ignore.txt
 Source files for which symbols will be read in on demand:
 
-{inc_dir / 'pid.h'}, {src_dir / 'main.c'}
+{inc_dir / 'pid.h'}, Core/Src/main.c, Core/Src/missing.c
 """
-        gdb_manifest = source_manifest_from_gdb_sources(gdb_text, root=root, max_files=3)
+        gdb_manifest = source_manifest_from_gdb_sources(gdb_text, root=root, max_files=10)
         _assert(gdb_manifest.provider == "gdb_info_sources", "GDB manifest provider mismatch")
-        _assert(gdb_manifest.source_count == 3, f"GDB manifest should filter and dedupe sources: {gdb_manifest.source_count}")
-        _assert(len({entry.path for entry in gdb_manifest.entries}) == 3, "GDB manifest should dedupe paths")
+        _assert(gdb_manifest.source_count == 4, f"GDB manifest should filter and dedupe sources: {gdb_manifest.source_count}")
+        _assert(len({entry.path for entry in gdb_manifest.entries}) == 4, "GDB manifest should dedupe paths")
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in gdb_manifest.entries), "GDB manifest should ignore text files")
         _assert(all(entry.origin == "gdb_info_sources" for entry in gdb_manifest.entries), "GDB entry origin mismatch")
+        _assert(any(entry.resolved_from == "root_relative" for entry in gdb_manifest.entries), "GDB relative paths should resolve against root")
+        gdb_diag = dict(gdb_manifest.diagnostics)
+        _assert(gdb_diag.get("过滤") == "1", f"GDB diagnostics should count filtered paths: {gdb_diag!r}")
+        _assert(gdb_diag.get("重复") == "1", f"GDB diagnostics should count duplicates: {gdb_diag!r}")
+        _assert(gdb_diag.get("缺失") == "1", f"GDB diagnostics should count missing sources: {gdb_diag!r}")
         json.dumps(gdb_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         compile_commands_path = root / "compile_commands.json"
@@ -119,6 +128,7 @@ Source files for which symbols will be read in on demand:
                     {"directory": str(root), "command": "c++ -c Core/Src/pid.cpp", "file": "Core/Src/pid.cpp"},
                     {"directory": str(root), "command": "cc -c Core/Src/main.c", "file": "Core/Src/main.c"},
                     {"directory": str(root), "command": "cc -c Core/Src/ignore.txt", "file": "Core/Src/ignore.txt"},
+                    {"directory": str(root), "command": "cc -c Core/Src/missing.c", "file": "Core/Src/missing.c"},
                     {"directory": str(root), "command": "cc -c Core/Inc/pid.h", "file": str(inc_dir / "pid.h")},
                 ],
                 ensure_ascii=False,
@@ -127,11 +137,14 @@ Source files for which symbols will be read in on demand:
         )
         compile_manifest = source_manifest_from_compile_commands(compile_commands_path)
         _assert(compile_manifest.provider == "compile_commands", "compile_commands provider mismatch")
-        _assert(compile_manifest.source_count == 3, f"compile_commands should filter and dedupe: {compile_manifest.source_count}")
-        _assert(len({entry.path for entry in compile_manifest.entries}) == 3, "compile_commands should dedupe paths")
+        _assert(compile_manifest.source_count == 4, f"compile_commands should filter and dedupe: {compile_manifest.source_count}")
+        _assert(len({entry.path for entry in compile_manifest.entries}) == 4, "compile_commands should dedupe paths")
         _assert(all(entry.origin == "compile_commands" for entry in compile_manifest.entries), "compile_commands entry origin mismatch")
         _assert(any(entry.resolved_from == "directory_relative" for entry in compile_manifest.entries), "compile_commands should mark directory-relative paths")
-        _assert(dict(compile_manifest.diagnostics).get("重复") == "1", "compile_commands diagnostics should count duplicates")
+        compile_diag = dict(compile_manifest.diagnostics)
+        _assert(compile_diag.get("重复") == "1", f"compile_commands diagnostics should count duplicates: {compile_diag!r}")
+        _assert(compile_diag.get("过滤") == "1", f"compile_commands diagnostics should count filtered paths: {compile_diag!r}")
+        _assert(compile_diag.get("缺失") == "1", f"compile_commands diagnostics should count missing sources: {compile_diag!r}")
         json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         dwarf_text = f"""
