@@ -68,6 +68,12 @@ class _LineNumberArea(QWidget):
             self._editor.gutterLineClicked.emit(line)
         event.accept()
 
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        line = self._editor.line_at_y(event.position().toPoint().y())
+        tip = self._editor.gutter_tooltip_for_line(line)
+        self.setToolTip(tip)
+        super().mouseMoveEvent(event)
+
 
 class SourceCodeEditor(QPlainTextEdit):
     """A light code preview with a gutter for line numbers and decorations."""
@@ -117,6 +123,27 @@ class SourceCodeEditor(QPlainTextEdit):
         self._decorations_by_line = by_line
         self._highlight_current_line()
         self._line_number_area.update()
+        self._line_number_area.setToolTip("")
+
+    def gutter_tooltip_for_line(self, line: int) -> str:
+        if line <= 0:
+            return ""
+        decorations = self._decorations_by_line.get(int(line), [])
+        parts: list[str] = []
+        for decoration in decorations:
+            if decoration.kind == "breakpoint":
+                state = "启用" if decoration.enabled else "停用"
+                condition = f" · 条件: {decoration.label}" if decoration.label else ""
+                parts.append(f"{state}断点{condition}")
+            elif decoration.kind == "pc":
+                parts.append("当前 PC")
+            elif decoration.kind == "run":
+                parts.append("运行行")
+            elif decoration.kind == "search_active":
+                parts.append("当前搜索命中")
+            elif decoration.kind == "search":
+                parts.append("搜索命中")
+        return "；".join(parts)
 
     def line_at_y(self, y: int) -> int:
         block = self.firstVisibleBlock()
@@ -226,10 +253,26 @@ class SourceCodeEditor(QPlainTextEdit):
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(6, center_y - 5, 12, 10, 3, 3)
         if "breakpoint" in kinds:
-            enabled = all(decoration.enabled for decoration in decorations if decoration.kind == "breakpoint")
-            painter.setPen(QPen(QColor("#dc2626"), 2))
-            painter.setBrush(QColor("#ef4444") if enabled else QColor("#ffffff"))
+            breakpoint_decorations = [decoration for decoration in decorations if decoration.kind == "breakpoint"]
+            enabled = all(decoration.enabled for decoration in breakpoint_decorations)
+            conditional = any(bool(decoration.label) for decoration in breakpoint_decorations)
+            if enabled:
+                painter.setPen(QPen(QColor("#b91c1c"), 1.8))
+                painter.setBrush(QColor("#ef4444"))
+            else:
+                painter.setPen(QPen(QColor("#94a3b8"), 1.8, Qt.DashLine))
+                painter.setBrush(QColor("#ffffff"))
             painter.drawEllipse(6, center_y - 6, 12, 12)
+            if conditional:
+                painter.setPen(QPen(QColor("#ffffff" if enabled else "#dc2626"), 1.5))
+                painter.setBrush(QColor("#f59e0b") if enabled else QColor("#ffffff"))
+                diamond = QPolygon([
+                    QPoint(12, center_y - 4),
+                    QPoint(16, center_y),
+                    QPoint(12, center_y + 4),
+                    QPoint(8, center_y),
+                ])
+                painter.drawPolygon(diamond)
         if "search" in kinds:
             painter.setPen(QPen(QColor("#f59e0b"), 2))
             painter.drawLine(width - 7, top + 4, width - 7, bottom - 4)
@@ -1288,7 +1331,21 @@ class DebugWorkbenchTab(QWidget):
             else:
                 parts.append(f"{counts['search']} 个搜索命中")
         if counts.get("breakpoint"):
-            parts.append(f"{counts['breakpoint']} 个断点")
+            breakpoint_decorations = [decoration for decoration in decorations if decoration.kind == "breakpoint"]
+            enabled_count = sum(1 for decoration in breakpoint_decorations if decoration.enabled)
+            disabled_count = len(breakpoint_decorations) - enabled_count
+            conditional_count = sum(1 for decoration in breakpoint_decorations if decoration.label)
+            detail = f"{len(breakpoint_decorations)} 个断点"
+            subparts = []
+            if enabled_count:
+                subparts.append(f"启用 {enabled_count}")
+            if disabled_count:
+                subparts.append(f"停用 {disabled_count}")
+            if conditional_count:
+                subparts.append(f"条件 {conditional_count}")
+            if subparts:
+                detail += f"（{' / '.join(subparts)}）"
+            parts.append(detail)
         return " / ".join(parts) if parts else "未连接运行时"
 
     def _apply_style(self) -> None:

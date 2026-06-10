@@ -415,6 +415,17 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
         if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=1, noop=1)" not in tab.plan_guard_label.toolTip():
             issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
+        if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():
+            issues.append(f"marker label should summarize breakpoint states: {tab.marker_label.text()!r}")
+        tooltip3 = tab.editor.gutter_tooltip_for_line(3)
+        tooltip24 = tab.editor.gutter_tooltip_for_line(24)
+        tooltip48 = tab.editor.gutter_tooltip_for_line(48)
+        if "启用断点" not in tooltip3 or "条件: speed > 60" not in tooltip3:
+            issues.append(f"enabled conditional breakpoint tooltip mismatch: {tooltip3!r}")
+        if "停用断点" not in tooltip24 or "条件: speed_error < -12" not in tooltip24:
+            issues.append(f"disabled conditional breakpoint tooltip mismatch: {tooltip24!r}")
+        if tooltip48 != "启用断点":
+            issues.append(f"plain breakpoint tooltip mismatch: {tooltip48!r}")
         if tab.breakpoint_table.columnCount() != 5:
             issues.append(f"breakpoint table should expose edit columns: {tab.breakpoint_table.columnCount()}")
         if not hasattr(tab, "breakpoint_editor_condition"):
@@ -557,6 +568,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"breakpoint table row count={tab.breakpoint_table.rowCount()} expected=4")
         if "PC" not in tab.marker_label.text() or "运行行" not in tab.marker_label.text():
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
+        if "停用 0" in tab.marker_label.text():
+            issues.append(f"marker label should omit zero-state breakpoint groups: {tab.marker_label.text()!r}")
         if "目标已暂停" not in tab.status_text.text():
             issues.append(f"status text did not reflect paused synthetic state: {tab.status_text.text()!r}")
         enabled_actions = [

@@ -1486,3 +1486,67 @@ Make source-first breakpoint work feel natural: when a breakpoint is created fro
   - expose concise hover/tooltips for breakpoint line state
   - keep table, gutter, and quick editor state synchronized
   - continue dry-run/no-hardware until a scoped UVSOCK smoke stage is selected
+
+## Stage 26 - Source Gutter Breakpoint Readability
+
+### Goal
+
+Make source-side breakpoint state easier to read at a glance: enabled, disabled, and conditional breakpoints should not all look like the same red dot, and the current source status should summarize breakpoint state clearly.
+
+### Completed
+
+- Improved `SourceCodeEditor` gutter rendering in `src/ui/debug_workbench_tab.py`.
+- Enabled breakpoints remain filled red markers.
+- Disabled breakpoints now render as a hollow marker with muted dashed outline.
+- Conditional breakpoints now render an additional compact diamond marker inside the breakpoint dot.
+- Added gutter tooltip text through `gutter_tooltip_for_line()`:
+  - enabled breakpoint
+  - disabled breakpoint
+  - condition expression
+  - PC/run/search line state
+- Updated source marker text so the current file summarizes breakpoint state:
+  - total breakpoint count
+  - enabled count
+  - disabled count
+  - conditional count
+- Kept the existing breakpoint model and dry-run transaction semantics unchanged.
+- Extended the debug workbench UI probe to assert:
+  - marker label contains enabled/disabled/conditional state counts
+  - enabled conditional breakpoint tooltip is correct
+  - disabled conditional breakpoint tooltip is correct
+  - plain breakpoint tooltip is concise
+  - zero-count state groups are not shown
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The changes are presentation-only and consume the existing `LineDecoration` model.
+- Conditional breakpoint rendering is intentionally compact so the gutter does not become visually noisy.
+
+### Next Target
+
+- Add local breakpoint verification-state placeholders:
+  - show pending/verified/unverified status in the breakpoint table and gutter tooltip
+  - keep the state local and dry-run only for now
+  - prepare a clean UI path for future Keil breakpoint readback verification
