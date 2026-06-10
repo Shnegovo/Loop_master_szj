@@ -83,6 +83,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已加入手动 source root provider，可从普通源码目录生成 `SourceManifest`，并带文件数量上限，供后续 OpenOCD/GDB、pyOCD、离线回放复用。
 - 已加入 GDB `info sources` 文本 provider，可在不启动 GDB 的情况下把已捕获 source list 转成同一套 `SourceManifest`。
 - 已加入 `compile_commands.json` provider，可从 CMake/VSCode/CubeIDE 风格工程生成 `SourceManifest`，不调用编译器或外部工具。
+- `SourceManifest` 已加入来源/诊断字段：provider 原始路径、解析方式、compile directory、诊断计数和 metadata，为后续 DWARF/GDB 路径映射做准备。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级

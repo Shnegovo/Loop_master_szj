@@ -71,6 +71,8 @@ def main() -> int:
         _assert(manifest.provider == "keil", "Keil manifest provider mismatch")
         _assert(manifest.source_count == 2, "Keil manifest source count mismatch")
         _assert(manifest.tree.children[0].name == "App", "Keil manifest tree group mismatch")
+        _assert(manifest.entries[0].origin == "keil", "Keil entry origin mismatch")
+        _assert(manifest.entries[0].raw_path, "Keil entry should retain raw path")
         json.dumps(manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         path_entries = source_entries_from_paths(
@@ -87,6 +89,8 @@ def main() -> int:
         _assert(manual.provider == "manual_roots", "manual manifest provider mismatch")
         _assert(manual.source_count == 2, f"manual manifest max_files mismatch: {manual.source_count}")
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in manual.entries), "manual manifest should ignore text files")
+        _assert(all(entry.origin == "manual_roots" for entry in manual.entries), "manual entry origin mismatch")
+        _assert(dict(manual.diagnostics).get("截断") == "否", "manual diagnostics should report no truncation")
         manual_record = manual.to_record()
         json.dumps(manual_record, ensure_ascii=False, sort_keys=True)
 
@@ -103,6 +107,7 @@ Source files for which symbols will be read in on demand:
         _assert(gdb_manifest.source_count == 3, f"GDB manifest should filter and dedupe sources: {gdb_manifest.source_count}")
         _assert(len({entry.path for entry in gdb_manifest.entries}) == 3, "GDB manifest should dedupe paths")
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in gdb_manifest.entries), "GDB manifest should ignore text files")
+        _assert(all(entry.origin == "gdb_info_sources" for entry in gdb_manifest.entries), "GDB entry origin mismatch")
         json.dumps(gdb_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         compile_commands_path = root / "compile_commands.json"
@@ -123,6 +128,9 @@ Source files for which symbols will be read in on demand:
         _assert(compile_manifest.provider == "compile_commands", "compile_commands provider mismatch")
         _assert(compile_manifest.source_count == 3, f"compile_commands should filter and dedupe: {compile_manifest.source_count}")
         _assert(len({entry.path for entry in compile_manifest.entries}) == 3, "compile_commands should dedupe paths")
+        _assert(all(entry.origin == "compile_commands" for entry in compile_manifest.entries), "compile_commands entry origin mismatch")
+        _assert(any(entry.resolved_from == "directory_relative" for entry in compile_manifest.entries), "compile_commands should mark directory-relative paths")
+        _assert(dict(compile_manifest.diagnostics).get("重复") == "1", "compile_commands diagnostics should count duplicates")
         json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
     print("PASS debug source manifest probe")

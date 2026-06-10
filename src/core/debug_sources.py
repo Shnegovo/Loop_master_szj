@@ -29,6 +29,10 @@ class SourceEntry:
     group: str
     exists: bool
     language: str
+    origin: str = ""
+    raw_path: str = ""
+    resolved_from: str = ""
+    compile_directory: str = ""
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -37,6 +41,10 @@ class SourceEntry:
             "group": self.group,
             "exists": self.exists,
             "language": self.language,
+            "origin": self.origin,
+            "raw_path": self.raw_path,
+            "resolved_from": self.resolved_from,
+            "compile_directory": self.compile_directory,
         }
 
 
@@ -59,6 +67,8 @@ class SourceManifest:
     entries: tuple[SourceEntry, ...]
     target_name: str = ""
     project_path: Path | None = None
+    diagnostics: tuple[tuple[str, str], ...] = ()
+    metadata: dict[str, str] | None = None
 
     @property
     def source_count(self) -> int:
@@ -79,6 +89,11 @@ class SourceManifest:
             "provider": self.provider,
             "target_name": self.target_name,
             "project_path": str(self.project_path) if self.project_path else "",
+            "diagnostics": [
+                {"key": key, "value": value}
+                for key, value in self.diagnostics
+            ],
+            "metadata": dict(self.metadata or {}),
             "entries": [entry.to_record() for entry in self.entries],
         }
 
@@ -88,20 +103,25 @@ def source_entries_from_paths(
     *,
     root: str | Path | None = None,
     group: str = "Sources",
+    origin: str = "",
+    compile_directory: str = "",
 ) -> tuple[SourceEntry, ...]:
     root_path = Path(root).expanduser().resolve() if root else None
     entries: list[SourceEntry] = []
     for item in paths:
         path = Path(item).expanduser()
+        raw_path = str(item)
         try:
             resolved = path.resolve()
         except OSError:
             resolved = path
         group_name = group
+        resolved_from = "absolute" if path.is_absolute() else "unresolved"
         if root_path is not None:
             try:
                 relative = resolved.relative_to(root_path)
                 group_name = str(relative.parent) if str(relative.parent) != "." else group
+                resolved_from = "root_relative" if not path.is_absolute() else "absolute"
             except ValueError:
                 group_name = group
         entries.append(
@@ -111,6 +131,10 @@ def source_entries_from_paths(
                 group=group_name,
                 exists=resolved.exists(),
                 language=SOURCE_LANGUAGES.get(resolved.suffix.lower(), "text"),
+                origin=origin,
+                raw_path=raw_path,
+                resolved_from=resolved_from,
+                compile_directory=compile_directory,
             )
         )
     return tuple(entries)
@@ -130,13 +154,13 @@ def source_manifest_from_roots(
             continue
         if root.is_file():
             if _is_source_path(root):
-                entries.extend(source_entries_from_paths((root,), root=root.parent))
+                entries.extend(source_entries_from_paths((root,), root=root.parent, origin=provider))
             continue
         for path in sorted(root.rglob("*")):
             if len(entries) >= max_files:
                 break
             if path.is_file() and _is_source_path(path):
-                entries.extend(source_entries_from_paths((path,), root=root))
+                entries.extend(source_entries_from_paths((path,), root=root, origin=provider))
         if len(entries) >= max_files:
             break
     return SourceManifest(
@@ -144,6 +168,12 @@ def source_manifest_from_roots(
         root=root_paths[0] if root_paths else None,
         provider=provider,
         entries=tuple(entries[:max_files]),
+        diagnostics=(
+            ("输入根", str(len(root_paths))),
+            ("源码文件", str(min(len(entries), max_files))),
+            ("截断", "是" if len(entries) > max_files else "否"),
+        ),
+        metadata={"max_files": str(max_files)},
     )
 
 
@@ -159,7 +189,13 @@ def source_manifest_from_gdb_sources(
         name=name,
         root=Path(root).expanduser().resolve() if root else None,
         provider="gdb_info_sources",
-        entries=source_entries_from_paths(paths[:max_files], root=root),
+        entries=source_entries_from_paths(paths[:max_files], root=root, origin="gdb_info_sources"),
+        diagnostics=(
+            ("解析路径", str(len(paths))),
+            ("源码文件", str(min(len(paths), max_files))),
+            ("截断", "是" if len(paths) > max_files else "否"),
+        ),
+        metadata={"max_files": str(max_files)},
     )
 
 
@@ -173,25 +209,64 @@ def source_manifest_from_compile_commands(
     data = json.loads(compile_path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, list):
         raise ValueError("compile_commands.json must contain a list")
-    paths: list[Path] = []
+    paths: list[tuple[Path, str, str]] = []
     seen: set[str] = set()
+    filtered = 0
+    duplicate = 0
     for item in data:
         source_path = _compile_command_source_path(item, compile_path.parent)
-        if source_path is None or not _is_source_path(source_path):
+        if source_path is None:
+            filtered += 1
             continue
-        key = str(source_path).lower()
+        path, raw_path, directory = source_path
+        if not _is_source_path(path):
+            filtered += 1
+            continue
+        key = str(path).lower()
         if key in seen:
+            duplicate += 1
             continue
         seen.add(key)
-        paths.append(source_path)
+        paths.append((path, raw_path, directory))
         if len(paths) >= max_files:
             break
+    entries = tuple(
+        source_entries_from_paths(
+            (path,),
+            root=compile_path.parent,
+            origin="compile_commands",
+            compile_directory=directory,
+        )[0]
+        for path, raw_path, directory in paths
+    )
+    entries = tuple(
+        SourceEntry(
+            path=entry.path,
+            name=entry.name,
+            group=entry.group,
+            exists=entry.exists,
+            language=entry.language,
+            origin=entry.origin,
+            raw_path=raw_path,
+            resolved_from="absolute" if Path(raw_path).is_absolute() else "directory_relative",
+            compile_directory=entry.compile_directory,
+        )
+        for entry, (_path, raw_path, _directory) in zip(entries, paths)
+    )
     return SourceManifest(
         name=name,
         root=compile_path.parent,
         provider="compile_commands",
-        entries=source_entries_from_paths(paths, root=compile_path.parent),
+        entries=entries,
         project_path=compile_path,
+        diagnostics=(
+            ("编译项", str(len(data))),
+            ("源码文件", str(len(entries))),
+            ("过滤", str(filtered)),
+            ("重复", str(duplicate)),
+            ("截断", "是" if len(paths) >= max_files and len(data) > max_files else "否"),
+        ),
+        metadata={"max_files": str(max_files)},
     )
 
 
@@ -214,6 +289,9 @@ def source_entries_from_keil_project(
                     group=group.name,
                     exists=file.exists,
                     language=SOURCE_LANGUAGES.get(file.suffix, "text"),
+                    origin="keil",
+                    raw_path=str(getattr(file, "path_text", "") or file.path),
+                    resolved_from="keil_project",
                 )
             )
     return tuple(entries)
@@ -232,6 +310,7 @@ def source_manifest_from_keil_project(
         entries=source_entries_from_keil_project(project, target_label or None),
         target_name=target_label,
         project_path=project.path,
+        diagnostics=(("provider", "keil"), ("target", target_label)),
     )
 
 
@@ -298,15 +377,16 @@ def _candidate_path_tokens(line: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
-def _compile_command_source_path(item: object, default_root: Path) -> Path | None:
+def _compile_command_source_path(item: object, default_root: Path) -> tuple[Path, str, str] | None:
     if not isinstance(item, dict):
         return None
     file_value = item.get("file")
     if not file_value:
         return None
-    path = Path(str(file_value))
-    if path.is_absolute():
-        return path
+    raw_path = str(file_value)
+    path = Path(raw_path)
     directory = item.get("directory")
     root = Path(str(directory)).expanduser() if directory else default_root
-    return (root / path).resolve()
+    if path.is_absolute():
+        return path, raw_path, str(root)
+    return (root / path).resolve(), raw_path, str(root)

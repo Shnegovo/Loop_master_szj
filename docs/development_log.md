@@ -2349,3 +2349,47 @@ Add a CMake/VSCode/CubeIDE-friendly `compile_commands.json` source provider so n
 ### Next Target
 
 - Add ELF-adjacent source discovery or wire non-Keil source manifests into backend placeholder snapshots for UI preview.
+
+## Milestone 30 Update - Source Manifest Provenance Fields
+
+### Goal
+
+Add source provenance and diagnostics fields before introducing DWARF/ELF path recovery, so future missing-source and path-mapping problems can be audited without changing the UI first.
+
+### Completed
+
+- Extended `SourceEntry` with:
+  - `origin`
+  - `raw_path`
+  - `resolved_from`
+  - `compile_directory`
+- Extended `SourceManifest` with:
+  - `diagnostics`
+  - `metadata`
+- Providers now fill provenance details:
+  - Keil entries use `origin=keil` and keep original project `path_text`
+  - manual root entries use `origin=manual_roots`
+  - GDB source-list entries use `origin=gdb_info_sources`
+  - compile commands entries use `origin=compile_commands`, raw `file`, compile `directory`, and resolution mode
+- Provider diagnostics now report basic counts such as source files, filtered entries, duplicates and truncation.
+- Extended `tools\debug_source_manifest_probe.py` to assert provenance and diagnostics fields.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This remains a data-only source manifest update; no UI path mapping dialog is added yet.
+- No debugger, compiler, OpenOCD, pyOCD, Keil live session or ST-Link access is used.
+
+### Next Target
+
+- Add ELF/DWARF-adjacent source discovery using the existing readelf path, then decide whether to expose a non-Keil source manifest preview in the Debug Workbench.
