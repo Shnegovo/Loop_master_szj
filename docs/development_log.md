@@ -4236,3 +4236,92 @@ existing oscilloscope UI.
 - Keep OpenOCD/GDB and pyOCD compatibility in the same transport shape:
   status snapshot, runtime control, variable write, low-frequency watch, and
   high-frequency sampling as separate capabilities.
+
+## Milestone 47 Update - Keil Debug Profile Store And Runtime Config
+
+### Goal
+
+Make Keil projects reusable as named debug profiles instead of relying on the
+current scattered UI state. Also expose Keil root/UVSOCK port configuration
+without auto-starting or auto-connecting hardware.
+
+### Completed
+
+- Added `src/core/keil/profile_store.py`.
+  - `KeilDebugProfileRecord`
+  - `KeilDebugProfileStore`
+  - JSON load/save helpers
+  - conversion from/to existing `KeilDebugProfile`
+  - default profile tracking and upsert replacement by project/target key.
+- Added profile persistence file:
+  - `loopmaster_keil_profiles.json`
+  - keeps up to 16 recent Keil debug profiles.
+- Added Debug Workbench profile controls in the `后端诊断` header area:
+  - `Keil配置`
+  - `保存档案`
+  - `载入`
+- Added Keil runtime config flow.
+  - Select Keil root directory.
+  - Edit UVSOCK port.
+  - Rebuild debug backend registry and session controller after changes.
+  - Disconnect existing Keil Watch session before replacing root/port.
+  - Preserve current project/target in a safe disconnected state.
+  - No automatic discover/connect/build/download is triggered.
+- Added config persistence:
+  - new `debug_keil.root`
+  - new `debug_keil.uvsock_port`
+  - old top-level `keil_root` remains written for compatibility.
+- Added profile diagnostics:
+  - profile count
+  - default profile
+  - profile project
+  - profile target
+  - profile port.
+
+### Verified
+
+- `python -m py_compile src/core/keil/profile_store.py src/core/keil/__init__.py src/ui/debug_workbench_tab.py src/ui/gui.py tools/keil_profile_store_probe.py tools/ui_keil_profile_store_probe.py`
+  - PASS.
+- `python tools/keil_profile_store_probe.py`
+  - PASS.
+- `python tools/ui_keil_profile_store_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/keil_debug_options_probe.py`
+  - PASS.
+- `python tools/ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools/keil_watch_read_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-profile-store-final --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-profile-store-final\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-profile-store-final\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-profile-store-final\03_debug_workbench_narrow.png`
+
+### Notes
+
+- The first UI version deliberately keeps profile controls compact in the
+  diagnostics header, following the existing left-panel information hierarchy.
+- Applying Keil config only refreshes local backend state and diagnostics. It
+  does not launch Keil, connect ST-Link, download firmware, halt/run, or write
+  variables.
+- AXF path still uses the existing automatic project/target derivation. Manual
+  AXF override is supported in core profile creation but not yet exposed in the
+  UI.
+
+### Next Target
+
+- Run or dry-run the saved profile against the F401 probe flow from UI/CLI:
+  - profile selected
+  - AXF exists/build status clear
+  - launch command preview clear
+  - explicit execute path remains guarded.
+- Start real Keil breakpoint sync:
+  - local gutter breakpoint intent
+  - UVSOCK command transaction execution
+  - remote verification snapshot.
+- Add reusable Watch groups/tuning panels for PID workflows.

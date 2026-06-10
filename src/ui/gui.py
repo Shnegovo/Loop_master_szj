@@ -76,6 +76,12 @@ from src.core.keil.watch import (
     make_keil_watch_type,
 )
 from src.core.keil.profile import KeilBuildResult, KeilDebugProfile, make_keil_debug_profile
+from src.core.keil.profile_store import (
+    KeilDebugProfileStore,
+    load_keil_profile_store,
+    profile_record_from_debug_profile,
+    save_keil_profile_store,
+)
 from src.core.keil.project import parse_keil_project
 from src.core.keil.uvsock import UvscLaunchResult
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
@@ -449,6 +455,8 @@ class MainWindow(QMainWindow):
         self._pack_path: Optional[Path] = None
         self._config_path = Path("loopmaster.json")
         self._variable_write_audit_path = Path("loopmaster_variable_writes.jsonl")
+        self._keil_profile_store_path = Path("loopmaster_keil_profiles.json")
+        self._keil_profile_store = load_keil_profile_store(self._keil_profile_store_path)
         self._recent_elf_path: Optional[Path] = None
         self._loaded_elf_this_session = False
         self._saved_monitored_variables: list[str] = []
@@ -486,9 +494,14 @@ class MainWindow(QMainWindow):
         self._debug_source_remaps: list[dict[str, str]] = []
         cfg = self._load_config()
         if cfg:
-            keil_root = cfg.get("keil_root", "")
+            debug_keil_cfg = cfg.get("debug_keil", {}) if isinstance(cfg.get("debug_keil", {}), dict) else {}
+            keil_root = debug_keil_cfg.get("root", "") or cfg.get("keil_root", "")
             if keil_root:
                 self._keil_root = Path(str(keil_root))
+            try:
+                self._debug_uvsock_port = max(1, min(65535, int(debug_keil_cfg.get("uvsock_port", self._debug_uvsock_port))))
+            except Exception:
+                pass
             elf = cfg.get("elf_path", "")
             if elf and Path(elf).exists():
                 self._recent_elf_path = Path(elf)
@@ -2106,6 +2119,9 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.sourceRemapRequested.connect(self._on_debug_source_remap_requested)
         self._tab_debug_workbench.variablePresetWriteRequested.connect(self._write_keil_live_variable_from_preset)
         self._tab_debug_workbench.variablePresetWatchRequested.connect(self._add_keil_watch_preset_to_scope)
+        self._tab_debug_workbench.profileSaveRequested.connect(self._save_current_keil_debug_profile)
+        self._tab_debug_workbench.profileLoadRequested.connect(self._load_default_keil_debug_profile)
+        self._tab_debug_workbench.keilProfileConfigureRequested.connect(self._configure_keil_debug_runtime)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
@@ -3426,6 +3442,27 @@ class MainWindow(QMainWindow):
             return ()
         return profile.diagnostic_rows()
 
+    def _keil_profile_store_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            return ()
+        store = getattr(self, "_keil_profile_store", KeilDebugProfileStore())
+        default = store.default
+        rows = [
+            ("调试档案数", str(len(store.records))),
+        ]
+        if default is not None:
+            rows.extend(
+                [
+                    ("默认调试档案", default.display_name),
+                    ("档案工程", str(default.project_path)),
+                    ("档案 Target", default.target_name or "--"),
+                    ("档案端口", str(default.uvsock_port)),
+                ]
+            )
+        else:
+            rows.append(("默认调试档案", "未保存"))
+        return tuple(rows)
+
     def _keil_variable_preset_diagnostics(self) -> tuple[tuple[str, str], ...]:
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             return ()
@@ -3462,6 +3499,145 @@ class MainWindow(QMainWindow):
                 )
             )
         self._tab_debug_workbench.set_variable_presets(tuple(rows))
+
+    def _save_current_keil_debug_profile(self) -> None:
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 调试档案", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        profile = self._make_current_keil_profile()
+        if profile is None or profile.project_path is None:
+            self._show_warning("Keil 调试档案", "请先打开 Keil 工程。")
+            return
+        record = profile_record_from_debug_profile(profile)
+        self._keil_profile_store = self._keil_profile_store.upsert(record)
+        if not save_keil_profile_store(self._keil_profile_store_path, self._keil_profile_store):
+            self._show_warning("Keil 调试档案", "保存调试档案失败。")
+            return
+        self._save_config()
+        self._refresh_debug_workbench_diagnostics()
+        message = f"已保存默认调试档案：{record.display_name}"
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(message)
+        self._show_info("Keil 调试档案", message)
+
+    def _load_default_keil_debug_profile(self) -> None:
+        self._keil_profile_store = load_keil_profile_store(self._keil_profile_store_path)
+        record = self._keil_profile_store.default
+        if record is None:
+            self._show_warning("Keil 调试档案", "还没有保存过 Keil 调试档案。")
+            return
+        if not record.project_path.exists():
+            self._show_warning("Keil 调试档案", f"工程不存在：{record.project_path}")
+            return
+        try:
+            self._tab_debug_workbench.load_project(record.project_path)
+        except Exception as exc:
+            self._show_warning("Keil 调试档案", f"载入工程失败：{exc}")
+            return
+        if record.target_name:
+            index = self._tab_debug_workbench.target_combo.findText(record.target_name)
+            if index >= 0:
+                self._tab_debug_workbench.target_combo.setCurrentIndex(index)
+        if record.keil_root is not None:
+            self._keil_root = record.keil_root
+        self._debug_uvsock_port = int(record.uvsock_port)
+        self._debug_backend_registry = create_default_debug_backend_registry(
+            keil_root=self._keil_root,
+            uvsock_port=self._debug_uvsock_port,
+            include_placeholders=True,
+        )
+        self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
+        self._debug_session_controller.set_backend(self._debug_backend_kind)
+        self._debug_keil_profile = self._make_current_keil_profile()
+        self._sync_debug_source_manifest_preview()
+        self._sync_debug_command_preview()
+        self._refresh_debug_workbench_diagnostics()
+        self._refresh_debug_variable_presets()
+        self._refresh_debug_backend_options()
+        self._save_config()
+        message = f"已载入默认调试档案：{record.display_name}"
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(message)
+        self._refresh_hero()
+
+    def _configure_keil_debug_runtime(self) -> None:
+        root = self._choose_existing_directory("选择 Keil 根目录")
+        if not root:
+            return
+        text, ok = ask_pcl_text(
+            self,
+            "Keil / UVSOCK 配置",
+            "填写 UVSOCK 端口，通常保持 4827。",
+            text=str(self._debug_uvsock_port),
+            placeholder="4827",
+            confirm_text="应用",
+            cancel_text="取消",
+            kind="info",
+        )
+        if not ok:
+            return
+        try:
+            port = int(str(text).strip())
+        except ValueError:
+            self._show_warning("Keil 配置", "UVSOCK 端口必须是数字。")
+            return
+        if not (1 <= port <= 65535):
+            self._show_warning("Keil 配置", "UVSOCK 端口必须在 1..65535 范围内。")
+            return
+        if self._scope_read_source == "keil_watch" and self._keil_watch_backend is not None:
+            if not ask_pcl_confirmation(
+                self,
+                "应用 Keil 配置",
+                "当前 Keil Watch 会话会断开，配置更新后需要重新连接。",
+                confirm_text="应用",
+                cancel_text="取消",
+                kind="warning",
+            ):
+                return
+        self._apply_debug_keil_config(Path(root), port)
+
+    def _apply_debug_keil_config(self, root: Path, port: int) -> None:
+        self._keil_root = Path(root).expanduser()
+        self._debug_uvsock_port = int(port)
+        if self._keil_watch_backend is not None:
+            self._keil_watch_backend.disconnect()
+            self._keil_watch_backend = None
+        self._debug_backend_registry = create_default_debug_backend_registry(
+            keil_root=self._keil_root,
+            uvsock_port=self._debug_uvsock_port,
+            include_placeholders=True,
+        )
+        self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
+        self._debug_session_controller = DebugSessionController(
+            self._debug_backend_registry,
+            backend=self._debug_backend_kind,
+        )
+        self._debug_remote_breakpoint_snapshot = None
+        self._debug_backend_snapshot_record = None
+        self._debug_backend_diagnostics = ()
+        self._debug_last_live_write_result = None
+        self._debug_keil_profile = None
+        self._debug_keil_build_result = None
+        self._debug_keil_launch_result = None
+        if hasattr(self, "_tab_debug_workbench"):
+            tab = self._tab_debug_workbench
+            previous = tab.debug_status
+            status = make_debug_status(
+                state=DebugRuntimeState.DISCONNECTED,
+                backend=self._debug_backend_kind,
+                detail="Keil 配置已更新，等待重新发现后端",
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+            )
+            tab.set_debug_status(status, controls_ready=True)
+        self._refresh_debug_backend_options()
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        self._refresh_debug_variable_presets()
+        self._save_config()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"Keil 配置已更新：{self._keil_root} / {self._debug_uvsock_port}")
+        self._refresh_hero()
 
     def _add_keil_watch_preset_to_scope(self, expression: str, label: str, value_type: str) -> None:
         expression = str(expression or "").strip()
@@ -3709,6 +3885,7 @@ class MainWindow(QMainWindow):
         diagnostic_rows = self._dedupe_diagnostics(
             tuple(diagnostics)
             + self._keil_profile_diagnostics()
+            + self._keil_profile_store_diagnostics()
             + self._keil_variable_preset_diagnostics()
             + self._keil_build_diagnostics()
             + self._keil_launch_diagnostics()
@@ -6152,6 +6329,10 @@ class MainWindow(QMainWindow):
             "hidden_displayed_variables": sorted(self._hidden_displayed_variables),
             "monitored_variables": remembered_variables,
             "keil_root": str(getattr(self, "_keil_root", Path("D:\\Keil"))),
+            "debug_keil": {
+                "root": str(getattr(self, "_keil_root", Path("D:\\Keil"))),
+                "uvsock_port": int(getattr(self, "_debug_uvsock_port", 4827)),
+            },
             "debug_sources": self._debug_source_config_record(),
             "serial_port": self._tab_serial.port_combo.currentData() if hasattr(self, "_tab_serial") else "",
             "serial_baudrate": int(self._tab_serial.baud_combo.currentText()) if hasattr(self, "_tab_serial") else 115200,
