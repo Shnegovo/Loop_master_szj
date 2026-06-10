@@ -62,6 +62,15 @@ def main() -> int:
         )
         for key, value in snapshot.diagnostic_rows():
             print(f"{key}: {value}")
+        if snapshot.pc_location is not None:
+            print(f"PC snapshot: complete={snapshot.pc_location.complete} message={snapshot.pc_location.message}")
+        if snapshot.remote_breakpoint_snapshot is not None:
+            print(
+                "Remote breakpoints: "
+                f"id={snapshot.remote_breakpoint_snapshot.snapshot_id} "
+                f"complete={snapshot.remote_breakpoint_snapshot.complete} "
+                f"error={snapshot.remote_breakpoint_snapshot.error or '--'}"
+            )
 
     _assert(snapshot.backend.value == "keil", "backend kind mismatch")
     _assert(snapshot.read_only, "Keil adapter probe must remain read-only")
@@ -72,6 +81,11 @@ def main() -> int:
     _assert(not snapshot.status.capabilities.can_sync_breakpoints, "read-only adapter must not enable breakpoint sync")
     if not args.attempt_existing:
         _assert(not snapshot.connection_attempted, "discover probe must not attempt UVSOCK connection")
+    _assert(snapshot.pc_location is not None, "snapshot should carry a PC placeholder")
+    _assert(not snapshot.pc_location.complete, "PC placeholder must stay incomplete until Keil readback exists")
+    _assert(snapshot.remote_breakpoint_snapshot is not None, "snapshot should carry a remote breakpoint placeholder")
+    _assert(not snapshot.remote_breakpoint_snapshot.complete, "remote breakpoint placeholder must stay incomplete")
+    _assert(snapshot.remote_breakpoint_snapshot_id == snapshot.remote_breakpoint_snapshot.snapshot_id, "remote breakpoint id mismatch")
 
     print(
         "PASS keil backend adapter "
@@ -84,4 +98,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -314,6 +314,17 @@ class _FakeReadOnlyBackend:
             port=4827,
             project_path=Path(project_path or self.project_path),
             target_name=target_name,
+            remote_breakpoint_snapshot=KeilBreakpointRemoteSnapshot(
+                schema_version=1,
+                snapshot_id="keil-ui-fake-read-only-incomplete",
+                project_path=Path(project_path or self.project_path),
+                target_name=target_name,
+                captured_at="2026-06-10T00:00:00+00:00",
+                complete=False,
+                breakpoints=(),
+                error="Keil 只读快照尚未实现断点枚举解析",
+            ),
+            remote_breakpoint_snapshot_id="keil-ui-fake-read-only-incomplete",
         )
 
 
@@ -419,6 +430,10 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ]
             if blocked_actions:
                 issues.append(f"read-only attach enabled dangerous actions: {blocked_actions!r}")
+            sync_transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
+            sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
+            if "waiting_remote_snapshot=true" not in sync_text and "等待远端断点快照" not in sync_text:
+                issues.append(f"read-only attach should keep remote breakpoint snapshot incomplete: {sync_text!r}")
         tab.search_edit.setText("speed")
         if not tab.search_next_button.isEnabled():
             issues.append("search next button should be enabled after a query with matches")

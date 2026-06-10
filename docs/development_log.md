@@ -1830,3 +1830,69 @@ Continue the same large debug-backend milestone by wiring the Debug Workbench `�
   - mark remote snapshots incomplete until real Keil parsing is proven
   - feed incomplete snapshots into existing dry-run diff UI without claiming sync readiness
   - prepare a future successful live UVSOCK smoke to populate status and snapshot evidence
+
+## Milestone 29 Update - Incomplete PC and Remote Breakpoint Snapshot Placeholders
+
+### Goal
+
+Continue the read-only backend milestone by making PC and remote breakpoint evidence explicit in the backend snapshot model, while clearly marking the data incomplete until real Keil readback parsing is proven.
+
+### Completed
+
+- Added `DebugPcLocation` to `src\core\debug_backend.py`.
+- Extended `DebugBackendSessionSnapshot` with:
+  - `pc_location`
+  - `remote_breakpoint_snapshot`
+  - serialized PC and remote breakpoint records
+- Keil adapter now creates an incomplete PC placeholder:
+  - message: `Keil PC 位置读取尚未实现`
+  - complete: `False`
+- Keil adapter now creates an incomplete `KeilBreakpointRemoteSnapshot` placeholder:
+  - complete: `False`
+  - no remote breakpoints
+  - error: `Keil 只读快照尚未实现断点枚举解析`
+- Keil diagnostics now show:
+  - `PC 位置: 待 Keil 回读`
+  - `远端断点: 待 Keil 枚举`
+- `MainWindow` now stores the adapter's remote breakpoint snapshot after discover/read-only attach.
+- Existing dry-run breakpoint diff now receives the incomplete remote snapshot and keeps sync-breakpoint readiness waiting instead of treating an empty remote list as complete.
+- Extended adapter and UI probes to assert that PC and remote breakpoint placeholders remain incomplete and data-only.
+
+### Verified
+
+- `python -m py_compile src\core\debug_backend.py src\core\keil\backend.py src\ui\gui.py tools\ui_debug_workbench_probe.py tools\debug_backend_adapter_probe.py tools\keil_backend_adapter_probe.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO`
+  - PASS; PC and remote breakpoint placeholders reported incomplete.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO --attempt-existing --status`
+  - PASS; current machine has no running uVision, so no connection was attempted and placeholders remained incomplete.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports`
+  - PASS.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+
+### Notes
+
+- This update still does not launch Keil, access ST-Link/F401CCU6, halt/run the target, sync breakpoints, or write variables.
+- The placeholders are deliberately incomplete; they are not evidence of a successful Keil PC read or breakpoint enumeration.
+- Feeding incomplete remote breakpoints into dry-run diff prevents a dangerous false-positive where “no remote breakpoints” could be mistaken for a complete remote snapshot.
+
+### Next Target
+
+- Continue the same milestone with read-only snapshot evidence/audit:
+  - preserve snapshot IDs in history/audit records where useful
+  - model mismatch/stale reasons for project/target/port
+  - prepare the future live UVSOCK smoke to replace placeholders with real PC and breakpoint readback

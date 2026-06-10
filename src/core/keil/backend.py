@@ -8,9 +8,11 @@ from pathlib import Path
 from src.core.debug_backend import (
     DebugBackendDiagnostic,
     DebugBackendSessionSnapshot,
+    DebugPcLocation,
     backend_snapshot_id,
     now_iso,
 )
+from src.core.keil.commands import KeilBreakpointRemoteSnapshot
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugCapabilities,
@@ -128,6 +130,14 @@ class KeilUvSockBackendAdapter:
         connection_attempted: bool,
     ) -> DebugBackendSessionSnapshot:
         project = Path(project_path).expanduser().resolve() if project_path else status.project_path
+        captured_at = now_iso()
+        breakpoint_snapshot = _placeholder_breakpoint_snapshot(
+            project_path=project,
+            target_name=target_name or status.target_name,
+            captured_at=captured_at,
+            reason="Keil 只读快照尚未实现断点枚举解析",
+        )
+        pc_location = _placeholder_pc_location(status)
         diagnostics = _diagnostics(preflight, launch_plan, connection, self.config.port)
         capabilities = tuple(sorted(preflight.discovery.capability_flags().items()))
         payload = {
@@ -141,6 +151,8 @@ class KeilUvSockBackendAdapter:
             "connection_attempted": connection_attempted,
             "connection_established": bool(connection and connection.connected),
             "target_running": connection.target_running if connection else None,
+            "pc": pc_location.to_record(),
+            "remote_breakpoints": breakpoint_snapshot.snapshot_id,
             "diagnostics": [(item.key, item.value) for item in diagnostics],
         }
         return DebugBackendSessionSnapshot(
@@ -148,7 +160,7 @@ class KeilUvSockBackendAdapter:
             backend=self.kind,
             adapter_name=self.display_name,
             snapshot_id=backend_snapshot_id(payload),
-            captured_at=now_iso(),
+            captured_at=captured_at,
             status=status,
             diagnostics=diagnostics,
             capabilities=capabilities,
@@ -159,7 +171,9 @@ class KeilUvSockBackendAdapter:
             port=self.config.port,
             project_path=project,
             target_name=str(target_name or status.target_name or ""),
-            remote_breakpoint_snapshot_id="",
+            pc_location=pc_location,
+            remote_breakpoint_snapshot=breakpoint_snapshot,
+            remote_breakpoint_snapshot_id=breakpoint_snapshot.snapshot_id,
         )
 
 
@@ -189,6 +203,8 @@ def _diagnostics(
         DebugBackendDiagnostic("UV4 目录", str(discovery.uv4_dir or "--")),
         DebugBackendDiagnostic("启动预览", launch_status),
         DebugBackendDiagnostic("启动命令", command),
+        DebugBackendDiagnostic("PC 位置", "待 Keil 回读"),
+        DebugBackendDiagnostic("远端断点", "待 Keil 枚举"),
     ]
     if connection is not None:
         rows.extend(
@@ -223,6 +239,46 @@ def _target_running_text(value: bool | None) -> str:
     if value is False:
         return "已暂停"
     return "未知"
+
+
+def _placeholder_pc_location(status: DebugWorkbenchStatus) -> DebugPcLocation:
+    if status.current_pc_line:
+        return DebugPcLocation(
+            line=status.current_pc_line,
+            source="status",
+            complete=False,
+            message="PC 行号来自本地状态，尚未由 Keil 回读验证",
+        )
+    return DebugPcLocation(
+        source="keil_uvsock",
+        complete=False,
+        message="Keil PC 位置读取尚未实现",
+    )
+
+
+def _placeholder_breakpoint_snapshot(
+    *,
+    project_path: Path | None,
+    target_name: str,
+    captured_at: str,
+    reason: str,
+) -> KeilBreakpointRemoteSnapshot:
+    payload = {
+        "project": str(project_path or ""),
+        "target": str(target_name or ""),
+        "captured_at": captured_at,
+        "reason": reason,
+    }
+    return KeilBreakpointRemoteSnapshot(
+        schema_version=1,
+        snapshot_id=backend_snapshot_id(payload).replace("debug-backend-", "keil-remote-"),
+        project_path=project_path,
+        target_name=str(target_name or ""),
+        captured_at=captured_at,
+        complete=False,
+        breakpoints=(),
+        error=reason,
+    )
 
 
 def _status_from_read_only_connection(

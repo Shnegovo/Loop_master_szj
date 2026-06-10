@@ -2008,6 +2008,7 @@ class MainWindow(QMainWindow):
             )
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
+            self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
         except Exception as exc:
             message = f"Keil 预检失败：{exc}"
             status = make_debug_status(
@@ -2048,6 +2049,7 @@ class MainWindow(QMainWindow):
             )
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
+            self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
         except Exception as exc:
             message = f"Keil 只读连接失败：{exc}"
             status = make_debug_status(

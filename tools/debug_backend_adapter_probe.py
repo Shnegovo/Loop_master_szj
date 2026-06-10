@@ -118,6 +118,9 @@ def main() -> int:
         _assert(discover.read_only, "discover snapshot should be read-only")
         _assert(not discover.connection_attempted, "discover should not attempt connection")
         _assert(discover.status.state == DebugRuntimeState.KEIL_DISCOVERED, "discover state mismatch")
+        _assert(discover.remote_breakpoint_snapshot is not None, "discover should carry a remote breakpoint placeholder")
+        _assert(not discover.remote_breakpoint_snapshot.complete, "discover remote breakpoint placeholder must be incomplete")
+        _assert(discover.pc_location is not None and not discover.pc_location.complete, "discover PC placeholder must be incomplete")
         json.dumps(discover.to_record(), ensure_ascii=False, sort_keys=True)
         _assert_data_only(discover)
 
@@ -131,6 +134,10 @@ def main() -> int:
         _assert(snapshot.connection_attempted and snapshot.connection_established, "read-only snapshot connection state mismatch")
         _assert(snapshot.target_running is True, "target running status mismatch")
         _assert(snapshot.status.state == DebugRuntimeState.RUNNING, "snapshot status state mismatch")
+        _assert(snapshot.remote_breakpoint_snapshot is not None, "read-only snapshot should carry a breakpoint placeholder")
+        _assert(not snapshot.remote_breakpoint_snapshot.complete, "read-only breakpoint placeholder must be incomplete")
+        _assert(snapshot.remote_breakpoint_snapshot_id == snapshot.remote_breakpoint_snapshot.snapshot_id, "breakpoint snapshot id mismatch")
+        _assert(snapshot.pc_location is not None and not snapshot.pc_location.complete, "read-only PC placeholder must be incomplete")
         caps = snapshot.status.capabilities
         _assert(caps.can_read_variables, "read-only snapshot should allow read capability")
         _assert(not caps.can_write_variables, "read-only snapshot must not allow writes")
@@ -148,6 +155,7 @@ def main() -> int:
         )
         _assert(calls["connect"] == 1, "preview read-only snapshot should not connect")
         _assert(not preview.connection_attempted, "preview snapshot should remain no-connect")
+        _assert(preview.remote_breakpoint_snapshot is not None and not preview.remote_breakpoint_snapshot.complete, "preview should carry incomplete remote breakpoints")
     finally:
         backend_module.check_uvsock_preflight = original_check
         backend_module.build_uvision_uvsock_command = original_launch
