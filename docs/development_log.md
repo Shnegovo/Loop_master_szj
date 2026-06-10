@@ -2811,3 +2811,45 @@ Make missing-source diagnostics more actionable by summarizing where imported GD
   - map it to a local source root
   - rebuild affected entries and show before/after missing counts
   - keep remap state provider-neutral for Keil, GDB, DWARF and offline replay
+
+## Milestone 30 Update - Source Remap Preview
+
+### Goal
+
+Add a safe preview path for mapping missing source directories to a local source root before live debug backends depend on the source tree.
+
+### Completed
+
+- Added `SourcePathRemapPreview`.
+- Added `preview_source_manifest_path_remap()`:
+  - takes a `SourceManifest`, missing directory and local root
+  - rebuilds only matching missing entries
+  - preserves origin/raw path/provenance
+  - reports before/after missing counts
+  - returns a new manifest without mutating the original
+- Added `MainWindow.preview_debug_source_remap()` so the Debug Workbench can apply a preview manifest and update diagnostics.
+- Debug Workbench diagnostics now surface `重映射` and `重映射命中`.
+- Extended the focused source-provider UI probe to verify missing count goes from `1` to `0` after a preview remap.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py src\ui\gui.py tools\debug_source_manifest_probe.py tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\ui_debug_source_provider_probe.py`
+  - PASS.
+
+### Notes
+
+- This is data-only preview plumbing, not a full user-facing remap wizard yet.
+- No Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access is used.
+- Remap provenance is marked as `remap:<previous resolved_from>` so later UI can explain why a path changed.
+
+### Next Target
+
+- Add the user-facing remap action:
+  - select the top missing-path hint from the UI
+  - choose a local source root
+  - apply the existing preview remap
+  - persist remap choices per provider/project

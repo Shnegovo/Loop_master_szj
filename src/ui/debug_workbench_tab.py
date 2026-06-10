@@ -1397,6 +1397,10 @@ class DebugWorkbenchTab(QWidget):
             value = diagnostics.get(key)
             if value not in (None, ""):
                 rows.append((f"源码{key}", str(value)))
+        for key in ("重映射", "重映射命中"):
+            value = diagnostics.get(key)
+            if value not in (None, ""):
+                rows.append((key, str(value)))
         mapping_hints = source_manifest_missing_path_hints(manifest)
         if mapping_hints:
             hint = mapping_hints[0]

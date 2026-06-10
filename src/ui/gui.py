@@ -41,6 +41,8 @@ from src.core.debug_workbench import (
 from src.core.debug_backend_registry import create_default_debug_backend_registry
 from src.core.debug_sources import (
     SourceManifest,
+    SourcePathRemapPreview,
+    preview_source_manifest_path_remap,
     source_manifest_from_compile_commands,
     source_manifest_from_gdb_sources,
     source_manifest_from_readelf_line_table_text,
@@ -445,6 +447,7 @@ class MainWindow(QMainWindow):
         self._debug_gdb_sources_text = ""
         self._debug_dwarf_line_table_text = ""
         self._debug_dwarf_text_elf_path: Path | None = None
+        self._debug_source_remap_preview: SourcePathRemapPreview | None = None
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -2209,6 +2212,37 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(f"源码来源：{self._debug_source_provider_label(self._debug_source_provider_key)}")
         return manifest
+
+    def preview_debug_source_remap(
+        self,
+        *,
+        missing_dir: str | Path,
+        local_root: str | Path,
+    ) -> SourcePathRemapPreview:
+        manifest = self._debug_source_preview_manifest
+        if manifest is None and hasattr(self, "_tab_debug_workbench"):
+            manifest = self._tab_debug_workbench.source_manifest
+        if manifest is None:
+            raise ValueError("当前没有可重映射的源码清单")
+        preview = preview_source_manifest_path_remap(
+            manifest,
+            missing_dir=missing_dir,
+            local_root=local_root,
+        )
+        self._debug_source_remap_preview = preview
+        self._debug_source_preview_manifest = preview.manifest
+        if hasattr(self, "_tab_debug_workbench"):
+            self._tab_debug_workbench.set_source_manifest(
+                preview.manifest,
+                mode=preview.manifest.provider,
+            )
+        self._sync_debug_command_preview()
+        self._refresh_hero()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(
+                f"源码重映射预览：缺失 {preview.before_missing} -> {preview.after_missing}"
+            )
+        return preview
 
     def _sync_debug_source_manifest_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):

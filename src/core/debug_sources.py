@@ -116,6 +116,28 @@ class SourcePathMappingHint:
 
 
 @dataclass(frozen=True)
+class SourcePathRemapPreview:
+    manifest: SourceManifest
+    missing_dir: str
+    local_root: Path
+    remapped_count: int
+    resolved_count: int
+    before_missing: int
+    after_missing: int
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "missing_dir": self.missing_dir,
+            "local_root": str(self.local_root),
+            "remapped_count": self.remapped_count,
+            "resolved_count": self.resolved_count,
+            "before_missing": self.before_missing,
+            "after_missing": self.after_missing,
+            "manifest": self.manifest.to_record(),
+        }
+
+
+@dataclass(frozen=True)
 class _ReadelfSourcePath:
     path: Path
     raw_path: str
@@ -431,6 +453,76 @@ def source_manifest_missing_path_hints(
     return tuple(hints[:max(0, int(max_hints))])
 
 
+def preview_source_manifest_path_remap(
+    manifest: SourceManifest,
+    *,
+    missing_dir: str | Path,
+    local_root: str | Path,
+) -> SourcePathRemapPreview:
+    missing_dir_text = str(Path(missing_dir).expanduser())
+    local_root_path = Path(local_root).expanduser().resolve()
+    before_missing = sum(1 for entry in manifest.entries if not entry.exists)
+    remapped_count = 0
+    resolved_count = 0
+    entries: list[SourceEntry] = []
+    for entry in manifest.entries:
+        if entry.exists or str(entry.path.parent) != missing_dir_text:
+            entries.append(entry)
+            continue
+        candidate = _remapped_source_path(entry.path, Path(missing_dir_text), local_root_path)
+        remapped_count += 1
+        resolved = candidate.exists()
+        if resolved:
+            resolved_count += 1
+        entries.append(
+            SourceEntry(
+                path=candidate,
+                name=candidate.name,
+                group=_remapped_group(entry, candidate, local_root_path),
+                exists=resolved,
+                language=entry.language,
+                origin=entry.origin,
+                raw_path=entry.raw_path,
+                resolved_from=f"remap:{entry.resolved_from or 'unknown'}",
+                compile_directory=entry.compile_directory,
+            )
+        )
+    after_missing = sum(1 for entry in entries if not entry.exists)
+    diagnostics = _replace_diagnostic(manifest.diagnostics, "缺失", str(after_missing))
+    diagnostics = diagnostics + (
+        ("重映射", f"{remapped_count} 项 -> {local_root_path}"),
+        ("重映射命中", str(resolved_count)),
+    )
+    metadata = dict(manifest.metadata or {})
+    metadata.update(
+        {
+            "remap_missing_dir": missing_dir_text,
+            "remap_local_root": str(local_root_path),
+            "remap_count": str(remapped_count),
+            "remap_resolved": str(resolved_count),
+        }
+    )
+    remapped_manifest = SourceManifest(
+        name=f"{manifest.name} · 重映射预览",
+        root=manifest.root,
+        provider=manifest.provider,
+        entries=tuple(entries),
+        target_name=manifest.target_name,
+        project_path=manifest.project_path,
+        diagnostics=diagnostics,
+        metadata=metadata,
+    )
+    return SourcePathRemapPreview(
+        manifest=remapped_manifest,
+        missing_dir=missing_dir_text,
+        local_root=local_root_path,
+        remapped_count=remapped_count,
+        resolved_count=resolved_count,
+        before_missing=before_missing,
+        after_missing=after_missing,
+    )
+
+
 def source_entries_from_keil_project(
     project: KeilProject,
     target_name: str | None = None,
@@ -722,6 +814,41 @@ def _group_for_path(path: Path, root: Path | None, fallback: str) -> str:
     except ValueError:
         return fallback
     return str(relative.parent) if str(relative.parent) != "." else fallback
+
+
+def _remapped_source_path(path: Path, missing_dir: Path, local_root: Path) -> Path:
+    try:
+        relative = path.relative_to(missing_dir)
+    except ValueError:
+        relative = Path(path.name)
+    return _resolve_path(local_root / relative)
+
+
+def _remapped_group(entry: SourceEntry, path: Path, local_root: Path) -> str:
+    try:
+        relative = path.relative_to(local_root)
+        parent = str(relative.parent)
+        return parent if parent != "." else entry.group
+    except ValueError:
+        return entry.group
+
+
+def _replace_diagnostic(
+    diagnostics: tuple[tuple[str, str], ...],
+    key: str,
+    value: str,
+) -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    replaced = False
+    for item_key, item_value in diagnostics:
+        if item_key == key:
+            rows.append((item_key, value))
+            replaced = True
+        else:
+            rows.append((item_key, item_value))
+    if not replaced:
+        rows.append((key, value))
+    return tuple(rows)
 
 
 def _resolve_path(path: Path) -> Path:

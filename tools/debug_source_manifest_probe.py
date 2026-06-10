@@ -17,6 +17,7 @@ from src.core.debug_sources import (  # noqa: E402
     source_manifest_from_readelf_line_table_text,
     source_manifest_from_gdb_sources,
     source_manifest_missing_path_hints,
+    preview_source_manifest_path_remap,
     source_manifest_from_roots,
     source_manifest_from_keil_project,
     source_tree_from_entries,
@@ -153,6 +154,21 @@ Source files for which symbols will be read in on demand:
         compile_hints = source_manifest_missing_path_hints(compile_manifest)
         _assert(len(compile_hints) == 1, f"compile_commands missing hint mismatch: {compile_hints!r}")
         _assert(compile_hints[0].count == 1 and compile_hints[0].resolved_from == ("directory_relative",), f"compile hint content mismatch: {compile_hints!r}")
+        remap_root = root / "Remapped" / "Src"
+        remap_root.mkdir(parents=True)
+        (remap_root / "missing.c").write_text("int recovered(void) { return 2; }\n", encoding="utf-8")
+        preview = preview_source_manifest_path_remap(
+            compile_manifest,
+            missing_dir=compile_hints[0].missing_dir,
+            local_root=remap_root,
+        )
+        _assert(preview.before_missing == 1, f"remap before count mismatch: {preview!r}")
+        _assert(preview.after_missing == 0, f"remap after count mismatch: {preview!r}")
+        _assert(preview.remapped_count == 1 and preview.resolved_count == 1, f"remap hit count mismatch: {preview!r}")
+        _assert(dict(preview.manifest.diagnostics).get("重映射命中") == "1", "remap diagnostics should report hits")
+        _assert(any(entry.resolved_from.startswith("remap:") for entry in preview.manifest.entries), "remapped entries should keep provenance")
+        _assert(dict(compile_manifest.diagnostics).get("缺失") == "1", "remap preview must not mutate original manifest")
+        json.dumps(preview.to_record(), ensure_ascii=False, sort_keys=True)
         json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         dwarf_text = f"""
