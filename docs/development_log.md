@@ -3259,3 +3259,79 @@ Stop expanding dry-run-only scaffolding and push a real user-facing variable mod
   - keep RAM/type/readback safety gates consistent with the pyOCD path
   - add a Keil project profile so LoopMaster can launch uVision with `.uvprojx`, target and port
   - run the first smoke on the F401 variables (`debug_setpoint`, `debug_gain`, `debug_feedback`) before adding broader debugger features
+
+## Milestone 37 Update - Keil UVSOCK Live Write Entry Point
+
+### Goal
+
+Create the first real Keil-side path that can modify a variable through uVision/UVSOCK once a debug session is running.
+
+### Completed
+
+- Added a persistent `KeilUvscLiveSession` wrapper in `src\core\keil\uvsock.py`.
+- Added ctypes bindings for the UVSOCK calls needed by live expression writes:
+  - `UVSC_DBG_ENTER`
+  - `UVSC_GEN_SET_OPTIONS`
+  - `UVSC_DBG_STATUS`
+  - `UVSC_DBG_CALC_EXPRESSION`
+  - `UVSC_DBG_EVAL_EXPRESSION_TO_STR`
+  - `UVSC_DBG_EXIT`
+- Added packed ctypes structures matching the needed UVSOCK header shapes:
+  - `TVAL`
+  - `SSTR`
+  - `VSET`
+  - `UVSOCK_OPTIONS`
+- Implemented expression-based variable writes:
+  - assignment expression, for example `debug_setpoint = 5000`
+  - readback expression, for example `debug_setpoint`
+  - result object with assignment status, readback status and readback text
+- Added `tools\keil_live_variable_write_probe.py`:
+  - fake UVSC DLL, no Keil process, no hardware
+  - verifies call order, VSET string payload, status handling and readback parsing
+- Added `tools\keil_live_write_probe.py`:
+  - default preflight only
+  - launch-plan mode for the F401 Keil probe project
+  - explicit `--write` mode for real live writes when uVision/UVSOCK is running
+- Exported the live session/result types from `src\core\keil\__init__.py`.
+
+### Verified
+
+- `python -m py_compile src\core\keil\uvsock.py src\core\keil\__init__.py tools\keil_live_variable_write_probe.py tools\keil_live_write_probe.py`
+  - PASS.
+- `python tools\keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil`
+  - PASS; preflight only, uVision is not running.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --plan-launch --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe" --port 4827`
+  - PASS.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage creates a real Keil write execution entry point, but it still has not written to the physical F401 board because uVision is not currently running.
+- The first implementation uses expression assignment through `UVSC_DBG_CALC_EXPRESSION` plus `UVSC_DBG_EVAL_EXPRESSION_TO_STR` readback. This avoids blocking the real write path on `UVSC_DBG_VARIABLE_SET` variable-ID enumeration.
+- The explicit write command is intentionally opt-in:
+  - no `--write` means no target state modification
+  - `--write --expression debug_setpoint --value 5000` is required before a real UVSOCK write is sent
+
+### Next Target
+
+- Drive a real end-to-end Keil/F401 smoke:
+  - launch uVision with the F401 probe `.uvprojx`
+  - ensure the project builds or clearly reports the missing Keil pack/build reason
+  - enter/debug-load the F401 target if possible
+  - run `tools\keil_live_write_probe.py --write --expression debug_setpoint --value 5000`
+  - then wire the same live write call into the Debug Workbench UI behind the existing confirmation/audit pattern

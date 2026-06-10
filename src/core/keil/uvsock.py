@@ -88,6 +88,24 @@ class UvscConnectionResult:
 
 
 @dataclass(frozen=True)
+class UvscVariableWriteResult:
+    attempted: bool
+    written: bool
+    expression: str
+    readback_expression: str
+    value_text: str
+    readback_text: str = ""
+    assign_status: int | None = None
+    readback_status: int | None = None
+    error: str = ""
+
+    def summary(self) -> str:
+        status = "written" if self.written else "failed"
+        detail = self.readback_text or self.error or "--"
+        return f"UVSOCK variable write {status} {self.readback_expression}={detail}"
+
+
+@dataclass(frozen=True)
 class UvscLaunchPlan:
     command: tuple[str, ...]
     cwd: Path | None
@@ -137,6 +155,238 @@ UVSC_STATUS_NAMES = {
     8: "UVSC_STATUS_CALLBACK_IN_USE",
     9: "UVSC_STATUS_COMMAND_ERROR",
 }
+
+
+VTT_UINT64 = 20
+UVSOCK_SSTR_BYTES = 256
+
+
+class UvscError(RuntimeError):
+    def __init__(self, operation: str, status: int | None, detail: str = "") -> None:
+        self.operation = operation
+        self.status = status
+        self.detail = detail
+        name = uvsc_status_name(status) if status is not None else "--"
+        message = f"{operation} failed: {name}"
+        if detail:
+            message += f" ({detail})"
+        super().__init__(message)
+
+
+class _TvalValue(ctypes.Union):
+    _fields_ = [
+        ("ul", ctypes.c_uint32),
+        ("sc", ctypes.c_int8),
+        ("uc", ctypes.c_uint8),
+        ("i16", ctypes.c_int16),
+        ("u16", ctypes.c_uint16),
+        ("l", ctypes.c_int32),
+        ("i", ctypes.c_int),
+        ("i64", ctypes.c_int64),
+        ("u64", ctypes.c_uint64),
+        ("f", ctypes.c_float),
+        ("d", ctypes.c_double),
+    ]
+
+
+class _Tval(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("vType", ctypes.c_int),
+        ("v", _TvalValue),
+    ]
+
+
+class _Sstr(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("nLen", ctypes.c_int),
+        ("szStr", ctypes.c_char * UVSOCK_SSTR_BYTES),
+    ]
+
+
+class _Vset(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("val", _Tval),
+        ("str", _Sstr),
+    ]
+
+
+class _UvsockOptions(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("flags", ctypes.c_uint32),
+    ]
+
+
+class KeilUvscLiveSession:
+    """Explicit UVSOCK live session for real Keil debug commands.
+
+    The session does not launch uVision or change target run state. Callers must
+    opt in with a project/port flow and should keep the UI confirmation layer
+    outside this low-level wrapper.
+    """
+
+    def __init__(self, library, handle: int, *, owns_uvsc: bool = True) -> None:
+        self.library = library
+        self.handle = int(handle)
+        self._owns_uvsc = bool(owns_uvsc)
+        self._closed = False
+
+    @classmethod
+    def connect_existing(
+        cls,
+        root: str | os.PathLike[str] | None,
+        port: int,
+        *,
+        connection_name: str = "LoopMaster",
+        require_debug: bool = True,
+        extended_stack: bool = True,
+    ) -> "KeilUvscLiveSession":
+        preflight = check_uvsock_preflight(root=root, require_running=True)
+        if not preflight.can_attempt_connection:
+            raise UvscError("UVSOCK preflight", None, "; ".join(preflight.reasons) or "preflight failed")
+        library = preflight.load_result.handle
+        if library is None:
+            raise UvscError("UVSOCK load", None, "DLL handle is missing")
+        if not (1 <= int(port) <= 65535):
+            raise ValueError("UVSOCK port must be in range 1..65535")
+
+        _configure_uvsc_signatures(library)
+        init_code = int(library.UVSC_Init(1, 65535))
+        if init_code != 0:
+            raise UvscError("UVSC_Init", init_code)
+
+        handle = ctypes.c_int(0)
+        uv_port = ctypes.c_int(int(port))
+        name = connection_name.encode("utf-8")[:256] or b"LoopMaster"
+        try:
+            open_code = int(
+                library.UVSC_OpenConnection(
+                    ctypes.c_char_p(name),
+                    ctypes.byref(handle),
+                    ctypes.byref(uv_port),
+                    None,
+                    0,
+                    None,
+                    None,
+                    None,
+                    0,
+                    None,
+                )
+            )
+            if open_code != 0:
+                raise UvscError("UVSC_OpenConnection", open_code)
+            session = cls(library, handle.value, owns_uvsc=True)
+            if require_debug:
+                session.enter_debug()
+            if extended_stack:
+                session.set_extended_stack(True)
+            return session
+        except Exception:
+            _safe_uvsc_uninit(library)
+            raise
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self.handle:
+                self.library.UVSC_CloseConnection(self.handle, 0)
+        finally:
+            if self._owns_uvsc:
+                _safe_uvsc_uninit(self.library)
+
+    def __enter__(self) -> "KeilUvscLiveSession":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def enter_debug(self) -> None:
+        status = int(self.library.UVSC_DBG_ENTER(self.handle))
+        if status != 0:
+            raise UvscError("UVSC_DBG_ENTER", status)
+
+    def exit_debug(self) -> None:
+        status = int(self.library.UVSC_DBG_EXIT(self.handle))
+        if status != 0:
+            raise UvscError("UVSC_DBG_EXIT", status)
+
+    def set_extended_stack(self, enabled: bool = True) -> None:
+        options = _UvsockOptions(flags=1 if enabled else 0)
+        status = int(self.library.UVSC_GEN_SET_OPTIONS(self.handle, ctypes.byref(options)))
+        if status != 0:
+            raise UvscError("UVSC_GEN_SET_OPTIONS", status)
+
+    def target_running(self) -> bool | None:
+        running = ctypes.c_int(0)
+        status = int(self.library.UVSC_DBG_STATUS(self.handle, ctypes.byref(running)))
+        if status != 0:
+            raise UvscError("UVSC_DBG_STATUS", status)
+        return bool(running.value)
+
+    def evaluate_expression(self, expression: str) -> tuple[str, int]:
+        vset = _make_vset(expression)
+        status = int(
+            self.library.UVSC_DBG_EVAL_EXPRESSION_TO_STR(
+                self.handle,
+                ctypes.byref(vset),
+                ctypes.sizeof(vset),
+            )
+        )
+        if status != 0:
+            return "", status
+        return _sstr_to_text(vset.str), status
+
+    def assign_expression(self, expression: str) -> int:
+        vset = _make_vset(expression)
+        return int(
+            self.library.UVSC_DBG_CALC_EXPRESSION(
+                self.handle,
+                ctypes.byref(vset),
+                ctypes.sizeof(vset),
+            )
+        )
+
+    def write_expression_value(self, expression: str, value_text: str) -> UvscVariableWriteResult:
+        expression = _sanitize_expression(expression)
+        value_text = value_text.strip()
+        if not value_text:
+            return UvscVariableWriteResult(
+                attempted=False,
+                written=False,
+                expression=expression,
+                readback_expression=expression,
+                value_text=value_text,
+                error="value is empty",
+            )
+        assignment = f"{expression} = {value_text}"
+        assign_status = self.assign_expression(assignment)
+        if assign_status != 0:
+            return UvscVariableWriteResult(
+                attempted=True,
+                written=False,
+                expression=assignment,
+                readback_expression=expression,
+                value_text=value_text,
+                assign_status=assign_status,
+                error=uvsc_status_name(assign_status),
+            )
+        readback_text, readback_status = self.evaluate_expression(expression)
+        return UvscVariableWriteResult(
+            attempted=True,
+            written=readback_status == 0,
+            expression=assignment,
+            readback_expression=expression,
+            value_text=value_text,
+            readback_text=readback_text,
+            assign_status=assign_status,
+            readback_status=readback_status,
+            error="" if readback_status == 0 else uvsc_status_name(readback_status),
+        )
 
 
 def check_uvsock_preflight(
@@ -499,6 +749,16 @@ def _configure_uvsc_signatures(library) -> None:
     library.UVSC_CloseConnection.restype = ctypes.c_int
     library.UVSC_DBG_STATUS.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
     library.UVSC_DBG_STATUS.restype = ctypes.c_int
+    library.UVSC_DBG_ENTER.argtypes = [ctypes.c_int]
+    library.UVSC_DBG_ENTER.restype = ctypes.c_int
+    library.UVSC_DBG_EXIT.argtypes = [ctypes.c_int]
+    library.UVSC_DBG_EXIT.restype = ctypes.c_int
+    library.UVSC_GEN_SET_OPTIONS.argtypes = [ctypes.c_int, ctypes.POINTER(_UvsockOptions)]
+    library.UVSC_GEN_SET_OPTIONS.restype = ctypes.c_int
+    library.UVSC_DBG_CALC_EXPRESSION.argtypes = [ctypes.c_int, ctypes.POINTER(_Vset), ctypes.c_int]
+    library.UVSC_DBG_CALC_EXPRESSION.restype = ctypes.c_int
+    library.UVSC_DBG_EVAL_EXPRESSION_TO_STR.argtypes = [ctypes.c_int, ctypes.POINTER(_Vset), ctypes.c_int]
+    library.UVSC_DBG_EVAL_EXPRESSION_TO_STR.restype = ctypes.c_int
 
 
 def _safe_uvsc_uninit(library) -> None:
@@ -515,3 +775,35 @@ def _wait_for_uvision(timeout: float) -> bool:
             return True
         time.sleep(0.1)
     return bool(list_running_uvision())
+
+
+def _sanitize_expression(expression: str) -> str:
+    text = expression.strip()
+    if not text:
+        raise ValueError("expression is empty")
+    if "\x00" in text or "\n" in text or "\r" in text:
+        raise ValueError("expression contains unsupported control characters")
+    return text
+
+
+def _set_sstr(target: _Sstr, text: str) -> None:
+    data = text.encode("utf-8")
+    if len(data) >= UVSOCK_SSTR_BYTES:
+        raise ValueError(f"UVSOCK string is too long ({len(data)} bytes)")
+    target.nLen = len(data) + 1
+    target.szStr = data + b"\x00" * (UVSOCK_SSTR_BYTES - len(data))
+
+
+def _sstr_to_text(source: _Sstr) -> str:
+    raw = bytes(source.szStr)
+    if b"\x00" in raw:
+        raw = raw.split(b"\x00", 1)[0]
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _make_vset(expression: str) -> _Vset:
+    vset = _Vset()
+    vset.val.vType = VTT_UINT64
+    vset.val.v.u64 = 0
+    _set_sstr(vset.str, _sanitize_expression(expression))
+    return vset
