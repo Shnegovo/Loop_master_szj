@@ -287,6 +287,7 @@ class DebugWorkbenchTab(QWidget):
 
     summaryChanged = Signal()
     debugActionRequested = Signal(str)
+    backendSelectionChanged = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -308,6 +309,8 @@ class DebugWorkbenchTab(QWidget):
         self._breakpoint_quick_syncing = False
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
+        self._backend_options: tuple[tuple[str, str, str], ...] = ()
+        self._backend_selection_syncing = False
 
         self.setObjectName("debugWorkbenchTab")
         self._build_ui()
@@ -404,6 +407,31 @@ class DebugWorkbenchTab(QWidget):
         self._diagnostics = tuple((str(key), str(value)) for key, value in items)
         self._refresh_diagnostics_table()
 
+    def set_backend_options(
+        self,
+        options: tuple[tuple[str, str, str], ...] | list[tuple[str, str, str]],
+        selected: str,
+    ) -> None:
+        self._backend_options = tuple(
+            (str(key), str(label), str(note))
+            for key, label, note in options
+        )
+        if not hasattr(self, "backend_combo"):
+            return
+        self._backend_selection_syncing = True
+        try:
+            self.backend_combo.clear()
+            selected_index = 0
+            for index, (key, label, note) in enumerate(self._backend_options):
+                self.backend_combo.addItem(label, key)
+                self.backend_combo.setItemData(index, note, Qt.ToolTipRole)
+                if key == selected:
+                    selected_index = index
+            if self.backend_combo.count():
+                self.backend_combo.setCurrentIndex(selected_index)
+        finally:
+            self._backend_selection_syncing = False
+
     def set_command_transactions(
         self,
         transactions: tuple[KeilCommandTransaction, ...] | list[KeilCommandTransaction],
@@ -491,16 +519,23 @@ class DebugWorkbenchTab(QWidget):
         status.addStretch(1)
         layout.addLayout(status, 0, 0)
 
+        self.backend_combo = PclComboBox()
+        self.backend_combo.setObjectName("debugCombo")
+        self.backend_combo.setMinimumWidth(170)
+        self.backend_combo.setToolTip("选择调试后端")
+        self.backend_combo.currentIndexChanged.connect(self._on_backend_combo_changed)
+        layout.addWidget(self.backend_combo, 0, 1)
+
         self.open_project_button = QPushButton("打开 Keil 工程")
         self.open_project_button.setObjectName("debugPrimaryButton")
         self.open_project_button.clicked.connect(self._choose_project)
-        layout.addWidget(self.open_project_button, 0, 1)
+        layout.addWidget(self.open_project_button, 0, 2)
 
         self.target_combo = PclComboBox()
         self.target_combo.setObjectName("debugCombo")
         self.target_combo.setMinimumWidth(180)
         self.target_combo.currentTextChanged.connect(self._on_target_changed)
-        layout.addWidget(self.target_combo, 0, 2)
+        layout.addWidget(self.target_combo, 0, 3)
 
         self.search_edit = QLineEdit()
         self.search_edit.setObjectName("debugSearch")
@@ -521,16 +556,16 @@ class DebugWorkbenchTab(QWidget):
         self.search_next_button.setToolTip("跳到下一处搜索结果")
         self.search_next_button.clicked.connect(lambda: self._navigate_search(1))
         search_box.addWidget(self.search_next_button)
-        layout.addLayout(search_box, 0, 3)
+        layout.addLayout(search_box, 0, 4)
 
         self.summary_label = QLabel("未打开工程")
         self.summary_label.setObjectName("debugSummary")
         layout.addWidget(self.summary_label, 1, 0, 1, 2)
 
         actions = self._build_action_bar()
-        layout.addLayout(actions, 1, 2, 1, 2)
-        layout.addWidget(self._build_action_plan_strip(), 2, 0, 1, 4)
-        layout.setColumnStretch(3, 1)
+        layout.addLayout(actions, 1, 2, 1, 3)
+        layout.addWidget(self._build_action_plan_strip(), 2, 0, 1, 5)
+        layout.setColumnStretch(4, 1)
         return bar
 
     def _build_action_bar(self) -> QHBoxLayout:
@@ -539,7 +574,7 @@ class DebugWorkbenchTab(QWidget):
         layout.setSpacing(6)
         self._action_buttons: dict[str, QPushButton] = {}
         for key, title in (
-            ("discover", "发现 Keil"),
+            ("discover", "发现后端"),
             ("attach", "连接"),
             ("disconnect", "断开"),
             ("halt", "暂停"),
@@ -659,6 +694,13 @@ class DebugWorkbenchTab(QWidget):
         layout.addWidget(self._build_breakpoint_quick_editor())
         self._refresh_diagnostics_table()
         return panel
+
+    def _on_backend_combo_changed(self) -> None:
+        if self._backend_selection_syncing:
+            return
+        key = self.backend_combo.currentData()
+        if key:
+            self.backendSelectionChanged.emit(str(key))
 
     def _build_breakpoint_quick_editor(self) -> QFrame:
         editor = QFrame()
@@ -1271,14 +1313,15 @@ class DebugWorkbenchTab(QWidget):
             f"交易 ID: {transaction.transaction_id}",
             f"动作: {transaction.title}",
             f"模式: {'干跑' if transaction.dry_run else '执行'}",
-            f"端口: {transaction.port if transaction.port is not None else '--'}",
+            f"端口: {getattr(transaction, 'port', None) if getattr(transaction, 'port', None) is not None else '--'}",
             f"工程: {transaction.project_path or '--'}",
             f"Target: {transaction.target_name or '--'}",
             "未来命令:",
             *command_lines,
         ]
-        if transaction.breakpoint_diff_summary is not None:
-            diff = transaction.breakpoint_diff_summary.to_record()
+        breakpoint_diff_summary = getattr(transaction, "breakpoint_diff_summary", None)
+        if breakpoint_diff_summary is not None:
+            diff = breakpoint_diff_summary.to_record()
             sections.extend(
                 [
                     "断点差分:",

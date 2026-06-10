@@ -381,6 +381,51 @@ def run(output_dir: Path, width: int, height: int) -> int:
         window._show_workspace_page("debug_sources")
         tab = window._tab_debug_workbench
         tab.load_project(project_path)
+        backend_labels = [
+            tab.backend_combo.itemText(index)
+            for index in range(tab.backend_combo.count())
+        ] if hasattr(tab, "backend_combo") else []
+        for label in ("Keil / UVSOCK", "OpenOCD / GDB", "pyOCD", "离线回放"):
+            if label not in backend_labels:
+                issues.append(f"backend selector missing {label}: {backend_labels!r}")
+        if hasattr(tab, "backend_combo"):
+            openocd_index = tab.backend_combo.findData("openocd_gdb")
+            if openocd_index < 0:
+                issues.append("backend selector missing openocd_gdb data")
+            else:
+                tab.backend_combo.setCurrentIndex(openocd_index)
+                _pump(app, 0.15)
+                if getattr(window, "_debug_backend_kind", None).value != "openocd_gdb":
+                    issues.append(f"backend selector did not switch main window: {getattr(window, '_debug_backend_kind', None)!r}")
+                if "OpenOCD / GDB" not in tab.status_text.text():
+                    issues.append(f"OpenOCD placeholder status mismatch: {tab.status_text.text()!r}")
+                diag = {
+                    tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+                    for row in range(tab.diagnostics_table.rowCount())
+                    if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+                }
+                if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
+                    issues.append(f"OpenOCD placeholder diagnostics mismatch: {diag!r}")
+                window._discover_debug_backend_for_workbench()
+                _pump(app, 0.15)
+                placeholder_transactions = getattr(tab, "_command_transactions", ())
+                if not placeholder_transactions or getattr(placeholder_transactions[0], "backend", "") != "openocd_gdb":
+                    issues.append(f"OpenOCD placeholder transactions missing: {placeholder_transactions!r}")
+                placeholder_tip = tab.plan_guard_label.toolTip()
+                if "OpenOCD / GDB 后端尚未接入执行器" not in placeholder_tip:
+                    issues.append(f"OpenOCD placeholder tooltip missing blocked reason: {placeholder_tip!r}")
+                unsafe_actions = [
+                    key
+                    for key in ("halt", "run", "step", "sync_breakpoints", "write_variables")
+                    if getattr(tab, "_action_buttons", {}).get(key) is not None
+                    and getattr(tab, "_action_buttons", {})[key].isEnabled()
+                ]
+                if unsafe_actions:
+                    issues.append(f"OpenOCD placeholder enabled dangerous actions: {unsafe_actions!r}")
+                keil_index = tab.backend_combo.findData("keil")
+                if keil_index >= 0:
+                    tab.backend_combo.setCurrentIndex(keil_index)
+                    _pump(app, 0.15)
         source_dir = project_path.parent.parent / "Core" / "Src"
         remote_snapshot = _remote_snapshot(project_path, source_dir)
         tab._debug_remote_breakpoint_snapshot = remote_snapshot

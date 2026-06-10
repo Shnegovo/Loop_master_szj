@@ -33,11 +33,13 @@ from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
 from src.core.debug_workbench import (
+    DebugBackendKind,
     DebugRuntimeState,
     debug_command_plans_for_status,
     make_debug_status,
 )
 from src.core.debug_backend_registry import create_default_debug_backend_registry
+from src.core.debug_transactions import build_unavailable_debug_transactions, debug_transaction_by_key
 from src.core.keil.commands import KeilCommandHistory, build_keil_debug_transactions, transaction_by_key
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
@@ -453,6 +455,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_registry = create_default_debug_backend_registry(
             keil_root=self._keil_root,
             uvsock_port=self._debug_uvsock_port,
+            include_placeholders=True,
         )
         self._debug_backend_kind = self._debug_backend_registry.default_kind()
         self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
@@ -1980,28 +1983,68 @@ class MainWindow(QMainWindow):
 
     def _setup_debug_workbench_connections(self):
         self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
+        self._tab_debug_workbench.backendSelectionChanged.connect(self._on_debug_backend_selected)
+        self._refresh_debug_backend_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
         self._sync_debug_command_preview()
 
     def _on_debug_workbench_action(self, action_key: str):
         if action_key == "discover":
-            self._discover_keil_for_debug_workbench()
+            self._discover_debug_backend_for_workbench()
             return
         if action_key == "attach":
-            self._connect_keil_read_only_for_debug_workbench()
+            self._connect_debug_backend_read_only_for_workbench()
             return
         if hasattr(self, "_sb_label"):
             self._sb_label.setText("该调试动作尚未接入后端。")
 
-    def _discover_keil_for_debug_workbench(self):
+    def _refresh_debug_backend_options(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        options = tuple(
+            (descriptor.kind.value, descriptor.display_name, descriptor.notes)
+            for descriptor in self._debug_backend_registry.descriptors()
+        )
+        self._tab_debug_workbench.set_backend_options(options, self._debug_backend_kind.value)
+
+    def _on_debug_backend_selected(self, backend_key: str):
+        try:
+            kind = DebugBackendKind(str(backend_key))
+            descriptor = self._debug_backend_registry.descriptor(kind)
+            backend = self._debug_backend_registry.create(kind)
+        except Exception as exc:
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(f"调试后端切换失败：{exc}")
+            return
+        self._debug_backend_kind = kind
+        self._debug_backend = backend
+        self._debug_command_history.clear()
+        self._debug_remote_breakpoint_snapshot = None
+        self._debug_backend_snapshot_record = None
+        tab = self._tab_debug_workbench
+        status = make_debug_status(
+            state=DebugRuntimeState.DISCONNECTED,
+            backend=kind,
+            detail=f"{descriptor.display_name} 已选择，等待发现后端",
+            project_path=tab.debug_status.project_path,
+            target_name=tab.debug_status.target_name,
+        )
+        tab.set_debug_status(status, controls_ready=True)
+        tab.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
+        self._sync_debug_command_preview()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"已切换调试后端：{descriptor.display_name}")
+        self._refresh_hero()
+
+    def _discover_debug_backend_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
         tab = self._tab_debug_workbench
         previous = tab.debug_status
         tab.set_debug_controls_ready(False)
         if hasattr(self, "_sb_label"):
-            self._sb_label.setText("正在发现 Keil/UVSOCK...")
+            self._sb_label.setText(f"正在发现 {self._debug_backend_display_name()}...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         diagnostics = []
         try:
@@ -2015,10 +2058,55 @@ class MainWindow(QMainWindow):
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
         except Exception as exc:
-            message = f"Keil 预检失败：{exc}"
+            message = f"{self._debug_backend_display_name()} 预检失败：{exc}"
             status = make_debug_status(
                 state=DebugRuntimeState.ERROR,
-                backend="keil",
+                backend=self._debug_backend_kind,
+                detail=message,
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+                error=message,
+            )
+            diagnostics = self._debug_workbench_error_diagnostics(message)
+        finally:
+            QApplication.restoreOverrideCursor()
+        tab.set_debug_status(status, controls_ready=True)
+        tab.set_backend_diagnostics(diagnostics)
+        self._sync_debug_command_preview()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(status.detail)
+        self._refresh_hero()
+
+    def _discover_keil_for_debug_workbench(self):
+        self._discover_debug_backend_for_workbench()
+
+    def _connect_debug_backend_read_only_for_workbench(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        previous = tab.debug_status
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"正在读取 {self._debug_backend_display_name()} 只读会话快照...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        diagnostics = []
+        try:
+            snapshot = self._debug_backend.read_only_session_snapshot(
+                project_path=previous.project_path,
+                target_name=tab.debug_status.target_name,
+                previous_status=previous,
+                attempt_connection=True,
+                query_status=True,
+            )
+            status = snapshot.status
+            diagnostics = snapshot.diagnostic_rows()
+            self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
+            self._debug_backend_snapshot_record = snapshot.to_record()
+        except Exception as exc:
+            message = f"{self._debug_backend_display_name()} 只读连接失败：{exc}"
+            status = make_debug_status(
+                state=DebugRuntimeState.ERROR,
+                backend=self._debug_backend_kind,
                 detail=message,
                 project_path=previous.project_path,
                 target_name=previous.target_name,
@@ -2035,67 +2123,38 @@ class MainWindow(QMainWindow):
         self._refresh_hero()
 
     def _connect_keil_read_only_for_debug_workbench(self):
-        if not hasattr(self, "_tab_debug_workbench"):
-            return
-        tab = self._tab_debug_workbench
-        previous = tab.debug_status
-        tab.set_debug_controls_ready(False)
-        if hasattr(self, "_sb_label"):
-            self._sb_label.setText("正在读取 Keil 只读会话快照...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        diagnostics = []
-        try:
-            snapshot = self._debug_backend.read_only_session_snapshot(
-                project_path=previous.project_path,
-                target_name=tab.debug_status.target_name,
-                previous_status=previous,
-                attempt_connection=True,
-                query_status=True,
-            )
-            status = snapshot.status
-            diagnostics = snapshot.diagnostic_rows()
-            self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
-            self._debug_backend_snapshot_record = snapshot.to_record()
-        except Exception as exc:
-            message = f"Keil 只读连接失败：{exc}"
-            status = make_debug_status(
-                state=DebugRuntimeState.ERROR,
-                backend="keil",
-                detail=message,
-                project_path=previous.project_path,
-                target_name=previous.target_name,
-                error=message,
-            )
-            diagnostics = self._debug_workbench_error_diagnostics(message)
-        finally:
-            QApplication.restoreOverrideCursor()
-        tab.set_debug_status(status, controls_ready=True)
-        tab.set_backend_diagnostics(diagnostics)
-        self._sync_debug_command_preview()
-        if hasattr(self, "_sb_label"):
-            self._sb_label.setText(status.detail)
-        self._refresh_hero()
+        self._connect_debug_backend_read_only_for_workbench()
 
     def _sync_debug_command_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
         tab = self._tab_debug_workbench
         status = tab.debug_status
-        transactions = build_keil_debug_transactions(
-            status,
-            debug_command_plans_for_status(status),
-            port=self._debug_uvsock_port,
-            project_path=status.project_path,
-            target_name=status.target_name,
-            breakpoints=tab.local_breakpoints(),
-            source_paths=tab.local_source_paths(),
-            remote_breakpoint_snapshot=getattr(self, "_debug_remote_breakpoint_snapshot", None),
-            backend_snapshot=getattr(self, "_debug_backend_snapshot_record", None),
-            execution_gate=False,
-        )
+        if self._debug_backend_kind == DebugBackendKind.KEIL:
+            transactions = build_keil_debug_transactions(
+                status,
+                debug_command_plans_for_status(status),
+                port=self._debug_uvsock_port,
+                project_path=status.project_path,
+                target_name=status.target_name,
+                breakpoints=tab.local_breakpoints(),
+                source_paths=tab.local_source_paths(),
+                remote_breakpoint_snapshot=getattr(self, "_debug_remote_breakpoint_snapshot", None),
+                backend_snapshot=getattr(self, "_debug_backend_snapshot_record", None),
+                execution_gate=False,
+            )
+        else:
+            transactions = build_unavailable_debug_transactions(
+                status,
+                debug_command_plans_for_status(status),
+                backend=self._debug_backend_kind.value,
+                backend_display_name=self._debug_backend_display_name(),
+                reason=f"{self._debug_backend_display_name()} 后端尚未接入执行器",
+                backend_snapshot=getattr(self, "_debug_backend_snapshot_record", None),
+            )
         tab.set_command_transactions(transactions)
         focused = self._focused_debug_transaction(transactions)
-        if focused is not None:
+        if focused is not None and self._debug_backend_kind == DebugBackendKind.KEIL:
             self._debug_command_history.record(focused, event="previewed", source="ui_sync")
         tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
 
@@ -2121,18 +2180,39 @@ class MainWindow(QMainWindow):
         return transactions[0] if transactions else None
 
     def _debug_workbench_idle_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        descriptor = self._debug_backend_registry.descriptor(self._debug_backend_kind)
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            return (
+                ("后端", descriptor.display_name),
+                ("状态", "占位已注册，尚未接入执行器"),
+                ("安全边界", "不会启动进程、连接探针或写目标"),
+                ("下一步", descriptor.notes or "等待后续后端实现"),
+            )
         return (
+            ("后端", descriptor.display_name),
             ("Keil 根目录", str(self._keil_root)),
             ("UVSOCK 端口", str(self._debug_uvsock_port)),
             ("状态", "等待发现 Keil"),
         )
 
     def _debug_workbench_error_diagnostics(self, message: str) -> tuple[tuple[str, str], ...]:
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            return (
+                ("后端", self._debug_backend_display_name()),
+                ("错误", message),
+            )
         return (
+            ("后端", self._debug_backend_display_name()),
             ("Keil 根目录", str(self._keil_root)),
             ("UVSOCK 端口", str(self._debug_uvsock_port)),
             ("错误", message),
         )
+
+    def _debug_backend_display_name(self) -> str:
+        try:
+            return self._debug_backend_registry.descriptor(self._debug_backend_kind).display_name
+        except Exception:
+            return str(getattr(self._debug_backend, "display_name", self._debug_backend_kind.value))
 
     # ================================================================
     #  Serial Assistant

@@ -2048,3 +2048,66 @@ Start the larger multi-toolchain architecture slice so Keil remains the first re
   - keep unavailable backends visibly blocked and dry-run only
   - move Keil transaction UI typing toward generic `DebugCommandTransaction` while preserving current Keil preview behavior
   - start extracting source provider / `SourceManifest` so Keil `.uvprojx`, ELF/DWARF and GDB source lists can feed the same editor tree
+
+## Milestone 30 Update - Debug Backend Selector UI
+
+### Goal
+
+Wire the new backend registry into the Debug Workbench UI so Keil, OpenOCD/GDB, pyOCD and offline replay appear as selectable workbench backends, while unavailable non-Keil backends stay visibly blocked and dry-run only.
+
+### Completed
+
+- Added a compact backend selector to the Debug Workbench toolbar.
+- Populated the selector from `DebugBackendRegistry` descriptors:
+  - `Keil / UVSOCK`
+  - `OpenOCD / GDB`
+  - `pyOCD`
+  - `离线回放`
+- Keil remains the default backend and keeps the existing discover/read-only attach behavior.
+- Switching backend now:
+  - rebuilds the selected adapter from the registry
+  - clears stale backend snapshots and dry-run history
+  - refreshes status, diagnostics and command preview
+  - preserves current project/target context where possible
+- OpenOCD/GDB, pyOCD and offline replay placeholders now produce data-only blocked snapshots and generic dry-run command transactions.
+- Generic unavailable transactions are shown in the same action-plan strip as Keil transactions, but they are not recorded into the Keil-specific history yet.
+- Generalized command-plan wording for non-Keil backends so the UI no longer claims OpenOCD/GDB or pyOCD are using UVSOCK/Keil-specific steps.
+- Extended the Debug Workbench UI probe to select OpenOCD/GDB, run the placeholder discover path and assert dangerous actions remain disabled.
+
+### Verified
+
+- `python -m py_compile src\core\debug_snapshots.py src\core\debug_backend.py src\core\debug_backend_registry.py src\core\debug_transactions.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_snapshot_model_probe.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py tools\debug_backend_adapter_probe.py tools\keil_command_transaction_probe.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS; includes backend selector and OpenOCD/GDB placeholder flow.
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `git diff --check`
+  - PASS except the existing CRLF normalization warning for `src\ui\gui.py`.
+
+### Notes
+
+- This update still does not launch Keil, OpenOCD, pyOCD or GDB.
+- This update still does not connect ST-Link/F401CCU6, halt/run/step a target, sync breakpoints, write variables or flash firmware.
+- Non-Keil backend history is intentionally not persisted through `KeilCommandHistory`; a generic history model should replace that before non-Keil backends become active.
+
+### Next Target
+
+- Continue Milestone 30 by extracting generic command history and source-provider surfaces:
+  - move UI typing from `KeilCommandTransaction` to generic transaction-compatible protocols
+  - add a generic history model for Keil and non-Keil transactions
+  - introduce `SourceManifest` so Keil projects, ELF/DWARF and future GDB source lists can share the editor tree

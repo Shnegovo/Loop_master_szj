@@ -76,6 +76,8 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已加入 `DebugBackendRegistry`：默认仍使用 Keil / UVSOCK，且可注册 OpenOCD/GDB、pyOCD、离线回放占位后端。
 - 已加入 backend-neutral `DebugCommandTransaction` shell，用于不可用后端的 dry-run/audit，不连接探针、不启动外部进程。
 - 已加入 fake OpenOCD/GDB、pyOCD、离线回放的 no-hardware 探针，证明多后端入口可以先安全存在。
+- 已把后端选择入口接入 Debug Workbench：Keil / UVSOCK 默认可用，OpenOCD/GDB、pyOCD、离线回放显示为已注册但 blocked 的 dry-run 占位。
+- 非 Keil 后端计划文案已改为通用后端语义，不再显示 UVSOCK/Keil 专属执行步骤。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -87,7 +89,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
 
 2. 架构底座
-   - 接入 backend selector UI：`Keil 主控`、`OpenOCD/GDB`、`pyOCD`、`离线回放` 共用同一个工作台入口，不可用后端显示明确 blocked dry-run。
+   - 抽出通用 command history：Keil 和非 Keil transaction 共用历史、去重、tooltip 和审计入口。
    - 继续把 Keil transaction UI typing 迁移到通用 `DebugCommandTransaction`，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
    - 抽出通用 `SourceManifest`，先用 fake backend 探针验证 UI 不再依赖 Keil 工程类型。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。

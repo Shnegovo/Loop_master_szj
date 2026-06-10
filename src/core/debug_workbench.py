@@ -479,16 +479,48 @@ def debug_actions_for_status(status: DebugWorkbenchStatus) -> tuple[DebugAction,
 
 def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugCommandPlan, ...]:
     actions = {action.key: action for action in debug_actions_for_status(status)}
+    is_keil = status.backend == DebugBackendKind.KEIL
+    discover_title = "发现 Keil" if is_keil else "发现后端"
+    discover_intent = "刷新 Keil 安装、UVSOCK DLL 与 uVision 进程状态" if is_keil else "刷新所选调试后端的可用性和连接预检状态"
+    discover_safety = "不启动 Keil，不连接 UVSOCK，不访问 ST-Link 或目标板" if is_keil else "不启动外部进程，不连接探针，不访问目标板"
+    discover_steps = ("定位 Keil 根目录", "检查 UVSOCK DLL", "读取 uVision 进程状态") if is_keil else ("检查后端配置", "生成只读诊断", "保持动作 dry-run")
+    attach_intent = "通过 UVSOCK 连接已经处于 Debug 状态的 uVision" if is_keil else "读取所选调试后端的只读会话快照"
+    attach_requirements = (
+        "显式进入 UVSOCK 烟测/连接阶段",
+        "确认 Keil 工程与 Target 和当前工作台一致",
+        "连接失败只记录错误，不自动重试或复位目标",
+    ) if is_keil else (
+        "后端执行器已接入",
+        "确认工程、target、探针和端口配置一致",
+        "连接失败只记录错误，不自动重试或复位目标",
+    )
+    attach_steps = ("打开 UVSOCK 连接", "读取目标运行状态", "同步只读会话状态") if is_keil else ("请求只读快照", "读取目标状态", "同步诊断和能力")
+    disconnect_intent = "关闭 LoopMaster 到 Keil 的调试桥接连接" if is_keil else "关闭 LoopMaster 到所选调试后端的会话"
+    disconnect_requirements = ("已建立 UVSOCK 调试连接",) if is_keil else ("已建立调试后端会话",)
+    disconnect_safety = "只释放桥接连接，不关闭 Keil，不复位目标" if is_keil else "只释放 LoopMaster 会话，不复位目标，不关闭用户手动启动的工具"
+    disconnect_steps = ("停止状态轮询", "关闭 UVSOCK 连接", "保留本地断点与源码状态") if is_keil else ("停止状态轮询", "关闭只读连接", "保留本地断点与源码状态")
+    control_backend = "Keil" if is_keil else "所选调试后端"
+    breakpoint_intent = "把本地可视化断点同步到 Keil 调试会话" if is_keil else "把本地可视化断点同步到所选调试后端"
+    breakpoint_requirements = (
+        "断点 dry-run 映射到 Keil 支持的文件/行号",
+        "逐条返回验证状态并允许失败项留在本地",
+        "同步前显示新增、删除、禁用差异",
+    ) if is_keil else (
+        "断点 dry-run 映射到后端支持的位置格式",
+        "逐条返回验证状态并允许失败项留在本地",
+        "同步前显示新增、删除、禁用差异",
+    )
+    variable_intent = "从 LoopMaster 面板写入 Keil 可见的变量或内存" if is_keil else "从 LoopMaster 面板写入后端可见的变量或内存"
     return (
         _command_plan(
             actions,
             "discover",
-            "发现 Keil",
+            discover_title,
             DebugPlanRisk.INFO,
-            "刷新 Keil 安装、UVSOCK DLL 与 uVision 进程状态",
+            discover_intent,
             requirements=("只读取本机路径与进程状态",),
-            safety_notes=("不启动 Keil，不连接 UVSOCK，不访问 ST-Link 或目标板",),
-            preview_steps=("定位 Keil 根目录", "检查 UVSOCK DLL", "读取 uVision 进程状态"),
+            safety_notes=(discover_safety,),
+            preview_steps=discover_steps,
             preview_only=False,
         ),
         _command_plan(
@@ -496,31 +528,27 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             "attach",
             "连接调试会话",
             DebugPlanRisk.MEDIUM,
-            "通过 UVSOCK 连接已经处于 Debug 状态的 uVision",
-            requirements=(
-                "显式进入 UVSOCK 烟测/连接阶段",
-                "确认 Keil 工程与 Target 和当前工作台一致",
-                "连接失败只记录错误，不自动重试或复位目标",
-            ),
+            attach_intent,
+            requirements=attach_requirements,
             safety_notes=("连接本身不写变量，但会进入真实调试会话上下文",),
-            preview_steps=("打开 UVSOCK 连接", "读取目标运行状态", "同步只读会话状态"),
+            preview_steps=attach_steps,
         ),
         _command_plan(
             actions,
             "disconnect",
             "断开调试会话",
             DebugPlanRisk.LOW,
-            "关闭 LoopMaster 到 Keil 的调试桥接连接",
-            requirements=("已建立 UVSOCK 调试连接",),
-            safety_notes=("只释放桥接连接，不关闭 Keil，不复位目标",),
-            preview_steps=("停止状态轮询", "关闭 UVSOCK 连接", "保留本地断点与源码状态"),
+            disconnect_intent,
+            requirements=disconnect_requirements,
+            safety_notes=(disconnect_safety,),
+            preview_steps=disconnect_steps,
         ),
         _command_plan(
             actions,
             "halt",
             "暂停目标",
             DebugPlanRisk.HIGH,
-            "请求 Keil 暂停正在运行的 MCU",
+            f"请求{control_backend}暂停正在运行的 MCU",
             requirements=(
                 "已完成连接烟测并确认运行控制能力",
                 "确认当前固件可被安全暂停",
@@ -534,7 +562,7 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             "run",
             "继续运行",
             DebugPlanRisk.HIGH,
-            "请求 Keil 让暂停的 MCU 继续运行",
+            f"请求{control_backend}让暂停的 MCU 继续运行",
             requirements=(
                 "已完成连接烟测并确认运行控制能力",
                 "确认断点和变量写入计划不会造成意外停机",
@@ -548,7 +576,7 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             "step",
             "单步",
             DebugPlanRisk.HIGH,
-            "请求 Keil 执行一次源码/汇编单步",
+            f"请求{control_backend}执行一次源码/汇编单步",
             requirements=(
                 "目标处于暂停状态",
                 "已确认当前调用栈和中断状态适合单步",
@@ -562,12 +590,8 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             "sync_breakpoints",
             "同步断点",
             DebugPlanRisk.MEDIUM,
-            "把本地可视化断点同步到 Keil 调试会话",
-            requirements=(
-                "断点 dry-run 映射到 Keil 支持的文件/行号",
-                "逐条返回验证状态并允许失败项留在本地",
-                "同步前显示新增、删除、禁用差异",
-            ),
+            breakpoint_intent,
+            requirements=breakpoint_requirements,
             safety_notes=("断点会改变目标运行停顿位置，必须可撤销并显示验证结果",),
             preview_steps=("生成断点差异", "执行 Keil 断点命令", "回读验证状态"),
         ),
@@ -576,7 +600,7 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             "write_variables",
             "写变量",
             DebugPlanRisk.HIGH,
-            "从 LoopMaster 面板写入 Keil 可见的变量或内存",
+            variable_intent,
             requirements=(
                 "仅允许 RAM 符号或明确地址白名单",
                 "完成类型、长度、对齐、数值范围和端序校验",
