@@ -1771,3 +1771,62 @@ Start the larger debug-backend milestone by adding a backend adapter boundary an
   - run `keil_backend_adapter_probe.py --attempt-existing --status`
   - surface the read-only snapshot in the UI without enabling control buttons
   - start modeling remote breakpoint/PC snapshots as incomplete until Keil readback parsing is proven
+
+## Milestone 29 Update - Keil Read-Only Attach UI Path
+
+### Goal
+
+Continue the same large debug-backend milestone by wiring the Debug Workbench `连接` action to the Keil adapter's explicit read-only session snapshot path, while keeping target control and writes locked down.
+
+### Completed
+
+- Wired the Debug Workbench `attach` action to `_connect_keil_read_only_for_debug_workbench()`.
+- The attach path now calls `KeilUvSockBackendAdapter.read_only_session_snapshot()` only after the user explicitly requests `连接`.
+- The UI now surfaces read-only snapshot status and diagnostics:
+  - mode
+  - connection attempted
+  - connection result
+  - target running state
+  - connection error
+- Kept `Halt`、`Run`、`Step`、`同步断点` and `写变量` disabled after a read-only attach snapshot.
+- Extended the UI probe with a fake read-only Keil backend so the attach path is tested without launching Keil, opening real UVSOCK, or touching ST-Link/F401CCU6.
+- Verified the real CLI adapter `--attempt-existing --status` path in the current no-uVision environment; it fails safely with `attempted=False` and leaves dangerous capabilities disabled.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_debug_workbench_probe.py src\core\debug_backend.py src\core\keil\backend.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py --keil-root D:\Keil --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx --target HELLO --attempt-existing --status`
+  - PASS; current machine has no running uVision, so no connection was attempted.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports`
+  - PASS.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+
+### Notes
+
+- This update still does not launch Keil, access ST-Link/F401CCU6, halt/run the target, sync breakpoints, or write variables.
+- The only real UVSOCK-capable path remains explicit: user clicks `连接`, or a developer runs `keil_backend_adapter_probe.py --attempt-existing --status`.
+- On the current machine there is no running uVision process, so the real CLI attempt path proves safe failure but not a successful live session.
+
+### Next Target
+
+- Continue the same milestone by modeling read-only PC and remote breakpoint snapshot placeholders:
+  - mark remote snapshots incomplete until real Keil parsing is proven
+  - feed incomplete snapshots into existing dry-run diff UI without claiming sync readiness
+  - prepare a future successful live UVSOCK smoke to populate status and snapshot evidence

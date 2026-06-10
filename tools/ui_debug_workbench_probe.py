@@ -18,12 +18,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core.debug_workbench import (  # noqa: E402
+    DebugCapabilities,
     DebugRuntimeState,
     default_debug_capabilities,
     debug_command_plans_for_status,
     make_debug_status,
     search_document,
 )
+from src.core.debug_backend import DebugBackendDiagnostic, DebugBackendSessionSnapshot  # noqa: E402
 from src.core.keil.commands import (  # noqa: E402
     KeilBreakpointRemoteSnapshot,
     KeilRemoteBreakpoint,
@@ -256,6 +258,65 @@ def _focused_transaction(transactions):
     return transactions[0] if transactions else None
 
 
+class _FakeReadOnlyBackend:
+    def __init__(self, project_path: Path) -> None:
+        self.project_path = project_path
+        self.calls = 0
+
+    def read_only_session_snapshot(
+        self,
+        *,
+        project_path=None,
+        target_name: str = "",
+        previous_status=None,
+        attempt_connection: bool = True,
+        query_status: bool = True,
+    ):
+        self.calls += 1
+        status = make_debug_status(
+            state=DebugRuntimeState.RUNNING,
+            backend="keil",
+            detail="UVSOCK 只读快照已连接，目标运行中",
+            project_path=project_path or self.project_path,
+            target_name=target_name,
+            capabilities=DebugCapabilities(
+                can_discover=True,
+                can_attach=True,
+                can_disconnect=False,
+                can_read_variables=True,
+                can_write_variables=False,
+                can_halt=False,
+                can_run=False,
+                can_step=False,
+                can_sync_breakpoints=False,
+            ),
+        )
+        return DebugBackendSessionSnapshot(
+            schema_version=1,
+            backend=status.backend,
+            adapter_name="Fake Keil / UVSOCK",
+            snapshot_id="debug-backend-ui-fake",
+            captured_at="2026-06-10T00:00:00+00:00",
+            status=status,
+            diagnostics=(
+                DebugBackendDiagnostic("后端", "Keil / UVSOCK"),
+                DebugBackendDiagnostic("模式", "只读快照"),
+                DebugBackendDiagnostic("连接尝试", "是"),
+                DebugBackendDiagnostic("连接结果", "已连接"),
+                DebugBackendDiagnostic("目标运行", "运行中"),
+                DebugBackendDiagnostic("连接错误", "--"),
+            ),
+            capabilities=(),
+            read_only=True,
+            connection_attempted=attempt_connection,
+            connection_established=True,
+            target_running=True,
+            port=4827,
+            project_path=Path(project_path or self.project_path),
+            target_name=target_name,
+        )
+
+
 def _remote_snapshot(project_path: Path, source_dir: Path) -> KeilBreakpointRemoteSnapshot:
     return KeilBreakpointRemoteSnapshot(
         schema_version=1,
@@ -329,6 +390,35 @@ def run(output_dir: Path, width: int, height: int) -> int:
         for key in ("Keil 根目录", "UVSOCK DLL", "UVSOCK 端口", "启动命令"):
             if key not in diagnostic_keys:
                 issues.append(f"diagnostics table missing {key}: {sorted(diagnostic_keys)!r}")
+        fake_backend = _FakeReadOnlyBackend(project_path)
+        window._debug_backend = fake_backend
+        attach_button = getattr(tab, "_action_buttons", {}).get("attach")
+        if attach_button is None:
+            issues.append("attach action button missing")
+        else:
+            attach_button.setEnabled(True)
+            attach_button.click()
+            _pump(app, 0.15)
+            if fake_backend.calls != 1:
+                issues.append(f"attach action did not request one read-only snapshot: {fake_backend.calls}")
+            if "只读快照" not in tab.status_text.text() or "目标运行中" not in tab.status_text.text():
+                issues.append(f"read-only attach status mismatch: {tab.status_text.text()!r}")
+            diag = {
+                tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+                for row in range(tab.diagnostics_table.rowCount())
+                if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+            }
+            for key, expected in (("模式", "只读快照"), ("连接尝试", "是"), ("连接结果", "已连接"), ("目标运行", "运行中")):
+                if diag.get(key) != expected:
+                    issues.append(f"read-only attach diagnostic mismatch {key}: {diag!r}")
+            blocked_actions = [
+                key
+                for key in ("halt", "run", "step", "sync_breakpoints", "write_variables")
+                if getattr(tab, "_action_buttons", {}).get(key) is not None
+                and getattr(tab, "_action_buttons", {})[key].isEnabled()
+            ]
+            if blocked_actions:
+                issues.append(f"read-only attach enabled dangerous actions: {blocked_actions!r}")
         tab.search_edit.setText("speed")
         if not tab.search_next_button.isEnabled():
             issues.append("search next button should be enabled after a query with matches")

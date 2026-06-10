@@ -1984,6 +1984,9 @@ class MainWindow(QMainWindow):
         if action_key == "discover":
             self._discover_keil_for_debug_workbench()
             return
+        if action_key == "attach":
+            self._connect_keil_read_only_for_debug_workbench()
+            return
         if hasattr(self, "_sb_label"):
             self._sb_label.setText("该调试动作尚未接入后端。")
 
@@ -2007,6 +2010,46 @@ class MainWindow(QMainWindow):
             diagnostics = snapshot.diagnostic_rows()
         except Exception as exc:
             message = f"Keil 预检失败：{exc}"
+            status = make_debug_status(
+                state=DebugRuntimeState.ERROR,
+                backend="keil",
+                detail=message,
+                project_path=previous.project_path,
+                target_name=previous.target_name,
+                error=message,
+            )
+            diagnostics = self._debug_workbench_error_diagnostics(message)
+        finally:
+            QApplication.restoreOverrideCursor()
+        tab.set_debug_status(status, controls_ready=True)
+        tab.set_backend_diagnostics(diagnostics)
+        self._sync_debug_command_preview()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(status.detail)
+        self._refresh_hero()
+
+    def _connect_keil_read_only_for_debug_workbench(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        previous = tab.debug_status
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在读取 Keil 只读会话快照...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        diagnostics = []
+        try:
+            snapshot = self._debug_backend.read_only_session_snapshot(
+                project_path=previous.project_path,
+                target_name=tab.debug_status.target_name,
+                previous_status=previous,
+                attempt_connection=True,
+                query_status=True,
+            )
+            status = snapshot.status
+            diagnostics = snapshot.diagnostic_rows()
+        except Exception as exc:
+            message = f"Keil 只读连接失败：{exc}"
             status = make_debug_status(
                 state=DebugRuntimeState.ERROR,
                 backend="keil",

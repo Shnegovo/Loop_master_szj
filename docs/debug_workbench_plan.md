@@ -60,7 +60,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 
 - 已完成第一块：抽出可扩展的调试后端 adapter 边界，`发现 Keil` 已改为通过 Keil adapter 产出状态和诊断。
 - 已新增 Keil backend adapter probe，验证 discover 不连接、只读 snapshot 不启用 Halt/Run/Step/写变量/同步断点。
-- 下一块是显式 opt-in 的 Keil 只读连接烟测：在用户已经打开 uVision/UVSOCK 时执行 `OpenConnection -> DBG_STATUS -> CloseConnection`。
+- 已接入 `连接` 动作为显式 opt-in 的 Keil 只读连接快照：用户点击连接时才执行 `OpenConnection -> DBG_STATUS -> CloseConnection`，并且只显示状态/诊断，不开放运行控制。
 - 后续只读捕获目标状态、当前 PC、工程/Target、远端断点列表或可用的近似快照，并喂给现有 dry-run diff/verification UI。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
