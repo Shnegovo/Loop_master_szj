@@ -93,7 +93,10 @@ def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
         _assert(plan.status in {"可执行", "计划就绪", "等待条件"}, f"unexpected plan status for {key}: {plan.status}")
         _assert(not plan.execution_enabled or key == "discover", f"{key} should not become executable in plan-only mode")
         if key != "discover" and plan.preconditions_met:
-            _assert("烟测" in plan.disabled_reason or "只显示计划" in plan.disabled_reason, f"{key} lacks preview guard")
+            _assert(
+                "显式执行" in plan.disabled_reason or "后端控制器" in plan.disabled_reason,
+                f"{key} lacks explicit execution guard",
+            )
 
 
 def _assert_risky_plans_disabled(plans: dict[str, DebugCommandPlan]) -> None:

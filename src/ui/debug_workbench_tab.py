@@ -658,6 +658,8 @@ class DebugWorkbenchTab(QWidget):
         self._action_buttons: dict[str, QPushButton] = {}
         for key, title in (
             ("discover", "发现后端"),
+            ("build_project", "构建"),
+            ("launch_uvsock", "启动Keil"),
             ("attach", "连接"),
             ("disconnect", "断开"),
             ("halt", "暂停"),
@@ -1473,7 +1475,7 @@ class DebugWorkbenchTab(QWidget):
             elif plan.execution_enabled:
                 guard_text = "可执行"
             elif plan.preconditions_met:
-                guard_text = "条件满足，但仍等待 UVSOCK 烟测阶段"
+                guard_text = "条件满足，等待显式执行"
             else:
                 guard_text = plan.disabled_reason or "等待后端条件"
             self.plan_guard_label.setText(guard_text)
@@ -1681,10 +1683,18 @@ class DebugWorkbenchTab(QWidget):
                 and status.backend.value == "keil"
                 and status.state.value in {"keil_attached", "paused", "running"}
             )
-            enabled = bool((action.enabled or explicit_keil_write) and self._backend_controls_ready)
+            explicit_keil_profile_action = (
+                key in {"build_project", "launch_uvsock"}
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.project_path is not None
+            )
+            enabled = bool((action.enabled or explicit_keil_write or explicit_keil_profile_action) and self._backend_controls_ready)
             button.setEnabled(enabled)
             if enabled:
-                if explicit_keil_write and not action.enabled:
+                if explicit_keil_profile_action:
+                    button.setToolTip("使用当前 Keil 工程/Target 的调试档案执行显式动作")
+                elif explicit_keil_write and not action.enabled:
                     button.setToolTip("显式通过 Keil/UVSOCK 写变量，写入前会再次确认")
                 else:
                     button.setToolTip(action.title)

@@ -34,6 +34,8 @@ from src.core.keil.commands import (  # noqa: E402
     build_keil_debug_transactions,
     transaction_by_key,
 )
+from src.core.keil.profile import KeilBuildResult, make_keil_debug_profile  # noqa: E402
+from src.core.keil.uvsock import UvscLaunchResult  # noqa: E402
 from src.ui.gui import MainWindow  # noqa: E402
 from src.ui.pcl_theme import apply_pcl_theme  # noqa: E402
 
@@ -278,6 +280,58 @@ class _FakeReadOnlyBackend:
     def __init__(self, project_path: Path) -> None:
         self.project_path = project_path
         self.calls = 0
+        self.profile_calls = 0
+        self.build_calls = 0
+        self.launch_calls = 0
+
+    def debug_profile(
+        self,
+        *,
+        project_path=None,
+        target_name: str = "",
+    ):
+        self.profile_calls += 1
+        return make_keil_debug_profile(
+            root=Path("D:/Keil"),
+            project_path=project_path or self.project_path,
+            target_name=target_name,
+            port=4827,
+        )
+
+    def build_project(
+        self,
+        *,
+        project_path=None,
+        target_name: str = "",
+        timeout: float = 180.0,
+    ):
+        self.build_calls += 1
+        profile = self.debug_profile(project_path=project_path or self.project_path, target_name=target_name)
+        return KeilBuildResult(
+            plan=profile.build_plan,
+            attempted=True,
+            succeeded=False,
+            returncode=1,
+            log_path=profile.build_plan.log_path,
+            output_tail="fake build path: UI probe does not invoke uVision.com",
+            axf_path=profile.axf_path,
+            axf_exists=profile.axf_exists,
+            error="fake build path: no external process launched",
+        )
+
+    def launch_uvsock(
+        self,
+        *,
+        project_path=None,
+        target_name: str = "",
+    ):
+        self.launch_calls += 1
+        profile = self.debug_profile(project_path=project_path or self.project_path, target_name=target_name)
+        return UvscLaunchResult(
+            plan=profile.launch_plan,
+            launched=False,
+            error="fake launch path: UI probe does not start uVision",
+        )
 
     def read_only_session_snapshot(
         self,
@@ -292,7 +346,7 @@ class _FakeReadOnlyBackend:
         status = make_debug_status(
             state=DebugRuntimeState.RUNNING,
             backend="keil",
-            detail="UVSOCK 只读快照已连接，目标运行中",
+            detail="UVSOCK 一次性快照已读取，目标运行中",
             project_path=project_path or self.project_path,
             target_name=target_name,
             capabilities=DebugCapabilities(
@@ -587,6 +641,19 @@ Raw dump of debug contents of section .debug_line:
         for key in ("Keil 根目录", "UVSOCK DLL", "UVSOCK 端口", "启动命令"):
             if key not in diagnostic_keys:
                 issues.append(f"diagnostics table missing {key}: {sorted(diagnostic_keys)!r}")
+        diag = _diagnostics(tab)
+        for key in ("Keil 档案", "AXF", "AXF 状态", "构建命令", "构建状态", "启动命令", "启动状态"):
+            if key not in diag:
+                issues.append(f"profile diagnostics table missing {key}: {diag!r}")
+        for key, expected in (("Keil 档案", "可用"), ("AXF 状态", "未生成"), ("构建状态", "可构建"), ("启动状态", "可启动")):
+            if diag.get(key) != expected:
+                issues.append(f"profile diagnostic mismatch {key}: {diag!r}")
+        for key in ("build_project", "launch_uvsock"):
+            button = getattr(tab, "_action_buttons", {}).get(key)
+            if button is None or not button.isEnabled():
+                issues.append(f"{key} action should be enabled after Keil profile discovery")
+            elif "调试档案" not in button.toolTip() or "显式" not in button.toolTip():
+                issues.append(f"{key} tooltip should describe explicit profile action: {button.toolTip()!r}")
         fake_backend = _FakeReadOnlyBackend(project_path)
         window._debug_backend = fake_backend
         attach_button = getattr(tab, "_action_buttons", {}).get("attach")
@@ -602,7 +669,7 @@ Raw dump of debug contents of section .debug_line:
             tab._debug_backend_snapshot_record = backend_record
             if not backend_record or backend_record.get("snapshot_id") != "debug-backend-ui-fake":
                 issues.append(f"read-only attach backend snapshot evidence missing: {backend_record!r}")
-            if "只读快照" not in tab.status_text.text() or "目标运行中" not in tab.status_text.text():
+            if "一次性快照" not in tab.status_text.text() or "目标运行中" not in tab.status_text.text():
                 issues.append(f"read-only attach status mismatch: {tab.status_text.text()!r}")
             diag = {
                 tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
@@ -612,6 +679,13 @@ Raw dump of debug contents of section .debug_line:
             for key, expected in (("模式", "只读快照"), ("连接尝试", "是"), ("连接结果", "已连接"), ("目标运行", "运行中")):
                 if diag.get(key) != expected:
                     issues.append(f"read-only attach diagnostic mismatch {key}: {diag!r}")
+            for key in ("Keil 档案", "AXF", "AXF 状态", "构建命令", "构建状态", "启动命令", "启动状态"):
+                if key not in diag:
+                    issues.append(f"read-only attach profile diagnostic missing {key}: {diag!r}")
+            for key in ("build_project", "launch_uvsock"):
+                button = getattr(tab, "_action_buttons", {}).get(key)
+                if button is None or not button.isEnabled():
+                    issues.append(f"read-only attach should keep {key} action enabled")
             blocked_actions = [
                 key
                 for key in ("halt", "run", "step", "sync_breakpoints")
@@ -894,8 +968,9 @@ Raw dump of debug contents of section .debug_line:
             issues.append(f"step plan should be ready but disabled while paused: {paused_plans.get('单步')!r}")
         if paused_plans.get("写变量", {}).get("status") != "计划就绪":
             issues.append(f"write variable plan should surface readiness without execution: {paused_plans.get('写变量')!r}")
-        if "烟测" not in paused_plans.get("写变量", {}).get("tooltip", ""):
-            issues.append("write variable plan tooltip should mention smoke-stage execution guard")
+        write_plan_tip = paused_plans.get("写变量", {}).get("tooltip", "")
+        if "显式执行" not in write_plan_tip and "后端控制器" not in write_plan_tip:
+            issues.append("write variable plan tooltip should mention explicit execution guard")
         if "继续运行" not in tab.plan_focus_label.text():
             issues.append(f"top plan strip should focus run while paused: {tab.plan_focus_label.text()!r}")
         if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():

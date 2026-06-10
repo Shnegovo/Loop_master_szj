@@ -18,6 +18,13 @@ from src.core.keil.live_write import (
     KeilLiveVariableWriteResult,
     write_keil_live_variable_existing,
 )
+from src.core.keil.profile import make_keil_debug_profile
+from src.core.keil.profile import (
+    KeilBuildResult,
+    KeilDebugProfile,
+    launch_keil_uvsock_from_profile,
+    run_keil_project_build,
+)
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugCapabilities,
@@ -136,6 +143,44 @@ class KeilUvSockBackendAdapter:
             require_debug=require_debug,
         )
 
+    def debug_profile(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilDebugProfile:
+        return make_keil_debug_profile(
+            root=self.config.root,
+            project_path=project_path,
+            target_name=target_name,
+            port=self.config.port,
+        )
+
+    def build_project(
+        self,
+        *,
+        project_path: str | Path | None,
+        target_name: str = "",
+        timeout: float = 180.0,
+    ) -> KeilBuildResult:
+        profile = self.debug_profile(
+            project_path=project_path,
+            target_name=target_name,
+        )
+        return run_keil_project_build(profile, timeout=timeout)
+
+    def launch_uvsock(
+        self,
+        *,
+        project_path: str | Path | None,
+        target_name: str = "",
+    ):
+        profile = self.debug_profile(
+            project_path=project_path,
+            target_name=target_name,
+        )
+        return launch_keil_uvsock_from_profile(profile)
+
     def _snapshot(
         self,
         *,
@@ -156,7 +201,13 @@ class KeilUvSockBackendAdapter:
             reason="Keil 只读快照尚未实现断点枚举解析",
         )
         pc_location = _placeholder_pc_location(status)
-        diagnostics = _diagnostics(preflight, launch_plan, connection, self.config.port)
+        profile = make_keil_debug_profile(
+            root=self.config.root,
+            project_path=project,
+            target_name=target_name or status.target_name,
+            port=self.config.port,
+        )
+        diagnostics = _diagnostics(preflight, launch_plan, connection, self.config.port, profile.diagnostic_rows())
         capabilities = tuple(sorted(preflight.discovery.capability_flags().items()))
         payload = {
             "backend": self.kind.value,
@@ -200,6 +251,7 @@ def _diagnostics(
     launch_plan: UvscLaunchPlan,
     connection: UvscConnectionResult | None,
     port: int,
+    profile_rows: tuple[tuple[str, str], ...] = (),
 ) -> tuple[DebugBackendDiagnostic, ...]:
     discovery = preflight.discovery
     dll = preflight.load_result.dll.path if preflight.load_result.dll else "--"
@@ -224,6 +276,8 @@ def _diagnostics(
         DebugBackendDiagnostic("PC 位置", "待 Keil 回读"),
         DebugBackendDiagnostic("远端断点", "待 Keil 枚举"),
     ]
+    if profile_rows:
+        rows.extend(DebugBackendDiagnostic(key, value) for key, value in profile_rows)
     if connection is not None:
         rows.extend(
             [
@@ -316,13 +370,13 @@ def _status_from_read_only_connection(
         )
     if connection.target_running is True:
         state = DebugRuntimeState.RUNNING
-        detail = "UVSOCK 只读快照已连接，目标运行中"
+        detail = "UVSOCK 一次性快照已读取，目标运行中"
     elif connection.target_running is False:
         state = DebugRuntimeState.PAUSED
-        detail = "UVSOCK 只读快照已连接，目标已暂停"
+        detail = "UVSOCK 一次性快照已读取，目标已暂停"
     else:
         state = DebugRuntimeState.KEIL_ATTACHED
-        detail = "UVSOCK 只读快照已连接，等待运行状态"
+        detail = "UVSOCK 一次性快照已读取，等待运行状态"
     return make_debug_status(
         state=state,
         backend=DebugBackendKind.KEIL,

@@ -30,6 +30,8 @@ class FakeSession:
 
     def execute_command(self, command: str, *, echo: bool = False) -> None:
         self.commands.append(command)
+        if command == "debug_setpoint = 7000":
+            self.memory[8:12] = (7000).to_bytes(4, "little", signed=True)
 
     def read_memory(self, address: int, size: int) -> bytes:
         offset = self._offset(address)
@@ -125,6 +127,7 @@ def main() -> int:
         _assert(result.written, result.summary())
         _assert(result.method == "command", f"fallback should use command: {result.method}")
         _assert(command_session.commands == ["debug_setpoint = 7000"], f"command mismatch: {command_session.commands!r}")
+        _assert(result.readback_value == "7000", f"command fallback should read back: {result.readback_value}")
         _assert(any(key == "内存写入" for key, _value in result.diagnostics), "fallback should retain memory diagnostic")
 
     print("PASS keil live write service probe")
@@ -133,4 +136,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -82,7 +82,9 @@ class KeilLiveVariableWriteResult:
             target = self.expression
             if self.resolved is not None:
                 target += f" @ 0x{self.resolved.address:08X}"
-            return f"Keil 写变量成功：{target} = {self.readback_value or self.value_text} ({self.method})"
+            if self.readback_raw:
+                return f"Keil 写变量已回读：{target} = {self.readback_value or self.value_text} ({self.method})"
+            return f"Keil 写变量已提交：{target} = {self.value_text} ({self.method}，未独立回读)"
         return f"Keil 写变量失败：{self.expression} ({self.error or self.method or '--'})"
 
     def to_record(self) -> dict[str, object]:
@@ -231,7 +233,7 @@ def write_keil_live_variable(
         )
 
     readback_raw = b""
-    readback_value = value_text
+    readback_value = ""
     old_raw = b""
     new_raw = b""
     if resolved is not None:
@@ -240,8 +242,26 @@ def write_keil_live_variable(
             readback_raw = session.read_memory(resolved.address, resolved.size)
             readback_value = format_keil_scalar_value(readback_raw, value_format)
             new_raw = encode_keil_scalar_value(value_text, value_format)
+            if readback_raw != new_raw:
+                return KeilLiveVariableWriteResult(
+                    attempted=True,
+                    written=False,
+                    expression=expression,
+                    value_text=value_text,
+                    method="command",
+                    resolved=resolved,
+                    new_raw=new_raw,
+                    readback_raw=readback_raw,
+                    readback_value=readback_value,
+                    command=command,
+                    attempts=tuple(attempts),
+                    diagnostics=tuple(diagnostics),
+                    error=f"命令赋值后回读不一致：expected={new_raw.hex()} read={readback_raw.hex()}",
+                )
         except Exception as exc:
             diagnostics.append(("命令回读", str(exc)))
+    else:
+        diagnostics.append(("命令回读", "未提供 AXF/地址，Keil 接受命令但无法独立回读"))
     return KeilLiveVariableWriteResult(
         attempted=True,
         written=True,
@@ -630,4 +650,3 @@ def _format_from_type_name(type_name: str, size: int) -> _ValueFormat | None:
 def _size_from_type_name(type_name: str) -> int:
     value = _format_from_type_name(type_name, 0)
     return value.size if value is not None else 0
-

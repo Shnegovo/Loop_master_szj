@@ -58,7 +58,9 @@ from src.core.debug_transactions import (
 )
 from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
 from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
+from src.core.keil.profile import KeilBuildResult, KeilDebugProfile, make_keil_debug_profile
 from src.core.keil.project import parse_keil_project
+from src.core.keil.uvsock import UvscLaunchResult
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -448,6 +450,9 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics: tuple[tuple[str, str], ...] = ()
         self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
+        self._debug_keil_profile: KeilDebugProfile | None = None
+        self._debug_keil_build_result: KeilBuildResult | None = None
+        self._debug_keil_launch_result = None
         self._debug_source_preview_manifest: SourceManifest | None = None
         self._debug_command_preview_suspended = False
         self._debug_source_provider_key = "auto"
@@ -2054,6 +2059,12 @@ class MainWindow(QMainWindow):
         if action_key == "discover":
             self._discover_debug_backend_for_workbench()
             return
+        if action_key == "build_project":
+            self._build_keil_project_for_workbench()
+            return
+        if action_key == "launch_uvsock":
+            self._launch_keil_uvsock_for_workbench()
+            return
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
@@ -2088,6 +2099,9 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics = ()
         self._debug_last_live_write_result = None
+        self._debug_keil_profile = None
+        self._debug_keil_build_result = None
+        self._debug_keil_launch_result = None
         tab = self._tab_debug_workbench
         status = make_debug_status(
             state=DebugRuntimeState.DISCONNECTED,
@@ -2819,6 +2833,135 @@ class MainWindow(QMainWindow):
     def _connect_keil_read_only_for_debug_workbench(self):
         self._connect_debug_backend_read_only_for_workbench()
 
+    def _build_keil_project_for_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 构建", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "build_project"):
+            self._show_warning("Keil 构建", "当前 Keil 后端尚未提供构建执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if not status.project_path:
+            self._show_warning("Keil 构建", "请先打开 Keil 工程。")
+            return
+        profile = self._make_current_keil_profile()
+        if profile is None:
+            self._show_warning("Keil 构建", "无法生成 Keil 调试档案。")
+            return
+        message = (
+            f"工程：{profile.project_path or '--'}\n"
+            f"Target：{profile.target_name or '--'}\n"
+            f"AXF：{profile.axf_path or '--'}\n"
+            f"日志：{profile.build_plan.log_path or '--'}\n\n"
+            f"将执行：{profile.build_plan.display_command or '--'}"
+        )
+        if not ask_pcl_confirmation(
+            self,
+            "确认 Keil 构建",
+            message,
+            confirm_text="构建",
+            cancel_text="取消",
+            kind="warning",
+        ):
+            return
+
+        tab.set_debug_controls_ready(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在调用 Keil 构建工程...")
+        try:
+            result = self._debug_backend.build_project(
+                project_path=profile.project_path,
+                target_name=profile.target_name,
+                timeout=180.0,
+            )
+        except Exception as exc:
+            result = KeilBuildResult(
+                plan=profile.build_plan,
+                attempted=True,
+                succeeded=False,
+                log_path=profile.build_plan.log_path,
+                axf_path=profile.axf_path,
+                axf_exists=bool(profile.axf_path and profile.axf_path.exists()),
+                error=str(exc),
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_keil_build_result = result
+        self._debug_keil_profile = self._make_current_keil_profile()
+        self._refresh_debug_workbench_diagnostics()
+        if result.succeeded:
+            if result.axf_path and result.axf_path.exists():
+                self._recent_elf_path = result.axf_path
+                self._refresh_recent_elf_button()
+            self._show_info("Keil 构建完成", result.summary())
+        else:
+            self._show_warning("Keil 构建失败", result.summary())
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(result.summary())
+
+    def _launch_keil_uvsock_for_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("启动 Keil", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "launch_uvsock"):
+            self._show_warning("启动 Keil", "当前 Keil 后端尚未提供启动执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if not status.project_path:
+            self._show_warning("启动 Keil", "请先打开 Keil 工程。")
+            return
+        profile = self._make_current_keil_profile()
+        if profile is None:
+            self._show_warning("启动 Keil", "无法生成 Keil 调试档案。")
+            return
+        message = (
+            f"工程：{profile.project_path or '--'}\n"
+            f"Target：{profile.target_name or '--'}\n"
+            f"端口：{profile.port}\n\n"
+            f"将执行：{profile.launch_plan.display_command or '--'}"
+        )
+        if not ask_pcl_confirmation(
+            self,
+            "确认启动 Keil / UVSOCK",
+            message,
+            confirm_text="启动",
+            cancel_text="取消",
+            kind="warning",
+        ):
+            return
+
+        tab.set_debug_controls_ready(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在启动 Keil / UVSOCK...")
+        try:
+            result = self._debug_backend.launch_uvsock(
+                project_path=profile.project_path,
+                target_name=profile.target_name,
+            )
+        except Exception as exc:
+            result = UvscLaunchResult(plan=profile.launch_plan, launched=False, error=str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_keil_launch_result = result
+        self._debug_keil_profile = self._make_current_keil_profile()
+        self._refresh_debug_workbench_diagnostics()
+        if result.launched:
+            message = f"已拉起 uVision 进程，PID={result.pid or '--'}。这只表示进程启动，需点击连接确认 UVSOCK/Debug 状态。"
+            self._show_info("Keil 已启动", message)
+        else:
+            message = result.error or "uVision 启动失败。"
+            self._show_warning("Keil 启动失败", message)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(message)
+
     def _write_keil_live_variable_from_workbench(self):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 写变量", "当前调试后端不是 Keil / UVSOCK。")
@@ -2926,6 +3069,9 @@ class MainWindow(QMainWindow):
         return "debug_setpoint"
 
     def _current_debug_axf_path(self) -> Path | None:
+        profile = self._make_current_keil_profile()
+        if profile is not None and profile.axf_path is not None and profile.axf_path.exists():
+            return profile.axf_path
         candidates: list[Path] = []
         for path in (getattr(self, "_elf_path", None), getattr(self, "_recent_elf_path", None)):
             if path:
@@ -2964,6 +3110,30 @@ class MainWindow(QMainWindow):
             candidates.append(project_dir / "Objects" / f"{name}.axf")
         return candidates
 
+    def _make_current_keil_profile(self) -> KeilDebugProfile | None:
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            return None
+        status = self._tab_debug_workbench.debug_status if hasattr(self, "_tab_debug_workbench") else None
+        if status is None or not status.project_path:
+            return None
+        try:
+            if hasattr(self._debug_backend, "debug_profile"):
+                profile = self._debug_backend.debug_profile(
+                    project_path=status.project_path,
+                    target_name=status.target_name,
+                )
+            else:
+                profile = make_keil_debug_profile(
+                    root=self._keil_root,
+                    project_path=status.project_path,
+                    target_name=status.target_name,
+                    port=self._debug_uvsock_port,
+                )
+        except Exception:
+            return None
+        self._debug_keil_profile = profile
+        return profile
+
     def _confirm_keil_live_write(self, request: KeilLiveVariableWriteRequest, status) -> bool:
         axf_text = str(request.axf_path) if request.axf_path else "未找到，将尝试 Keil 命令窗口赋值"
         message = (
@@ -2972,7 +3142,8 @@ class MainWindow(QMainWindow):
             f"工程：{status.project_path or '--'}\n"
             f"AXF：{axf_text}\n\n"
             "这会通过 UVSOCK 改变真实 MCU 调试会话中的变量。"
-            "优先走 RAM 内存写入并回读校验，解析失败会退回 Keil 命令窗口赋值。"
+            "优先走 RAM 内存写入并回读校验；解析失败时会尝试 Keil 命令窗口赋值，"
+            "但无 AXF/地址时只能确认命令已提交，不能独立回读。"
         )
         return ask_pcl_confirmation(
             self,
@@ -3002,6 +3173,41 @@ class MainWindow(QMainWindow):
         diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ()) or self._debug_workbench_idle_diagnostics())
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
 
+    def _keil_profile_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        profile = self._make_current_keil_profile() or getattr(self, "_debug_keil_profile", None)
+        if profile is None:
+            return ()
+        return profile.diagnostic_rows()
+
+    def _keil_build_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_keil_build_result", None)
+        if result is None:
+            return ()
+        rows = [
+            ("构建结果", "成功" if result.succeeded else "失败"),
+            ("构建返回码", str(result.returncode) if result.returncode is not None else "--"),
+            ("构建日志", str(result.log_path or "--")),
+            ("构建 AXF", str(result.axf_path or "--")),
+            ("构建 AXF 状态", "已存在" if result.axf_exists else "未生成"),
+        ]
+        if result.error:
+            rows.append(("构建错误", result.error))
+        elif result.output_tail:
+            rows.append(("构建输出", result.output_tail))
+        return tuple(rows)
+
+    def _keil_launch_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_keil_launch_result", None)
+        if result is None:
+            return ()
+        rows = [
+            ("启动结果", "成功" if result.launched else "失败"),
+            ("uVision PID", str(result.pid or "--")),
+        ]
+        if result.error:
+            rows.append(("启动错误", result.error))
+        return tuple(rows)
+
     def _keil_live_write_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_last_live_write_result", None)
         if result is None:
@@ -3020,6 +3226,8 @@ class MainWindow(QMainWindow):
             )
         if result.readback_value:
             rows.append(("写后回读", result.readback_value))
+        elif result.written:
+            rows.append(("写后回读", "未独立回读"))
         if result.error:
             rows.append(("写入错误", result.error))
         return tuple(rows)
@@ -3121,7 +3329,14 @@ class MainWindow(QMainWindow):
         enabled = [command.key for command in commands if command.enabled_by_state]
         executable = [command.key for command in commands if command.execution_enabled]
         policy = controller.safety_policy
-        rows = tuple(diagnostics) + self._keil_live_write_diagnostics() + (
+        diagnostic_rows = self._dedupe_diagnostics(
+            tuple(diagnostics)
+            + self._keil_profile_diagnostics()
+            + self._keil_build_diagnostics()
+            + self._keil_launch_diagnostics()
+            + self._keil_live_write_diagnostics()
+        )
+        rows = diagnostic_rows + (
             ("会话合同", f"{snapshot.display_name} / {snapshot.state.value}"),
             ("目标状态", snapshot.target_state.value),
             ("安全策略", "dry-run" if policy.dry_run else policy.label),
@@ -3129,6 +3344,18 @@ class MainWindow(QMainWindow):
             ("可执行命令", ", ".join(executable) if executable else "无"),
         )
         return rows
+
+    @staticmethod
+    def _dedupe_diagnostics(rows: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        result: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for key, value in rows:
+            key_text = str(key)
+            if key_text in seen:
+                continue
+            seen.add(key_text)
+            result.append((key_text, str(value)))
+        return tuple(result)
 
     def _debug_backend_display_name(self) -> str:
         try:

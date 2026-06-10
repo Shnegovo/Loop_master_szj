@@ -3534,3 +3534,115 @@ Workbench UI while keeping the default Keil attach path read-only.
   - read/scope-only candidates for angle/speed/PWM
   - range hints for PID-friendly tuning
 - Add Keil halt/run implementation behind explicit controls and probes.
+
+## Milestone 40 Update - Keil Debug Profile Build Launch Flow
+
+### Goal
+
+Turn the Keil workbench from a manual "Keil must already be open" panel into a
+profile-driven flow that knows the selected project, target, AXF, build command,
+and UVSOCK launch command.
+
+### Completed
+
+- Added `src/core/keil/profile.py`:
+  - `KeilDebugProfile` captures Keil root, `.uvprojx`, target, UVSOCK port,
+    AXF path/status, build command, and launch command.
+  - `KeilBuildPlan` and `KeilBuildResult` wrap `uVision.com -b ... -t ... -j0`
+    with readable diagnostics and build log paths.
+  - `launch_keil_uvsock_from_profile()` uses the profile's `UV4.exe ... -s`
+    launch plan and refuses to launch when the profile is incomplete.
+- Extended `KeilUvSockBackendAdapter`:
+  - `debug_profile(...)`
+  - `build_project(...)`
+  - `launch_uvsock(...)`
+  - backend diagnostics now include profile/build/launch readiness rows.
+- Added Debug Workbench actions:
+  - `构建`
+  - `启动Keil`
+  - both are explicit profile actions enabled only for a Keil backend with a
+    loaded project and ready controls.
+- Wired `MainWindow` profile flow:
+  - build confirmation dialog
+  - launch confirmation dialog
+  - build/launch result diagnostics
+  - AXF discovery now prefers the current profile's target output.
+- Tightened Keil status wording:
+  - launching uVision now says it only proves the process was started; the user
+    must still connect to verify UVSOCK/debug state.
+  - read-only attach status now says "一次性快照" instead of implying a kept
+    connection.
+  - command-window variable writes now distinguish "已回读" from "已提交但未独立回读".
+- Hardened command fallback writes:
+  - if a resolved address exists, command assignment must read back matching
+    bytes.
+  - if no AXF/address is available, the result is still auditable but marked as
+    not independently read back.
+- Extended probes:
+  - `tools/keil_debug_profile_probe.py`
+  - `tools/ui_debug_workbench_probe.py`
+  - `tools/debug_workbench_model_probe.py`
+  - `tools/keil_live_write_service_probe.py`
+
+### Verified
+
+- `python -m py_compile src/core/keil/profile.py src/core/keil/live_write.py src/core/keil/backend.py src/core/debug_workbench.py src/ui/debug_workbench_tab.py src/ui/gui.py tools/keil_debug_profile_probe.py tools/keil_live_write_service_probe.py tools/debug_workbench_model_probe.py tools/ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+- `python tools/keil_live_write_service_probe.py`
+  - PASS.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py --keil-root D:\Keil --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe"`
+  - PASS; uVision was not running, discovery stayed in safe preflight mode.
+- `python tools/keil_command_transaction_probe.py`
+  - PASS.
+- `python tools/keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-profile --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-profile\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-profile\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-profile\03_debug_workbench_narrow.png`
+- `python tools/ui_debug_source_provider_probe.py --output-dir tools/ui-debug-source-provider-profile`
+  - PASS.
+- `python tools/debug_session_contract_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage does not create a new public app version or Release package. It is
+  a debugger-integration stage on `main`.
+- Current UI path is now:
+  - open Keil project
+  - `构建`
+  - `启动Keil`
+  - `连接`
+  - `写变量`
+- `启动Keil` still starts uVision and UVSOCK but does not yet wait for the port
+  to become connectable or enter Debug automatically. That is the next stage.
+- Keil live writes remain real and verified from prior F401 smoke testing, but
+  the UI still depends on Keil/uVision being in a valid debug session.
+
+### Next Target
+
+- Add an automatic Keil debug transaction:
+  - build selected project
+  - launch uVision with UVSOCK
+  - wait for UVSOCK readiness
+  - connect/read status
+  - run a guarded `debug_setpoint` write/readback smoke flow on the F401 probe
+    project when the user selects that profile.
+- Implement real Keil Halt/Run actions:
+  - wrap `UVSC_DBG_STOP_EXECUTION`
+  - wrap `UVSC_DBG_START_EXECUTION`
+  - read back target state after each action
+  - keep explicit confirmations and audit rows.
+- Add a first Keil variable preset panel:
+  - F401 probe preset: `debug_setpoint`
+  - balance-car safe writes: `SpeedLevel`, `AngleAcc_Offset`, `AnglePID.Kp`,
+    `AnglePID.Kd`
+  - read/scope-only presets: `Angle`, `AveSpeed`, `PWML`, `PWMR`.

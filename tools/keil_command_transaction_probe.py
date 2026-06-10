@@ -123,7 +123,7 @@ def _backend_snapshot(project_path: Path) -> dict[str, object]:
             "backend": "keil",
             "state": "running",
             "label": "目标运行中",
-            "detail": "UVSOCK 只读快照已连接，目标运行中",
+            "detail": "UVSOCK 一次性快照已读取，目标运行中",
             "project_path": str(project_path),
             "target_name": "DebugDemo",
             "current_pc_line": None,

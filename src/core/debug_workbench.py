@@ -846,7 +846,7 @@ def _command_plan(
         disabled_reason = ""
     elif preconditions_met:
         status = "计划就绪"
-        disabled_reason = "等待单独启动 UVSOCK 烟测阶段，当前版本只显示计划"
+        disabled_reason = "条件满足，等待显式执行或后端控制器开放该动作"
     else:
         status = "等待条件"
         disabled_reason = action.reason or "当前状态不可用"
