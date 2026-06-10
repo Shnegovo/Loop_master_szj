@@ -74,6 +74,7 @@ class FakeSerialCollector:
         if self._running:
             self._append_log("fake stopped")
         self._running = False
+        return True
 
     def clear(self) -> None:
         self.clears += 1
@@ -199,6 +200,11 @@ def main() -> int:
     _pump()
     _assert(stopped_cleanly, "shutdown did not join workers")
     _assert(collector.stops > stops_before_shutdown and not collector.is_running, "shutdown did not stop collector")
+
+    stuck_collector = FakeSerialCollector()
+    stuck_collector.stop = lambda: False
+    stuck_controller = SerialController(collector=stuck_collector, port_lister=port_lister)
+    _assert(not stuck_controller.shutdown(timeout=0.05), "shutdown should report stuck collector")
 
     print(
         "PASS serial controller probe "

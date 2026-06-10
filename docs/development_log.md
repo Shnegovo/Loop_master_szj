@@ -2601,3 +2601,54 @@ Make shutdown behavior auditable and keep process-exit probes covering real acti
 ### Next Target
 
 - Continue lifecycle hardening by registering future debug/backend workers through the same shutdown-report vocabulary, then return to explicit source file/path mapping actions.
+
+## Milestone 30 Update - Shutdown Result Propagation
+
+### Goal
+
+Make lower-level serial and SWD shutdown failures visible to controllers and the shutdown report instead of reporting success after only requesting cleanup.
+
+### Completed
+
+- `SerialCollector.stop()` now returns whether the serial read thread actually stopped.
+- `SerialController.shutdown()` now combines collector stop result and worker join result.
+- Serial disconnect worker now reports a read-thread timeout through the existing disconnect-finished error path.
+- `SWDBackend.disconnect(timeout)` now returns `False` when:
+  - the I/O lock cannot be acquired within the timeout
+  - session close times out
+  - session close raises an exception
+- `MainWindow._shutdown()` now records backend disconnect success/failure in the shutdown report.
+- Added `tools\swd_disconnect_probe.py` to verify SWD disconnect success, close failure, close timeout and lock timeout without hardware.
+- Extended `tools\serial_controller_probe.py` to verify a stuck collector makes controller shutdown return `False`.
+
+### Verified
+
+- `python -m py_compile src\core\serial_backend.py src\ui\serial_controller.py src\core\mem_backend.py src\ui\gui.py tools\serial_controller_probe.py tools\swd_disconnect_probe.py`
+  - PASS.
+- `python tools\serial_controller_probe.py`
+  - PASS.
+- `python tools\swd_disconnect_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\lifecycle_shutdown_probe.py`
+  - PASS.
+- `python tools\ui_close_process_probe.py --scenario sampling --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `551.1ms`.
+- `python tools\ui_close_process_probe.py --scenario serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `407.3ms`.
+- `python tools\ui_close_process_probe.py --scenario stuck-serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `950.4ms`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `git diff --check`
+  - PASS with existing CRLF normalization warnings only.
+
+### Notes
+
+- Process-exit success is no longer the only signal; low-level cleanup can now report incomplete shutdown to lifecycle diagnostics.
+- No live debugger, serial hardware, Keil, OpenOCD, pyOCD, GDB or ST-Link access is used.
+
+### Next Target
+
+- Add data-only backend lifecycle metadata to the debug backend registry, so future Keil/OpenOCD/pyOCD workers can be listed and audited before any real worker is introduced.

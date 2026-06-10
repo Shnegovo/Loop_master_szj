@@ -116,7 +116,9 @@ class SerialController(QObject):
         def worker() -> None:
             error = ""
             try:
-                self._collector.stop()
+                stopped = self._collector.stop()
+                if not stopped:
+                    error = getattr(self._collector, "last_error", "") or "串口读线程关闭超时"
             except Exception as exc:
                 error = str(exc)
             self._disconnectFinished.emit(error)
@@ -200,13 +202,14 @@ class SerialController(QObject):
             return self.join_workers(timeout)
         self._shutting_down = True
         self._poll_timer.stop()
+        collector_stopped = True
         try:
-            self._collector.stop()
+            collector_stopped = bool(self._collector.stop())
         finally:
-            all_stopped = self.join_workers(timeout)
+            workers_stopped = self.join_workers(timeout)
         self._busy = False
         self._connected = False
-        return all_stopped
+        return collector_stopped and workers_stopped
 
     def _finish_connect(self, ok: bool, config: object, error: str) -> None:
         if self._shutting_down:

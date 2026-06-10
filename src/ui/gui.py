@@ -4797,10 +4797,12 @@ class MainWindow(QMainWindow):
 
         def disconnect_backend():
             try:
-                self._backend.disconnect(timeout=0.45)
+                result = self._backend.disconnect(timeout=0.45)
             except TypeError:
-                self._backend.disconnect()
-            return True, "backend disconnect requested"
+                result = self._backend.disconnect()
+            ok = True if result is None else bool(result)
+            detail = "backend disconnected" if ok else (getattr(self._backend, "last_error", "") or "backend disconnect timeout")
+            return ok, detail
 
         sequence.run("stop timers", stop_timers)
         sequence.run("request backend shutdown", request_backend_shutdown)

@@ -140,7 +140,7 @@ class SerialCollector:
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         with self._lock:
             self._running = False
             port = self._serial
@@ -150,12 +150,17 @@ class SerialCollector:
             except Exception:
                 pass
         thread = self._thread
+        stopped = True
         if thread is not None:
             thread.join(timeout=1.0)
+            stopped = not thread.is_alive()
         with self._lock:
             self._close_serial_locked()
-            if self._thread is thread:
+            if self._thread is thread and stopped:
                 self._thread = None
+            if not stopped:
+                self._last_error = "Serial read thread did not stop before timeout"
+        return stopped
 
     def clear(self) -> None:
         with self._lock:

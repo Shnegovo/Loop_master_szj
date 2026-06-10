@@ -269,7 +269,7 @@ class SWDBackend:
             self._ap = None
             return False
 
-    def disconnect(self, timeout: float | None = None):
+    def disconnect(self, timeout: float | None = None) -> bool:
         self.request_shutdown()
         session = None
         acquired = False
@@ -288,7 +288,7 @@ class SWDBackend:
                 self._plan_cache_key = None
                 self._block_plan_cache = None
                 self._close_session_with_timeout(session, timeout=0.0)
-                return
+                return False
         try:
             session = self._session
             self._session = None
@@ -303,7 +303,7 @@ class SWDBackend:
             if acquired:
                 self._io_lock.release()
         close_timeout = None if timeout is None else max(0.0, float(timeout))
-        self._close_session_with_timeout(session, close_timeout)
+        return self._close_session_with_timeout(session, close_timeout)
 
     def _close_session_with_timeout(self, session, timeout: float | None = None) -> bool:
         if session is None:
