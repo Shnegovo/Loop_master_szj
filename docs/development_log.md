@@ -2174,3 +2174,66 @@ Remove the next Keil-only bottleneck by giving Keil and non-Keil dry-run transac
   - keep Keil `.uvprojx` as the first source provider
   - add generic manifest objects for future ELF/DWARF, compile_commands and GDB source lists
   - adapt Debug Workbench source tree consumption toward the generic manifest without changing visual layout
+
+## Milestone 30 Update - Source Manifest Foundation
+
+### Goal
+
+Extract a backend-neutral source manifest layer so Keil `.uvprojx` remains the first source provider, while future ELF/DWARF, `compile_commands.json`, OpenOCD/GDB source lists and manual source roots can feed the same Debug Workbench source tree.
+
+### Completed
+
+- Added `src\core\debug_sources.py` with:
+  - `SourceEntry`
+  - `SourceTreeNode`
+  - `SourceManifest`
+  - `source_entries_from_paths()`
+  - `source_entries_from_keil_project()`
+  - `source_manifest_from_keil_project()`
+  - `source_tree_from_entries()`
+- Keil project source parsing now produces a generic `SourceManifest`.
+- `DebugWorkbenchTab` now stores `_source_manifest` and uses it for:
+  - source count
+  - local source paths
+  - source tree construction
+- Kept legacy imports through `src\core\debug_workbench.py` so existing probes and callers continue to work.
+- Added `tools\debug_source_manifest_probe.py` covering:
+  - Keil project -> manifest
+  - path list -> grouped source entries
+  - source tree generation
+  - JSON/data-only manifest records
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py src\core\debug_snapshots.py src\core\debug_backend.py src\core\debug_backend_registry.py src\core\debug_transactions.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_source_manifest_probe.py tools\debug_snapshot_model_probe.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py tools\debug_backend_adapter_probe.py tools\keil_command_transaction_probe.py tools\debug_workbench_model_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This is still a data/model layer update; it does not add live OpenOCD/GDB, pyOCD or Keil execution.
+- The Debug Workbench visual layout is unchanged; this only changes the source data path behind the tree.
+- Keil `.uvprojx` remains the only real source provider today, but the UI no longer needs to grow around a Keil-only source list.
+
+### Next Target
+
+- Continue Milestone 30 with one of two larger next slices:
+  - add an ELF/DWARF/manual-root `SourceManifest` provider and fake GDB source-list probe
+  - or start the strictly opt-in Keil live read-only smoke (`OpenConnection -> DBG_STATUS -> CloseConnection`) if uVision is manually opened in Debug mode

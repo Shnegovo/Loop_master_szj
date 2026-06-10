@@ -79,6 +79,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已把后端选择入口接入 Debug Workbench：Keil / UVSOCK 默认可用，OpenOCD/GDB、pyOCD、离线回放显示为已注册但 blocked 的 dry-run 占位。
 - 非 Keil 后端计划文案已改为通用后端语义，不再显示 UVSOCK/Keil 专属执行步骤。
 - 已加入通用 `DebugCommandHistory`，Keil 和非 Keil dry-run transaction 都能进入同一个历史/audit 预览，后端 id 会显示在历史 tooltip 中。
+- 已抽出通用 `SourceManifest`：Keil `.uvprojx` 先作为首个 provider，源码树开始消费 manifest，为后续 ELF/DWARF、GDB source list 和手动 source root 留入口。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -90,7 +91,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
 
 2. 架构底座
-   - 抽出通用 `SourceManifest`，先用 fake backend 探针验证 UI 不再依赖 Keil 工程类型。
+   - 增加 ELF/DWARF、compile_commands、GDB `info sources` 和手动 source root 的 `SourceManifest` provider。
    - 继续把 Keil transaction UI typing 迁移到通用 `DebugCommandTransaction`，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。
    - 抽出 `Decoder`：Raw、CSV、FireWater、JustFloat、HEX、后续自定义协议注册。

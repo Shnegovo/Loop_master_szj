@@ -39,9 +39,8 @@ from src.core.debug_workbench import (
     line_decorations,
     load_code_document,
     search_document,
-    source_entries_from_keil_project,
-    source_tree_from_entries,
 )
+from src.core.debug_sources import SourceManifest, source_manifest_from_keil_project
 from src.core.debug_transactions import DebugCommandHistoryEntry, DebugCommandTransaction
 from src.core.keil.commands import KeilCommandTransaction
 from src.core.keil.project import KeilProject, parse_keil_project
@@ -293,6 +292,7 @@ class DebugWorkbenchTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._project: KeilProject | None = None
+        self._source_manifest: SourceManifest | None = None
         self._source_tree: SourceTreeNode | None = None
         self._breakpoints = BreakpointStore()
         self._current_document: CodeDocument | None = None
@@ -325,9 +325,9 @@ class DebugWorkbenchTab(QWidget):
 
     @property
     def source_count(self) -> int:
-        if self._project is None or self._project.default_target is None:
+        if self._source_manifest is None:
             return 0
-        return len(self._project.default_target.source_files) + len(self._project.default_target.header_files)
+        return self._source_manifest.source_count
 
     @property
     def breakpoint_count(self) -> int:
@@ -348,10 +348,13 @@ class DebugWorkbenchTab(QWidget):
         if self._source_tree is None:
             return ()
         paths: list[Path] = []
-        for group in self._source_tree.children:
-            for child in group.children:
-                if child.path is not None:
-                    paths.append(child.path)
+        if self._source_manifest is not None:
+            paths.extend(self._source_manifest.paths)
+        else:
+            for group in self._source_tree.children:
+                for child in group.children:
+                    if child.path is not None:
+                        paths.append(child.path)
         return tuple(paths)
 
     def hero_summary(self) -> tuple[str, str, str]:
@@ -369,6 +372,7 @@ class DebugWorkbenchTab(QWidget):
 
     def set_project(self, project: KeilProject) -> None:
         self._project = project
+        self._source_manifest = source_manifest_from_keil_project(project)
         self._session.set_project(project)
         self._breakpoints.clear()
         self._current_document = None
@@ -792,8 +796,8 @@ class DebugWorkbenchTab(QWidget):
         if self._project is not None and target_name:
             self._session.set_project(self._project, str(target_name))
             self._apply_debug_status(self._session.status)
-        entries = source_entries_from_keil_project(self._project, str(target_name) if target_name else None)
-        self._source_tree = source_tree_from_entries(entries)
+        self._source_manifest = source_manifest_from_keil_project(self._project, str(target_name) if target_name else None)
+        self._source_tree = self._source_manifest.tree
         for group in self._source_tree.children:
             group_item = QTreeWidgetItem([group.name])
             group_item.setExpanded(True)

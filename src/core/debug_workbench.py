@@ -6,39 +6,15 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from src.core.debug_sources import (
+    SOURCE_LANGUAGES,
+    SourceEntry,
+    SourceManifest,
+    SourceTreeNode,
+    source_entries_from_keil_project,
+    source_tree_from_entries,
+)
 from src.core.keil.project import KeilProject, KeilTarget
-
-
-SOURCE_LANGUAGES = {
-    ".c": "c",
-    ".h": "c-header",
-    ".cpp": "cpp",
-    ".hpp": "cpp-header",
-    ".cc": "cpp",
-    ".cxx": "cpp",
-    ".s": "asm",
-    ".asm": "asm",
-}
-
-
-@dataclass(frozen=True)
-class SourceEntry:
-    path: Path
-    name: str
-    group: str
-    exists: bool
-    language: str
-
-
-@dataclass(frozen=True)
-class SourceTreeNode:
-    name: str
-    path: Path | None = None
-    children: tuple["SourceTreeNode", ...] = ()
-
-    @property
-    def is_file(self) -> bool:
-        return self.path is not None
 
 
 @dataclass(frozen=True)
@@ -722,46 +698,6 @@ def debug_state_detail(state: DebugRuntimeState | str) -> str:
         DebugRuntimeState.ERROR: "调试桥接出现错误",
     }
     return details[_coerce_state(state)]
-
-
-def source_entries_from_keil_project(
-    project: KeilProject,
-    target_name: str | None = None,
-) -> tuple[SourceEntry, ...]:
-    target = _select_target(project, target_name)
-    if target is None:
-        return ()
-    entries = []
-    for group in target.groups:
-        for file in group.files:
-            if not (file.is_source or file.is_header):
-                continue
-            entries.append(
-                SourceEntry(
-                    path=file.path,
-                    name=file.name,
-                    group=group.name,
-                    exists=file.exists,
-                    language=SOURCE_LANGUAGES.get(file.suffix, "text"),
-                )
-            )
-    return tuple(entries)
-
-
-def source_tree_from_entries(entries: tuple[SourceEntry, ...]) -> SourceTreeNode:
-    group_map: dict[str, list[SourceTreeNode]] = {}
-    for entry in entries:
-        group_map.setdefault(entry.group or "Ungrouped", []).append(
-            SourceTreeNode(name=entry.name, path=entry.path)
-        )
-    groups = tuple(
-        SourceTreeNode(
-            name=name,
-            children=tuple(sorted(nodes, key=lambda node: node.name.lower())),
-        )
-        for name, nodes in sorted(group_map.items(), key=lambda item: item[0].lower())
-    )
-    return SourceTreeNode(name="Sources", children=groups)
 
 
 def load_code_document(path: str | Path, max_bytes: int = 2_000_000) -> CodeDocument:
