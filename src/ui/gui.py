@@ -2289,15 +2289,135 @@ class MainWindow(QMainWindow):
         ]
         self._debug_source_remaps.append(record)
 
+    def _apply_saved_debug_source_remaps(self, manifest: SourceManifest) -> SourceManifest:
+        if not self._debug_source_remaps or not manifest.entries:
+            return manifest
+        current = manifest
+        applied: list[SourcePathRemapPreview] = []
+        skipped: list[str] = []
+        for record in list(self._debug_source_remaps):
+            if not self._debug_source_remap_record_matches(str(record.get("provider_key", "") or "")):
+                continue
+            missing_dir = str(record.get("missing_dir", "") or "")
+            local_root = str(record.get("local_root", "") or "")
+            if not missing_dir or not local_root:
+                continue
+            missing_dirs = {
+                self._debug_source_remap_match_key(hint.missing_dir): hint.missing_dir
+                for hint in source_manifest_missing_path_hints(current, max_hints=max(4, len(current.entries)))
+            }
+            matched_missing_dir = missing_dirs.get(self._debug_source_remap_match_key(missing_dir))
+            label = self._debug_source_remap_label(missing_dir)
+            if not matched_missing_dir:
+                skipped.append(f"{label} 未命中")
+                continue
+            local_root_path = Path(local_root).expanduser()
+            if not local_root_path.exists():
+                skipped.append(f"{label} 本地根不存在")
+                continue
+            try:
+                preview = preview_source_manifest_path_remap(
+                    current,
+                    missing_dir=matched_missing_dir,
+                    local_root=local_root_path,
+                )
+            except Exception as exc:
+                skipped.append(f"{label} 失败：{exc}")
+                continue
+            if preview.resolved_count <= 0:
+                skipped.append(f"{label} 未找到文件")
+                continue
+            current = preview.manifest
+            applied.append(preview)
+        if not applied and not skipped:
+            return manifest
+        if applied:
+            self._debug_source_remap_preview = applied[-1]
+        return self._debug_source_manifest_with_remap_replay_diagnostics(current, applied, skipped)
+
+    def _debug_source_remap_record_matches(self, provider_key: str) -> bool:
+        current_key = str(self._debug_source_provider_key or "auto")
+        if provider_key == current_key:
+            return True
+        keil_keys = {"auto", "keil"}
+        return (
+            self._debug_backend_kind == DebugBackendKind.KEIL
+            and provider_key in keil_keys
+            and current_key in keil_keys
+        )
+
+    def _debug_source_remap_match_key(self, value: str | Path) -> str:
+        try:
+            text = str(Path(value).expanduser())
+        except (OSError, RuntimeError, ValueError):
+            text = str(value)
+        return os.path.normcase(text)
+
+    def _debug_source_remap_label(self, value: str | Path) -> str:
+        try:
+            name = Path(value).name
+        except (OSError, RuntimeError, ValueError):
+            name = ""
+        return name or str(value)
+
+    def _debug_source_manifest_with_remap_replay_diagnostics(
+        self,
+        manifest: SourceManifest,
+        applied: list[SourcePathRemapPreview],
+        skipped: list[str],
+    ) -> SourceManifest:
+        remap_keys = {"重映射", "重映射命中", "重映射重放", "重映射跳过"}
+        diagnostics = tuple((key, value) for key, value in manifest.diagnostics if key not in remap_keys)
+        if applied:
+            before_missing = applied[0].before_missing
+            after_missing = sum(1 for entry in manifest.entries if not entry.exists)
+            roots = tuple(dict.fromkeys(str(preview.local_root) for preview in applied))
+            root_text = roots[0] if len(roots) == 1 else f"{len(roots)} 个源码根"
+            diagnostics += (
+                ("重映射重放", f"{len(applied)} 条，缺失 {before_missing} -> {after_missing}"),
+                ("重映射", f"{sum(preview.remapped_count for preview in applied)} 项 -> {root_text}"),
+                ("重映射命中", str(sum(preview.resolved_count for preview in applied))),
+            )
+        if skipped:
+            skip_text = "；".join(skipped[:2])
+            if len(skipped) > 2:
+                skip_text += f" 等 {len(skipped)} 条"
+            diagnostics += (("重映射跳过", skip_text),)
+        metadata = dict(manifest.metadata or {})
+        metadata.update(
+            {
+                "remap_replay_count": str(len(applied)),
+                "remap_replay_skipped": str(len(skipped)),
+                "remap_replay_resolved": str(sum(preview.resolved_count for preview in applied)),
+            }
+        )
+        return SourceManifest(
+            name=manifest.name,
+            root=manifest.root,
+            provider=manifest.provider,
+            entries=manifest.entries,
+            target_name=manifest.target_name,
+            project_path=manifest.project_path,
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+
     def _sync_debug_source_manifest_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
         tab = self._tab_debug_workbench
         if self._debug_backend_kind == DebugBackendKind.KEIL and self._debug_source_provider_key in {"auto", "keil"}:
             tab.restore_project_source_manifest()
-            self._debug_source_preview_manifest = tab.source_manifest
+            manifest = tab.source_manifest
+            if manifest is not None:
+                manifest = self._apply_saved_debug_source_remaps(manifest)
+                self._debug_source_preview_manifest = manifest
+                tab.set_source_manifest(manifest, mode=manifest.provider)
+            else:
+                self._debug_source_preview_manifest = None
             return
         manifest = self._build_debug_source_preview_manifest()
+        manifest = self._apply_saved_debug_source_remaps(manifest)
         self._debug_source_preview_manifest = manifest
         tab.set_source_manifest(manifest, mode=manifest.provider)
 

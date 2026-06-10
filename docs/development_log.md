@@ -2895,3 +2895,63 @@ Make the source remap preview usable from the Debug Workbench UI while keeping i
   - apply matching saved remaps after a manifest is rebuilt
   - keep a clear diagnostic row showing which remap was replayed
   - avoid replaying stale remaps that no longer match any missing directory
+
+## Milestone 31 Update - Saved Source Remap Replay
+
+### Goal
+
+Make saved source-path remaps survive provider rebuilds and config restore, so imported `compile_commands.json`, GDB source lists, DWARF text and future Keil/OpenOCD/pyOCD source manifests do not fall back to missing paths after the user already mapped them once.
+
+### Completed
+
+- Added saved remap replay inside `MainWindow._sync_debug_source_manifest_preview()`.
+- Replay now:
+  - matches remap records by source provider
+  - treats Keil `auto` and explicit `keil` as compatible while Keil is the active backend
+  - applies matching missing-directory remaps after each manifest rebuild
+  - skips stale mappings whose missing directory no longer exists or whose local root disappeared
+  - keeps remap replay data-only and avoids external processes
+- Debug Workbench diagnostics now show:
+  - `重映射重放`
+  - `重映射`
+  - `重映射命中`
+  - `重映射跳过`
+- The focused source-provider UI probe now verifies:
+  - a persisted remap is recorded once
+  - provider rebuild replays the saved remap
+  - explicit config restore replays the saved remap
+  - remapped local source paths flow into `tab.local_source_paths()`
+  - replay does not duplicate saved remap records
+- Cleaned ignored local development leftovers:
+  - Python `__pycache__` directories
+  - old regenerable UI screenshot/runtime output directories under `tools`
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py src\ui\debug_workbench_tab.py tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir %TEMP%\loopmaster-ui-debug-remap-replay --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage does not launch Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access.
+- The GitHub repository was switched to `PUBLIC` after the release-link 404 check. An unauthenticated HEAD request now returns `200 OK` for the repo and the `LoopMaster_v2.1.exe` release asset resolves through GitHub's release-asset redirect to a `200 OK` download.
+- The repository does not yet contain a root `LICENSE` file; add one before encouraging reuse or redistribution beyond casual downloads.
+- The local `dist\LoopMaster_v2.1.exe` and `cockpit-tools-main` reference directory were intentionally kept.
+
+### Next Target
+
+- Start the larger debug adapter foundation:
+  - define a backend-neutral connection/session contract for Keil, OpenOCD/GDB, pyOCD and offline replay
+  - keep every action dry-run/read-only until an explicit hardware smoke stage
+  - move new debug panels out of `gui.py` into registered workbench modules
+  - add an explicit open-source license and update the README/release notes for public users

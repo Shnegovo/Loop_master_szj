@@ -1411,7 +1411,7 @@ class DebugWorkbenchTab(QWidget):
             value = diagnostics.get(key)
             if value not in (None, ""):
                 rows.append((f"源码{key}", str(value)))
-        for key in ("重映射", "重映射命中"):
+        for key in ("重映射重放", "重映射", "重映射命中", "重映射跳过"):
             value = diagnostics.get(key)
             if value not in (None, ""):
                 rows.append((key, str(value)))

@@ -167,6 +167,47 @@ def main() -> int:
         _assert(not tab.source_provider_remap_button.isEnabled(), "remap button should disable after missing files are resolved")
         remap_records = window._debug_source_config_record().get("remaps", [])
         _assert(remap_records and remap_records[-1]["local_root"] == str(remap_root.resolve()), f"remap config mismatch: {remap_records!r}")
+        remapped_paths = {str(path) for path in tab.local_source_paths()}
+        _assert(str((remap_root / "missing.c").resolve()) in remapped_paths, f"local source paths did not use remap: {remapped_paths!r}")
+
+        manifest = window.configure_debug_compile_commands(root / "compile_commands.json")
+        _pump(app, 0.15)
+        diag = _diagnostics(tab)
+        _assert(manifest.provider == "compile_commands", "reconfigured compile_commands provider mismatch")
+        _assert(diag.get("源码缺失") == "0", f"saved remap did not replay on provider rebuild: {diag!r}")
+        _assert("1 条" in diag.get("重映射重放", ""), f"remap replay diagnostics missing: {diag!r}")
+        _assert(diag.get("重映射命中") == "1", f"remap replay hit diagnostics mismatch: {diag!r}")
+        _assert("路径正常" in tab.source_provider_missing_label.text(), f"replay chip mismatch: {tab.source_provider_missing_label.text()!r}")
+        _assert(not tab.source_provider_remap_button.isEnabled(), "remap button should stay disabled after replay resolves missing files")
+        _assert(str((remap_root / "missing.c").resolve()) in {str(path) for path in tab.local_source_paths()}, "command preview paths lost remapped file")
+        _assert(window._debug_source_config_record().get("remaps", []) == remap_records, "remap replay should not duplicate saved records")
+
+        restored_window = MainWindow()
+        restored_window._config_path = root / "probe-restored-loopmaster.json"
+        restored_window.resize(1100, 720)
+        restored_window.show()
+        _pump(app, 0.15)
+        restored_window._show_workspace_page("debug_sources")
+        restored_tab = restored_window._tab_debug_workbench
+        restored_window._restore_debug_source_config(
+            {
+                "debug_sources": {
+                    "provider_key": "compile_commands",
+                    "compile_commands_path": str(root / "compile_commands.json"),
+                    "remaps": remap_records,
+                }
+            }
+        )
+        restored_manifest = restored_window._sync_configured_debug_source_provider()
+        _pump(app, 0.15)
+        restored_diag = _diagnostics(restored_tab)
+        _assert(restored_manifest.provider == "compile_commands", "restored compile_commands manifest provider mismatch")
+        _assert(restored_diag.get("源码缺失") == "0", f"saved remap did not replay after config restore: {restored_diag!r}")
+        _assert("1 条" in restored_diag.get("重映射重放", ""), f"restored replay diagnostics missing: {restored_diag!r}")
+        _assert(restored_diag.get("重映射命中") == "1", f"restored remap hit mismatch: {restored_diag!r}")
+        _assert(not restored_tab.source_provider_remap_button.isEnabled(), "restored remap button should disable after replay")
+        restored_window.close()
+        _pump(app, 0.2)
 
         gdb_text = (
             "Source files for which symbols have been read in:\n\n"
