@@ -4063,3 +4063,67 @@ scope variables.
 - Then bind scope presets to the oscilloscope/watch path:
   - add selected read-only variables to a Keil/UVSOCK watch list
   - show realistic sampling-rate warnings for Keil bridge mode.
+
+## Milestone 45 Update - Explicit F401 Auto-Debug Smoke CLI
+
+### Goal
+
+Create a reproducible hardware-smoke entry point for the F401 Keil probe while
+keeping the default behavior dry-run only.
+
+### Completed
+
+- Added `tools/keil_auto_debug_smoke.py`.
+- Default mode prints a dry-run plan and does not start Keil, connect UVSOCK, or
+  write target memory.
+- `--execute` runs the real auto-debug transaction:
+  - profile
+  - build if AXF is missing
+  - launch Keil/UVSOCK unless `--no-launch`
+  - wait for connection
+  - write `debug_setpoint` unless `--no-write`
+- Added options:
+  - `--keil-root`
+  - `--port`
+  - `--project`
+  - `--target`
+  - `--expression`
+  - `--write-value`
+  - `--wait-seconds`
+  - `--poll-interval`
+  - `--no-build`
+  - `--no-launch`
+  - `--no-write`
+  - `--json`
+- Updated `firmware/keil_f401_variable_probe/README.md` with dry-run and
+  execute examples.
+
+### Verified
+
+- `python -m py_compile tools/keil_auto_debug_smoke.py src/core/keil/auto_debug.py`
+  - PASS.
+- `python tools/keil_auto_debug_smoke.py --json`
+  - PASS; dry-run output includes:
+    - F401 project path
+    - AXF path/status
+    - build command
+    - launch command
+    - ST-Link/SWD/10 MHz debug option diagnostics
+    - planned `debug_setpoint = 5000` write.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+
+### Notes
+
+- `--execute` was not run in this milestone. The tool exists so the next
+  hardware-facing smoke can be explicit, reproducible and logged.
+- The existing `tools/keil_live_write_probe.py` remains useful for low-level
+  command/memory write paths. The new smoke runner tests the higher-level
+  LoopMaster transaction flow.
+
+### Next Target
+
+- Run the F401 smoke with `--execute` when the board/ST-Link/uVision state is
+  intentionally ready.
+- Add Keil watch/read sampling path for preset scope variables, with clear
+  sampling-rate warnings.

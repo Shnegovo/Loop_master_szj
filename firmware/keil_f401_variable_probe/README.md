@@ -83,3 +83,17 @@ python tools\keil_live_write_probe.py --keil-root D:\Keil --launch-uvsock --wait
 The `UVSC_DBG_CALC_EXPRESSION` assignment path is still kept as an experimental
 UVSOCK route. For proven hardware writes, prefer the command path first and the
 AXF symbol plus memory-write flow as the fallback.
+
+The higher-level auto-debug smoke runner plans the whole profile/build/launch/
+connect/write transaction by default:
+
+```powershell
+python tools\keil_auto_debug_smoke.py --json
+```
+
+Add `--execute` only when the F401 board and ST-Link are intentionally ready for
+a real Keil/UVSOCK session and RAM variable write:
+
+```powershell
+python tools\keil_auto_debug_smoke.py --execute --write-value 5000
+```
