@@ -45,6 +45,7 @@ from src.core.debug_sources import (
     preview_source_manifest_path_remap,
     source_manifest_from_compile_commands,
     source_manifest_from_gdb_sources,
+    source_manifest_missing_path_hints,
     source_manifest_from_readelf_line_table_text,
     source_manifest_from_roots,
 )
@@ -448,6 +449,7 @@ class MainWindow(QMainWindow):
         self._debug_dwarf_line_table_text = ""
         self._debug_dwarf_text_elf_path: Path | None = None
         self._debug_source_remap_preview: SourcePathRemapPreview | None = None
+        self._debug_source_remaps: list[dict[str, str]] = []
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -2024,6 +2026,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.backendSelectionChanged.connect(self._on_debug_backend_selected)
         self._tab_debug_workbench.sourceProviderSelectionChanged.connect(self._on_debug_source_provider_selected)
         self._tab_debug_workbench.sourceProviderConfigureRequested.connect(self._on_debug_source_provider_configure_requested)
+        self._tab_debug_workbench.sourceRemapRequested.connect(self._on_debug_source_remap_requested)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
@@ -2149,6 +2152,28 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_sb_label"):
             self._sb_label.setText("当前源码来源不需要额外配置。")
 
+    def _on_debug_source_remap_requested(self):
+        manifest = self._debug_source_preview_manifest
+        if manifest is None and hasattr(self, "_tab_debug_workbench"):
+            manifest = self._tab_debug_workbench.source_manifest
+        if manifest is None:
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText("当前没有可映射的源码清单。")
+            return
+        hints = source_manifest_missing_path_hints(manifest)
+        if not hints:
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText("当前源码路径正常，没有可映射的缺失项。")
+            return
+        root = self._choose_existing_directory("选择本地源码根目录")
+        if not root:
+            return
+        self.preview_debug_source_remap(
+            missing_dir=hints[0].missing_dir,
+            local_root=root,
+            persist=True,
+        )
+
     def configure_debug_compile_commands(self, path: str | Path) -> SourceManifest:
         self._debug_compile_commands_path = Path(path).expanduser()
         self._debug_source_provider_key = "compile_commands"
@@ -2218,6 +2243,7 @@ class MainWindow(QMainWindow):
         *,
         missing_dir: str | Path,
         local_root: str | Path,
+        persist: bool = False,
     ) -> SourcePathRemapPreview:
         manifest = self._debug_source_preview_manifest
         if manifest is None and hasattr(self, "_tab_debug_workbench"):
@@ -2242,7 +2268,26 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(
                 f"源码重映射预览：缺失 {preview.before_missing} -> {preview.after_missing}"
             )
+        if persist:
+            self._remember_debug_source_remap(preview)
+            self._save_config()
         return preview
+
+    def _remember_debug_source_remap(self, preview: SourcePathRemapPreview):
+        record = {
+            "provider_key": self._debug_source_provider_key,
+            "missing_dir": preview.missing_dir,
+            "local_root": str(preview.local_root),
+        }
+        self._debug_source_remaps = [
+            item
+            for item in self._debug_source_remaps
+            if not (
+                item.get("provider_key") == record["provider_key"]
+                and item.get("missing_dir") == record["missing_dir"]
+            )
+        ]
+        self._debug_source_remaps.append(record)
 
     def _sync_debug_source_manifest_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -4998,6 +5043,17 @@ class MainWindow(QMainWindow):
         dwarf_elf = str(debug_sources.get("dwarf_elf_path", "") or "")
         if dwarf_elf:
             self._debug_dwarf_text_elf_path = Path(dwarf_elf)
+        remaps = debug_sources.get("remaps", ())
+        if isinstance(remaps, (list, tuple)):
+            self._debug_source_remaps = [
+                {
+                    "provider_key": str(item.get("provider_key", "")),
+                    "missing_dir": str(item.get("missing_dir", "")),
+                    "local_root": str(item.get("local_root", "")),
+                }
+                for item in remaps
+                if isinstance(item, dict) and item.get("missing_dir") and item.get("local_root")
+            ]
 
     def _debug_source_config_record(self) -> dict[str, object]:
         return {
@@ -5007,6 +5063,7 @@ class MainWindow(QMainWindow):
             "gdb_sources_text": self._debug_gdb_sources_text,
             "dwarf_line_table_text": self._debug_dwarf_line_table_text,
             "dwarf_elf_path": str(self._debug_dwarf_text_elf_path or ""),
+            "remaps": list(self._debug_source_remaps),
         }
 
     def _restore_selected_items(self, parent: QTreeWidgetItem, saved: list[str]):

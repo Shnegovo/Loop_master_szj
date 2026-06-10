@@ -91,6 +91,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已加入显式 source provider 配置：可选择 `compile_commands.json`、源码根，或粘贴已捕获的 GDB `info sources` / `readelf -wl` 文本；缺失源码会进入 chips/诊断表和源码树 `(缺失)` 节点。
 - 已加入缺失源码映射提示：按缺失目录汇总数量、原始路径示例和解析来源，先显示在诊断表与 chip tooltip 中。
 - 已加入 data-only 源码重映射预览：可把一个缺失目录映射到本地源码根，重建预览 manifest 并显示缺失数量变化。
+- 已加入用户可点的源码映射动作：当前清单有缺失路径时可选择本地源码根，应用 remap 预览并保存选择。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -102,7 +103,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 继续保持关闭期禁止新的 pyOCD/Keil/串口读写进入。
 
 2. 架构底座
-   - 在源码来源选择器后续接入用户可点的 remap 动作：选择缺失提示 -> 选择本地源码根 -> 应用已有预览并持久化。
+   - 在源码来源选择器后续接入已保存 remap 的自动重放，并清楚显示重放结果。
    - 继续把 Keil transaction UI typing 迁移到通用 `DebugCommandTransaction`，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。
    - 抽出 `Decoder`：Raw、CSV、FireWater、JustFloat、HEX、后续自定义协议注册。

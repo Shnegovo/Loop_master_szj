@@ -294,6 +294,7 @@ class DebugWorkbenchTab(QWidget):
     backendSelectionChanged = Signal(str)
     sourceProviderSelectionChanged = Signal(str)
     sourceProviderConfigureRequested = Signal(str)
+    sourceRemapRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -733,6 +734,13 @@ class DebugWorkbenchTab(QWidget):
         self.source_provider_configure_button.setToolTip("配置当前源码来源")
         self.source_provider_configure_button.clicked.connect(self._on_source_provider_configure_clicked)
         source_header.addWidget(self.source_provider_configure_button)
+        self.source_provider_remap_button = QPushButton("映射")
+        self.source_provider_remap_button.setObjectName("debugMiniButton")
+        self.source_provider_remap_button.setCursor(Qt.PointingHandCursor)
+        self.source_provider_remap_button.setToolTip("把缺失源码目录映射到本地源码根")
+        self.source_provider_remap_button.clicked.connect(self.sourceRemapRequested.emit)
+        self.source_provider_remap_button.setEnabled(False)
+        source_header.addWidget(self.source_provider_remap_button)
         layout.addLayout(source_header)
 
         layout.addWidget(self._build_source_manifest_strip())
@@ -1383,6 +1391,12 @@ class DebugWorkbenchTab(QWidget):
         for label, value in zip(labels, values):
             label.setText(value)
             label.setToolTip(tooltip)
+        if hasattr(self, "source_provider_remap_button"):
+            has_hints = bool(manifest is not None and source_manifest_missing_path_hints(manifest))
+            self.source_provider_remap_button.setEnabled(has_hints)
+            self.source_provider_remap_button.setToolTip(
+                "把缺失源码目录映射到本地源码根" if has_hints else "当前没有可映射的缺失源码"
+            )
 
     def _source_diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
         manifest = self._source_manifest

@@ -2853,3 +2853,45 @@ Add a safe preview path for mapping missing source directories to a local source
   - choose a local source root
   - apply the existing preview remap
   - persist remap choices per provider/project
+
+## Milestone 30 Update - User Source Remap Action
+
+### Goal
+
+Make the source remap preview usable from the Debug Workbench UI while keeping it data-only and safe for future Keil/OpenOCD/pyOCD flows.
+
+### Completed
+
+- Added an `映射` button next to the source-provider `配置` button.
+- The button enables only when the current `SourceManifest` has missing-path hints.
+- Clicking the action selects the highest-priority missing directory, asks for a local source root, and applies the existing remap preview.
+- `MainWindow.preview_debug_source_remap()` now supports `persist=True`.
+- Remap choices are saved in `loopmaster.json` under `debug_sources.remaps`.
+- The focused source-provider UI probe now verifies:
+  - remap button enables when paths are missing
+  - missing count changes from `1` to `0`
+  - remap diagnostics show `重映射命中`
+  - remap button disables after paths are resolved
+  - remap config is recorded
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py src\ui\debug_workbench_tab.py tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+
+### Notes
+
+- The UI action still only rebuilds the local source manifest.
+- It does not launch Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access.
+- Saved remap choices are recorded but not yet automatically replayed on app startup.
+
+### Next Target
+
+- Replay saved remap choices after source-provider config is restored:
+  - apply matching saved remaps after a manifest is rebuilt
+  - keep a clear diagnostic row showing which remap was replayed
+  - avoid replaying stale remaps that no longer match any missing directory

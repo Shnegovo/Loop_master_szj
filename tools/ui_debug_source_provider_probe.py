@@ -147,6 +147,7 @@ def main() -> int:
         _assert("missing.c" in diag.get("映射示例", ""), f"compile_commands mapping example mismatch: {diag!r}")
         _assert("缺失 1" in tab.source_provider_missing_label.text(), "compile_commands missing chip mismatch")
         _assert("映射提示" in tab.source_provider_missing_label.toolTip(), "compile_commands missing tooltip should include mapping hints")
+        _assert(tab.source_provider_remap_button.isEnabled(), "remap button should be enabled when source files are missing")
         _assert(any("(缺失)" in text for text in _tree_texts(tab)), f"missing tree node absent: {_tree_texts(tab)!r}")
         remap_root = root / "Remapped" / "Src"
         remap_root.mkdir(parents=True)
@@ -155,6 +156,7 @@ def main() -> int:
         preview = window.preview_debug_source_remap(
             missing_dir=hints[0].missing_dir,
             local_root=remap_root,
+            persist=True,
         )
         _pump(app, 0.15)
         _assert(preview.before_missing == 1 and preview.after_missing == 0, f"remap preview count mismatch: {preview!r}")
@@ -162,6 +164,9 @@ def main() -> int:
         _assert(diag.get("源码缺失") == "0", f"remap missing diagnostics mismatch: {diag!r}")
         _assert(diag.get("重映射命中") == "1", f"remap hit diagnostics mismatch: {diag!r}")
         _assert("路径正常" in tab.source_provider_missing_label.text(), f"remap chip mismatch: {tab.source_provider_missing_label.text()!r}")
+        _assert(not tab.source_provider_remap_button.isEnabled(), "remap button should disable after missing files are resolved")
+        remap_records = window._debug_source_config_record().get("remaps", [])
+        _assert(remap_records and remap_records[-1]["local_root"] == str(remap_root.resolve()), f"remap config mismatch: {remap_records!r}")
 
         gdb_text = (
             "Source files for which symbols have been read in:\n\n"
