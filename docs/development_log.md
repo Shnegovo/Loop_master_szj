@@ -3082,3 +3082,60 @@ Introduce a backend-neutral debug session contract so Keil, OpenOCD/GDB, pyOCD a
   - adapt Keil/OpenOCD-GDB/pyOCD/offline snapshots into the controller
   - expose a compact API for UI refresh without adding more orchestration to `gui.py`
   - keep all actions no-hardware and blocked by the default safety policy
+
+## Milestone 34 Update - Dry-Run Session Controller
+
+### Goal
+
+Add a small controller layer that owns backend selection, session contract snapshots, safety policy and command matrix state before wiring this into the UI.
+
+### Completed
+
+- Added `src\core\debug_session_controller.py`.
+- The controller now:
+  - owns the selected `DebugBackendKind`
+  - keeps a `DebugSessionSpec`
+  - keeps the current neutral `DebugSessionSnapshot`
+  - exposes the current `DebugSessionCommand` matrix
+  - can switch backend without creating backend adapters
+  - can update project/target/source-provider metadata without live side effects
+  - can convert adapter discovery/read-only snapshots into neutral session state
+  - can generate data-only session events for audit/history use
+- Added `tools\debug_session_controller_probe.py`.
+- The probe verifies:
+  - controller construction does not create backend adapters
+  - placeholder OpenOCD/GDB preview remains no-connect/no-live
+  - fake adapter discovery and read-only snapshot flow through the controller
+  - default dry-run policy blocks attach/run/write execution
+  - explicit read-only policy enables only read-only attach/disconnect
+  - explicit run-control policy enables run/step/breakpoint sync but still blocks writes
+  - controller records are JSON-serializable and data-only
+
+### Verified
+
+- `python -m py_compile src\core\debug_session_controller.py tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+
+### Notes
+
+- This is still no-hardware architecture work.
+- No Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access is used.
+- The controller is not yet wired into `src\ui\gui.py`; that is deliberate to keep the first slice low risk.
+
+### Next Target
+
+- Wire the controller into the Debug Workbench refresh path in a read-only way:
+  - create it beside the existing backend registry
+  - mirror backend selection into the controller
+  - surface contract diagnostics/command matrix without changing live behavior
+  - keep existing UI probes passing
