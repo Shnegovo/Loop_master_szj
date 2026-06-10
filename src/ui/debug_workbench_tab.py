@@ -42,7 +42,7 @@ from src.core.debug_workbench import (
     source_entries_from_keil_project,
     source_tree_from_entries,
 )
-from src.core.keil.commands import KeilCommandTransaction
+from src.core.keil.commands import KeilCommandHistoryEntry, KeilCommandTransaction
 from src.core.keil.project import KeilProject, parse_keil_project
 from src.ui.pcl_theme import PclComboBox, polish_combo_popup
 
@@ -258,6 +258,7 @@ class DebugWorkbenchTab(QWidget):
         self._diagnostics: tuple[tuple[str, str], ...] = ()
         self._plan_rows: tuple[DebugCommandPlan, ...] = ()
         self._command_transactions: tuple[KeilCommandTransaction, ...] = ()
+        self._command_history_entries: tuple[KeilCommandHistoryEntry, ...] = ()
         self._session = DebugWorkbenchSession()
         self._backend_controls_ready = False
 
@@ -288,6 +289,9 @@ class DebugWorkbenchTab(QWidget):
     @property
     def debug_status(self) -> DebugWorkbenchStatus:
         return self._session.status
+
+    def local_breakpoints(self) -> tuple:
+        return self._breakpoints.all()
 
     def hero_summary(self) -> tuple[str, str, str]:
         if self._project is None:
@@ -349,6 +353,13 @@ class DebugWorkbenchTab(QWidget):
     ) -> None:
         self._command_transactions = tuple(transactions)
         self._refresh_command_plan_preview()
+
+    def set_command_history_entries(
+        self,
+        entries: tuple[KeilCommandHistoryEntry, ...] | list[KeilCommandHistoryEntry],
+    ) -> None:
+        self._command_history_entries = tuple(entries)
+        self._refresh_command_history_preview()
 
     def add_breakpoint(
         self,
@@ -499,6 +510,10 @@ class DebugWorkbenchTab(QWidget):
         self.plan_guard_label.setObjectName("debugPlanGuard")
         self.plan_guard_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.plan_guard_label, 1)
+
+        self.plan_history_label = QLabel("历史 0")
+        self.plan_history_label.setObjectName("debugPlanHistory")
+        layout.addWidget(self.plan_history_label)
         return strip
 
     def _build_navigation_panel(self) -> QFrame:
@@ -837,6 +852,15 @@ class DebugWorkbenchTab(QWidget):
         ):
             widget.setToolTip(tooltip)
         self._repolish(self.plan_state_label, self.plan_risk_label)
+        self._refresh_command_history_preview()
+
+    def _refresh_command_history_preview(self) -> None:
+        if not hasattr(self, "plan_history_label"):
+            return
+        count = len(self._command_history_entries)
+        self.plan_history_label.setText(f"历史 {count}")
+        self.plan_history_label.setToolTip(self._history_tooltip())
+        self._repolish(self.plan_history_label)
 
     def _focused_command_plan(self) -> DebugCommandPlan | None:
         priority = (
@@ -920,6 +944,19 @@ class DebugWorkbenchTab(QWidget):
             f"审计: {transaction.audit_summary}",
         ]
         return "\n".join(sections)
+
+    def _history_tooltip(self) -> str:
+        if not self._command_history_entries:
+            return "暂无干跑命令历史"
+        lines = ["最近干跑命令历史:"]
+        for entry in self._command_history_entries[:5]:
+            state = "已阻止" if entry.blocked_reasons else "未执行"
+            repeat = f" x{entry.seen_count}" if entry.seen_count > 1 else ""
+            blocked = f" · {entry.blocked_reasons[0]}" if entry.blocked_reasons else ""
+            lines.append(
+                f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}"
+            )
+        return "\n".join(lines)
 
     def _refresh_summary(self) -> None:
         project, source_count, breakpoints = self.hero_summary()
@@ -1044,6 +1081,15 @@ class DebugWorkbenchTab(QWidget):
             QLabel#debugPlanGuard {
                 color: #64748b;
                 font-size: 9pt;
+            }
+            QLabel#debugPlanHistory {
+                color: #475569;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 7px;
+                background: #f8fafc;
+                border: 1px solid #d2deea;
+                border-radius: 5px;
             }
             QComboBox#debugCombo, QLineEdit#debugSearch {
                 background: #f8fbff;

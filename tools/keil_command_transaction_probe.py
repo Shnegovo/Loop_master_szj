@@ -18,6 +18,7 @@ from src.core.debug_workbench import (  # noqa: E402
     DebugWorkbenchSession,
 )
 from src.core.keil.commands import (  # noqa: E402
+    KeilCommandHistory,
     KeilCommandGuardState,
     KeilVariableWriteIntent,
     append_keil_audit_log,
@@ -136,6 +137,11 @@ def main() -> int:
         _assert(_guard_state(discovered["attach"], "uvsock_port") == KeilCommandGuardState.PASS, "attach port guard should pass")
         _assert("UVSC_OpenConnection" in " ".join(discovered["attach"].command_preview), "attach preview missing UVSOCK open")
         _assert("UV4.exe" not in " ".join(discovered["attach"].command_preview), "attach preview must not include launch command")
+        history = KeilCommandHistory(max_entries=3)
+        first = history.record(discovered["attach"], timestamp="2026-06-10T00:00:00+00:00")
+        duplicate = history.record(discovered["attach"], timestamp="2026-06-10T00:00:01+00:00")
+        _assert(len(history) == 1 and duplicate.seen_count == 2, "adjacent duplicate history entry should merge")
+        _assert(first.entry_id == duplicate.entry_id, "merged history should keep entry identity")
 
         session.mark_attached(running=True, runtime_control=True, breakpoint_sync=True)
         breakpoints = (
@@ -157,6 +163,13 @@ def main() -> int:
             _guard_state(running["sync_breakpoints"], "breakpoint_locations") == KeilCommandGuardState.BLOCKED,
             "invalid breakpoint line should block sync transaction",
         )
+        history.record(running["halt"], timestamp="2026-06-10T00:00:02+00:00")
+        history.record(discovered["attach"], timestamp="2026-06-10T00:00:03+00:00")
+        _assert(len(history) == 3, "A/B/A history should preserve three segments")
+        _assert([entry.title for entry in history.all()] == ["连接调试会话", "暂停目标", "连接调试会话"], "history order changed")
+        _assert(history.recent(limit=1)[0].title == "连接调试会话", "recent should return newest first")
+        _assert(history.recent(limit=3, kind="halt")[0].title == "暂停目标", "kind filter failed")
+        _assert(history.recent(limit=3, blocked=True), "blocked filter should find dry-run guarded entries")
 
         session.update_runtime(running=False, current_pc_line=2, run_line=3)
         paused = _transaction_map(session, project_path=project_path, target_name="DebugDemo")
@@ -188,9 +201,16 @@ def main() -> int:
         write_text = " ".join(write_transaction.blocked_reasons + write_transaction.command_preview)
         for phrase in ("RAM", "类型", "范围", "回读"):
             _assert(phrase in write_text, f"write transaction missing safety phrase: {phrase}")
+        history.record(paused["run"], timestamp="2026-06-10T00:00:04+00:00")
+        _assert(len(history) == 3, "history should enforce bounded length")
+        _assert(history.all()[0].title == "暂停目标", "oldest segment eviction changed unexpectedly")
+        for entry in history.all():
+            json.dumps(entry.to_record(), ensure_ascii=False, sort_keys=True)
+            _assert_data_only(entry)
 
         with tempfile.TemporaryDirectory(prefix="loopmaster-keil-audit-") as audit_tmp:
             audit_path = Path(audit_tmp) / "debug-audit.jsonl"
+            _assert(not audit_path.exists(), "history recording should not auto-create an audit log")
             append_keil_audit_log(audit_path, (transaction_by_key(write_ready.values(), "write_variables"),))
             lines = audit_path.read_text(encoding="utf-8").splitlines()
             _assert(len(lines) == 1, "audit log should contain one record")

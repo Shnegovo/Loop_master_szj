@@ -38,7 +38,7 @@ from src.core.debug_workbench import (
     make_debug_status,
     status_from_uvsock_preflight,
 )
-from src.core.keil.commands import build_keil_debug_transactions
+from src.core.keil.commands import KeilCommandHistory, build_keil_debug_transactions, transaction_by_key
 from src.core.keil.uvsock import build_uvision_uvsock_command, check_uvsock_preflight
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
@@ -420,6 +420,7 @@ class MainWindow(QMainWindow):
         self._shutdown_complete = False
         self._keil_root = Path(os.environ.get("LOOPMASTER_KEIL_ROOT") or "D:\\Keil")
         self._debug_uvsock_port = 4827
+        self._debug_command_history = KeilCommandHistory(max_entries=64)
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -1953,6 +1954,7 @@ class MainWindow(QMainWindow):
 
         self._tab_debug_workbench = DebugWorkbenchTab()
         self._tab_debug_workbench.summaryChanged.connect(self._refresh_hero)
+        self._tab_debug_workbench.summaryChanged.connect(self._sync_debug_command_preview)
         self._setup_debug_workbench_connections()
         self._register_workspace_page("debug_sources", "源码", self._tab_debug_workbench, domain="debug")
 
@@ -2033,9 +2035,31 @@ class MainWindow(QMainWindow):
             port=self._debug_uvsock_port,
             project_path=status.project_path,
             target_name=status.target_name,
+            breakpoints=tab.local_breakpoints(),
             execution_gate=False,
         )
         tab.set_command_transactions(transactions)
+        focused = self._focused_debug_transaction(transactions)
+        if focused is not None:
+            self._debug_command_history.record(focused, event="previewed", source="ui_sync")
+        tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
+
+    def _focused_debug_transaction(self, transactions):
+        priority = (
+            "attach",
+            "halt",
+            "run",
+            "step",
+            "sync_breakpoints",
+            "write_variables",
+            "disconnect",
+            "discover",
+        )
+        ready = {transaction.kind.value for transaction in transactions if transaction.preconditions_met}
+        for key in priority:
+            if key in ready:
+                return transaction_by_key(transactions, key)
+        return transactions[0] if transactions else None
 
     def _debug_workbench_idle_diagnostics(self) -> tuple[tuple[str, str], ...]:
         return (

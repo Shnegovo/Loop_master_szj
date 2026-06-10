@@ -23,7 +23,11 @@ from src.core.debug_workbench import (  # noqa: E402
     make_debug_status,
     search_document,
 )
-from src.core.keil.commands import build_keil_debug_transactions  # noqa: E402
+from src.core.keil.commands import (  # noqa: E402
+    KeilCommandHistory,
+    build_keil_debug_transactions,
+    transaction_by_key,
+)
 from src.ui.gui import MainWindow  # noqa: E402
 from src.ui.pcl_theme import apply_pcl_theme  # noqa: E402
 
@@ -191,18 +195,41 @@ def _plan_rows(tab) -> dict[str, dict[str, str]]:
     return rows
 
 
-def _sync_command_transactions(tab, port: int = 4827) -> None:
+def _sync_command_transactions(tab, history: KeilCommandHistory | None = None, port: int = 4827) -> None:
     status = tab.debug_status
-    tab.set_command_transactions(
-        build_keil_debug_transactions(
-            status,
-            debug_command_plans_for_status(status),
-            port=port,
-            project_path=status.project_path,
-            target_name=status.target_name,
-            execution_gate=False,
-        )
+    transactions = build_keil_debug_transactions(
+        status,
+        debug_command_plans_for_status(status),
+        port=port,
+        project_path=status.project_path,
+        target_name=status.target_name,
+        breakpoints=tab.local_breakpoints(),
+        execution_gate=False,
     )
+    tab.set_command_transactions(transactions)
+    if history is not None:
+        focused = _focused_transaction(transactions)
+        if focused is not None:
+            history.record(focused, event="previewed", source="ui_probe")
+        tab.set_command_history_entries(history.recent(limit=5))
+
+
+def _focused_transaction(transactions):
+    priority = (
+        "attach",
+        "halt",
+        "run",
+        "step",
+        "sync_breakpoints",
+        "write_variables",
+        "disconnect",
+        "discover",
+    )
+    ready = {transaction.kind.value for transaction in transactions if transaction.preconditions_met}
+    for key in priority:
+        if key in ready:
+            return transaction_by_key(transactions, key)
+    return transactions[0] if transactions else None
 
 
 def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
@@ -226,6 +253,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
 
     screenshots: list[Path] = []
     issues: list[str] = []
+    history = KeilCommandHistory(max_entries=5)
     with tempfile.TemporaryDirectory(prefix="loopmaster-debug-ui-") as tmp:
         project_path = _write_fixture(Path(tmp))
         window = MainWindow()
@@ -290,7 +318,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ),
             controls_ready=False,
         )
-        _sync_command_transactions(tab)
+        _sync_command_transactions(tab, history)
+        _sync_command_transactions(tab, history)
         running_plans = _plan_rows(tab)
         required_plan_titles = {
             "连接调试会话",
@@ -310,6 +339,11 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"run plan should wait while already running: {running_plans.get('继续运行')!r}")
         if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():
             issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
+        if "历史 " not in tab.plan_history_label.text() or tab.plan_history_label.text() == "历史 0":
+            issues.append(f"history chip did not record running preview: {tab.plan_history_label.text()!r}")
+        history_tip = tab.plan_history_label.toolTip()
+        if "最近干跑命令历史" not in history_tip or "x2" not in history_tip:
+            issues.append(f"history tooltip should show recent merged dry-run records: {history_tip!r}")
         running_tooltip = tab.plan_guard_label.toolTip()
         for phrase in ("UVSC_DBG_STOP_EXECUTION", "DebugDemo.uvprojx", "DebugDemo", "4827"):
             if phrase not in running_tooltip:
@@ -338,7 +372,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
             ),
             controls_ready=False,
         )
-        _sync_command_transactions(tab)
+        _sync_command_transactions(tab, history)
         paused_plans = _plan_rows(tab)
         if paused_plans.get("继续运行", {}).get("status") != "计划就绪":
             issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
@@ -356,6 +390,9 @@ def run(output_dir: Path, width: int, height: int) -> int:
         for phrase in ("UVSC_DBG_START_EXECUTION", "交易 ID", "Guard", "审计"):
             if phrase not in paused_tooltip:
                 issues.append(f"paused transaction tooltip missing {phrase}: {paused_tooltip!r}")
+        paused_history_tip = tab.plan_history_label.toolTip()
+        if "继续运行" not in paused_history_tip or "暂停目标" not in paused_history_tip:
+            issues.append(f"history tooltip should retain running and paused segments: {paused_history_tip!r}")
         enabled_actions = [
             key
             for key, button in getattr(tab, "_action_buttons", {}).items()

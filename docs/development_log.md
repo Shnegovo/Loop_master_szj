@@ -1157,3 +1157,81 @@ Create a typed dry-run transaction layer between the human-readable debug plans 
   - include filtering by action/risk/blocked state
   - persist only explicit audit records, not raw handles or sensitive Keil config
   - continue staying no-hardware until a deliberately scoped UVSOCK smoke stage is selected
+
+## Stage 21 - Dry-Run Command History Preview
+
+### Goal
+
+Make the Keil debug workbench remember recent dry-run command intent without adding visual clutter or writing anything to disk automatically, so later UVSOCK smoke/execution stages have a clear audit trail shape already in place.
+
+### Completed
+
+- Added `KeilCommandHistoryEntry` and `KeilCommandHistory` in `src/core/keil/commands.py`.
+- Added bounded in-memory command history with a default capacity of 64 entries.
+- Added adjacent duplicate coalescing:
+  - repeated A/A updates merge into one entry and increment `seen_count`
+  - A/B/A remains three separate segments so state transitions are not hidden
+- Added history metadata:
+  - entry id
+  - sequence
+  - first/last seen timestamps
+  - event/source
+  - transaction id
+  - action/risk/dry-run state
+  - project/target/port
+  - command preview
+  - blocked reasons
+  - guard pass/wait/blocked summary
+  - audit summary
+- Added filtered recent-history lookup by action kind, risk, and blocked state.
+- Kept history in memory only. JSONL persistence still requires explicit `append_keil_audit_log()`.
+- Exported history objects through `src/core/keil/__init__.py`.
+- Added a compact `历史 N` chip to the existing top `动作计划` strip.
+- The history chip tooltip shows the recent dry-run history without adding a left-column or editor-bottom table.
+- Wired `MainWindow` to record only the current focused dry-run transaction during UI sync, avoiding one history row per hidden action.
+- Passed local breakpoints into transaction preview/history generation so future breakpoint sync previews can reflect local breakpoint count.
+- Extended probes to verify:
+  - bounded history length
+  - adjacent duplicate merge
+  - A/B/A segment preservation
+  - history filtering
+  - history records are JSON-serializable and data-only
+  - recording history does not auto-create an audit file
+  - UI chip displays non-empty history
+  - UI tooltip shows merged and multi-state dry-run history
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS, including bounded history, duplicate coalescing, A/B/A preservation, filtering, data-only records, and explicit-only audit logging.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- History is deliberately not a persistent log. It is an in-memory UI aid until a future explicit audit/export action is introduced.
+- The UI remains compact: no new permanent left-panel table, no drawer, and no source-editor height penalty.
+
+### Next Target
+
+- Add a breakpoint-sync dry-run diff:
+  - compare local breakpoints against a future remote snapshot model
+  - classify add/remove/enable/disable/update-condition operations
+  - show counts in the dry-run transaction preview/history tooltip
+  - validate source file membership and line numbers before any future Keil sync command exists
+  - keep all sync execution disabled until the UVSOCK smoke/controller stage is deliberately started

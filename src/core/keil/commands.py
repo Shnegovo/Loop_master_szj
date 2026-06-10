@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
@@ -126,6 +127,157 @@ class KeilCommandTransaction:
             ],
             "audit_summary": self.audit_summary,
         }
+
+
+@dataclass(frozen=True)
+class KeilCommandHistoryEntry:
+    schema_version: int
+    entry_id: str
+    sequence: int
+    first_seen_at: str
+    last_seen_at: str
+    seen_count: int
+    event: str
+    source: str
+    transaction_id: str
+    kind: KeilCommandKind
+    title: str
+    risk: str
+    dry_run: bool
+    preconditions_met: bool
+    execution_enabled: bool
+    ready: bool
+    project_path: str
+    target_name: str
+    port: int | None
+    command_preview: tuple[str, ...]
+    expected_effect: str
+    blocked_reasons: tuple[str, ...]
+    guard_summary: dict[str, int]
+    audit_summary: str
+    dedupe_key: str
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "entry_id": self.entry_id,
+            "sequence": self.sequence,
+            "first_seen_at": self.first_seen_at,
+            "last_seen_at": self.last_seen_at,
+            "seen_count": self.seen_count,
+            "event": self.event,
+            "source": self.source,
+            "transaction_id": self.transaction_id,
+            "kind": self.kind.value,
+            "title": self.title,
+            "risk": self.risk,
+            "dry_run": self.dry_run,
+            "preconditions_met": self.preconditions_met,
+            "execution_enabled": self.execution_enabled,
+            "ready": self.ready,
+            "project_path": self.project_path,
+            "target_name": self.target_name,
+            "port": self.port,
+            "command_preview": list(self.command_preview),
+            "expected_effect": self.expected_effect,
+            "blocked_reasons": list(self.blocked_reasons),
+            "guard_summary": dict(self.guard_summary),
+            "audit_summary": self.audit_summary,
+            "dedupe_key": self.dedupe_key,
+        }
+
+
+class KeilCommandHistory:
+    def __init__(self, max_entries: int = 64) -> None:
+        self._max_entries = max(1, int(max_entries))
+        self._entries: list[KeilCommandHistoryEntry] = []
+        self._next_sequence = 1
+
+    @property
+    def max_entries(self) -> int:
+        return self._max_entries
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def all(self) -> tuple[KeilCommandHistoryEntry, ...]:
+        return tuple(self._entries)
+
+    def record(
+        self,
+        transaction: KeilCommandTransaction,
+        *,
+        event: str = "previewed",
+        source: str = "ui_sync",
+        timestamp: str | None = None,
+    ) -> KeilCommandHistoryEntry:
+        seen_at = timestamp or _now_iso()
+        dedupe_key = _history_dedupe_key(event, source, transaction)
+        if self._entries and self._entries[-1].dedupe_key == dedupe_key:
+            updated = replace(
+                self._entries[-1],
+                last_seen_at=seen_at,
+                seen_count=self._entries[-1].seen_count + 1,
+            )
+            self._entries[-1] = updated
+            return updated
+
+        sequence = self._next_sequence
+        self._next_sequence += 1
+        entry = KeilCommandHistoryEntry(
+            schema_version=1,
+            entry_id=_history_entry_id(sequence, dedupe_key),
+            sequence=sequence,
+            first_seen_at=seen_at,
+            last_seen_at=seen_at,
+            seen_count=1,
+            event=str(event),
+            source=str(source),
+            transaction_id=transaction.transaction_id,
+            kind=transaction.kind,
+            title=transaction.title,
+            risk=transaction.risk,
+            dry_run=transaction.dry_run,
+            preconditions_met=transaction.preconditions_met,
+            execution_enabled=transaction.execution_enabled,
+            ready=transaction.ready,
+            project_path=str(transaction.project_path) if transaction.project_path else "",
+            target_name=transaction.target_name,
+            port=transaction.port,
+            command_preview=transaction.command_preview,
+            expected_effect=transaction.expected_effect,
+            blocked_reasons=transaction.blocked_reasons,
+            guard_summary=_guard_summary(transaction.guards),
+            audit_summary=transaction.audit_summary,
+            dedupe_key=dedupe_key,
+        )
+        self._entries.append(entry)
+        if len(self._entries) > self._max_entries:
+            del self._entries[0: len(self._entries) - self._max_entries]
+        return entry
+
+    def recent(
+        self,
+        limit: int = 5,
+        *,
+        kind: str | KeilCommandKind | None = None,
+        risk: str | None = None,
+        blocked: bool | None = None,
+    ) -> tuple[KeilCommandHistoryEntry, ...]:
+        entries = list(reversed(self._entries))
+        if kind is not None:
+            wanted = kind.value if isinstance(kind, KeilCommandKind) else str(kind)
+            entries = [entry for entry in entries if entry.kind.value == wanted]
+        if risk is not None:
+            wanted_risk = str(risk)
+            entries = [entry for entry in entries if entry.risk == wanted_risk]
+        if blocked is not None:
+            want_blocked = bool(blocked)
+            entries = [entry for entry in entries if bool(entry.blocked_reasons) == want_blocked]
+        return tuple(entries[:max(0, int(limit))])
 
 
 def build_keil_debug_transactions(
@@ -459,3 +611,27 @@ def _stable_id(payload: dict[str, Any]) -> str:
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
     return f"keil-{digest[:16]}"
+
+
+def _guard_summary(guards: tuple[KeilCommandGuard, ...]) -> dict[str, int]:
+    counts = {
+        KeilCommandGuardState.PASS.value: 0,
+        KeilCommandGuardState.WAIT.value: 0,
+        KeilCommandGuardState.BLOCKED.value: 0,
+    }
+    for guard in guards:
+        counts[guard.state.value] = counts.get(guard.state.value, 0) + 1
+    return counts
+
+
+def _history_dedupe_key(event: str, source: str, transaction: KeilCommandTransaction) -> str:
+    return "|".join((str(event), str(source), transaction.transaction_id))
+
+
+def _history_entry_id(sequence: int, dedupe_key: str) -> str:
+    digest = hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest()
+    return f"keil-history-{int(sequence):05d}-{digest[:8]}"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
