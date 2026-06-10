@@ -146,6 +146,22 @@ def source_manifest_from_roots(
     )
 
 
+def source_manifest_from_gdb_sources(
+    text: str,
+    *,
+    root: str | Path | None = None,
+    name: str = "GDB Sources",
+    max_files: int = 5000,
+) -> SourceManifest:
+    paths = _paths_from_gdb_info_sources(text)
+    return SourceManifest(
+        name=name,
+        root=Path(root).expanduser().resolve() if root else None,
+        provider="gdb_info_sources",
+        entries=source_entries_from_paths(paths[:max_files], root=root),
+    )
+
+
 def source_entries_from_keil_project(
     project: KeilProject,
     target_name: str | None = None,
@@ -213,3 +229,37 @@ def _select_target(project: KeilProject, target_name: str | None) -> KeilTarget 
 
 def _is_source_path(path: Path) -> bool:
     return path.suffix.lower() in SOURCE_LANGUAGES
+
+
+def _paths_from_gdb_info_sources(text: str) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for raw_line in str(text).splitlines():
+        for token in _candidate_path_tokens(raw_line):
+            path = Path(token)
+            if not _is_source_path(path):
+                continue
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+    return tuple(paths)
+
+
+def _candidate_path_tokens(line: str) -> tuple[str, ...]:
+    cleaned = line.strip()
+    if not cleaned or cleaned.endswith(":"):
+        return ()
+    for prefix in ("Source files for which symbols have been read in:", "Source files for which symbols will be read in on demand:"):
+        cleaned = cleaned.replace(prefix, " ")
+    tokens: list[str] = []
+    for chunk in cleaned.replace(";", ",").split(","):
+        token = chunk.strip().strip('"').strip("'")
+        if not token:
+            continue
+        if token.startswith("`") and token.endswith("'"):
+            token = token[1:-1]
+        if token:
+            tokens.append(token)
+    return tuple(tokens)

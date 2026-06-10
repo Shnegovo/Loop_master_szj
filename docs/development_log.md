@@ -2274,3 +2274,40 @@ Add the first non-Keil `SourceManifest` provider so future OpenOCD/GDB, pyOCD an
 ### Next Target
 
 - Continue with a fake GDB source-list provider or, if uVision is manually opened in Debug mode, run the strictly opt-in Keil live read-only smoke.
+
+## Milestone 30 Update - GDB Source List Provider
+
+### Goal
+
+Add a no-process `SourceManifest` provider for GDB-style source lists, preparing OpenOCD/GDB integrations to feed source files into the same Debug Workbench tree without launching GDB yet.
+
+### Completed
+
+- Added `source_manifest_from_gdb_sources()` to `src\core\debug_sources.py`.
+- Added parser helpers for typical GDB `info sources` text:
+  - strips section headers
+  - splits comma/semicolon separated source lists
+  - filters to known C/C++/ASM source extensions
+  - deduplicates paths
+  - respects `max_files`
+- Extended `tools\debug_source_manifest_probe.py` with synthetic GDB `info sources` output.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This provider does not run GDB, OpenOCD or pyOCD; it only parses already captured source-list text.
+- Future OpenOCD/GDB adapters can call this after a read-only `info sources` stage and hand the manifest to the same UI tree.
+
+### Next Target
+
+- Continue with compile_commands/ELF-adjacent source providers, or fold the new providers into the backend placeholder snapshots so the UI can preview non-Keil source trees.

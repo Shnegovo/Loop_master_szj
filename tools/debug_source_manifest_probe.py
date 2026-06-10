@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_sources import (  # noqa: E402
     source_entries_from_paths,
+    source_manifest_from_gdb_sources,
     source_manifest_from_roots,
     source_manifest_from_keil_project,
     source_tree_from_entries,
@@ -87,6 +88,21 @@ def main() -> int:
         _assert(all(entry.path.suffix.lower() != ".txt" for entry in manual.entries), "manual manifest should ignore text files")
         manual_record = manual.to_record()
         json.dumps(manual_record, ensure_ascii=False, sort_keys=True)
+
+        gdb_text = f"""
+Source files for which symbols have been read in:
+
+{src_dir / 'main.c'}, {src_dir / 'pid.cpp'}, {src_dir / 'ignore.txt'}
+Source files for which symbols will be read in on demand:
+
+{inc_dir / 'pid.h'}, {src_dir / 'main.c'}
+"""
+        gdb_manifest = source_manifest_from_gdb_sources(gdb_text, root=root, max_files=3)
+        _assert(gdb_manifest.provider == "gdb_info_sources", "GDB manifest provider mismatch")
+        _assert(gdb_manifest.source_count == 3, f"GDB manifest should filter and dedupe sources: {gdb_manifest.source_count}")
+        _assert(len({entry.path for entry in gdb_manifest.entries}) == 3, "GDB manifest should dedupe paths")
+        _assert(all(entry.path.suffix.lower() != ".txt" for entry in gdb_manifest.entries), "GDB manifest should ignore text files")
+        json.dumps(gdb_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
     print("PASS debug source manifest probe")
     return 0
