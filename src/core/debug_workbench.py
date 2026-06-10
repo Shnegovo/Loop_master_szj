@@ -76,6 +76,8 @@ class LineDecoration:
     kind: str
     label: str = ""
     enabled: bool = True
+    verified: bool = False
+    message: str = ""
 
 
 class DebugBackendKind(str, Enum):
@@ -218,8 +220,11 @@ class BreakpointStore:
     def set_condition(self, path: str | Path, line: int, condition: str) -> Breakpoint:
         return self._update(path, line, condition=str(condition))
 
-    def set_verified(self, path: str | Path, line: int, verified: bool) -> Breakpoint:
-        return self._update(path, line, verified=bool(verified))
+    def set_verified(self, path: str | Path, line: int, verified: bool, message: str = "") -> Breakpoint:
+        return self._update(path, line, verified=bool(verified), message=str(message))
+
+    def set_message(self, path: str | Path, line: int, message: str) -> Breakpoint:
+        return self._update(path, line, message=str(message))
 
     def record_hit(self, path: str | Path, line: int, count: int = 1) -> Breakpoint:
         breakpoint = self.get(path, line)
@@ -794,6 +799,8 @@ def line_decorations(
                     kind="breakpoint",
                     label=breakpoint.condition,
                     enabled=breakpoint.enabled,
+                    verified=breakpoint.verified,
+                    message=breakpoint.message,
                 )
             )
     if current_pc_line is not None and 1 <= int(current_pc_line) <= document.line_count:

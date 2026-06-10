@@ -347,6 +347,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
         tab.add_breakpoint(12, condition="speed_error > 40")
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
         tab.add_breakpoint(48)
+        tab.set_breakpoint_verification(3, verified=True)
+        tab.set_breakpoint_verification(24, verified=False, message="Keil 未回读到该断点")
         tab._scroll_editor_to_line(31)
         tab.current_line_condition_button.click()
         _pump(app, 0.1)
@@ -417,17 +419,29 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
         if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():
             issues.append(f"marker label should summarize breakpoint states: {tab.marker_label.text()!r}")
+        for phrase in ("已验证 1", "未验证 1", "待验证 3"):
+            if phrase not in tab.marker_label.text():
+                issues.append(f"marker label missing verification phrase {phrase}: {tab.marker_label.text()!r}")
         tooltip3 = tab.editor.gutter_tooltip_for_line(3)
         tooltip24 = tab.editor.gutter_tooltip_for_line(24)
         tooltip48 = tab.editor.gutter_tooltip_for_line(48)
-        if "启用断点" not in tooltip3 or "条件: speed > 60" not in tooltip3:
+        if "启用断点" not in tooltip3 or "已验证" not in tooltip3 or "条件: speed > 60" not in tooltip3:
             issues.append(f"enabled conditional breakpoint tooltip mismatch: {tooltip3!r}")
-        if "停用断点" not in tooltip24 or "条件: speed_error < -12" not in tooltip24:
+        if "停用断点" not in tooltip24 or "未验证" not in tooltip24 or "Keil 未回读到该断点" not in tooltip24 or "条件: speed_error < -12" not in tooltip24:
             issues.append(f"disabled conditional breakpoint tooltip mismatch: {tooltip24!r}")
-        if tooltip48 != "启用断点":
+        if tooltip48 != "启用断点 · 待验证":
             issues.append(f"plain breakpoint tooltip mismatch: {tooltip48!r}")
-        if tab.breakpoint_table.columnCount() != 5:
+        if tab.breakpoint_table.columnCount() != 6:
             issues.append(f"breakpoint table should expose edit columns: {tab.breakpoint_table.columnCount()}")
+        row3_verify = _row_for_line(tab, 3)
+        row24_verify = _row_for_line(tab, 24)
+        row48_verify = _row_for_line(tab, 48)
+        if row3_verify >= 0 and tab.breakpoint_table.item(row3_verify, 4).text() != "已验证":
+            issues.append(f"verified breakpoint table state mismatch: {tab.breakpoint_table.item(row3_verify, 4).text()!r}")
+        if row24_verify >= 0 and tab.breakpoint_table.item(row24_verify, 4).text() != "未验证":
+            issues.append(f"unverified breakpoint table state mismatch: {tab.breakpoint_table.item(row24_verify, 4).text()!r}")
+        if row48_verify >= 0 and tab.breakpoint_table.item(row48_verify, 4).text() != "待验证":
+            issues.append(f"pending breakpoint table state mismatch: {tab.breakpoint_table.item(row48_verify, 4).text()!r}")
         if not hasattr(tab, "breakpoint_editor_condition"):
             issues.append("breakpoint quick editor was not created")
         if "历史 " not in tab.plan_history_label.text() or tab.plan_history_label.text() == "历史 0":
@@ -486,9 +500,9 @@ def run(output_dir: Path, width: int, height: int) -> int:
         if row72 < 0:
             issues.append("delete row for line 72 was not found")
         else:
-            if tab.breakpoint_table.cellWidget(row72, 4) is None:
+            if tab.breakpoint_table.cellWidget(row72, 5) is None:
                 issues.append("delete button for line 72 missing")
-            tab.breakpoint_table.setCurrentCell(row72, 4)
+            tab.breakpoint_table.setCurrentCell(row72, 5)
             _pump(app, 0.1)
             tab.breakpoint_editor_delete.click()
             _pump(app, 0.1)

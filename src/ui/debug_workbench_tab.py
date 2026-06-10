@@ -134,7 +134,9 @@ class SourceCodeEditor(QPlainTextEdit):
             if decoration.kind == "breakpoint":
                 state = "启用" if decoration.enabled else "停用"
                 condition = f" · 条件: {decoration.label}" if decoration.label else ""
-                parts.append(f"{state}断点{condition}")
+                verify = "已验证" if decoration.verified else "未验证" if decoration.message else "待验证"
+                message = f" · {decoration.message}" if decoration.message else ""
+                parts.append(f"{state}断点 · {verify}{condition}{message}")
             elif decoration.kind == "pc":
                 parts.append("当前 PC")
             elif decoration.kind == "run":
@@ -432,6 +434,25 @@ class DebugWorkbenchTab(QWidget):
         breakpoint = self._breakpoints.add(breakpoint_path, line, enabled=enabled, condition=condition)
         self._refresh_breakpoint_views(select_path=breakpoint.path, select_line=breakpoint.line)
 
+    def set_breakpoint_verification(
+        self,
+        line: int,
+        *,
+        path: str | Path | None = None,
+        verified: bool,
+        message: str = "",
+    ) -> None:
+        breakpoint_path = Path(path) if path is not None else (
+            self._current_document.path if self._current_document is not None else None
+        )
+        if breakpoint_path is None:
+            return
+        try:
+            breakpoint = self._breakpoints.set_verified(breakpoint_path, line, verified, message)
+        except KeyError:
+            return
+        self._refresh_breakpoint_views(select_path=breakpoint.path, select_line=breakpoint.line)
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -616,14 +637,15 @@ class DebugWorkbenchTab(QWidget):
 
         self.breakpoint_table = QTableWidget()
         self.breakpoint_table.setObjectName("debugBreakpointTable")
-        self.breakpoint_table.setColumnCount(5)
-        self.breakpoint_table.setHorizontalHeaderLabels(["启用", "文件", "行", "条件", "操作"])
+        self.breakpoint_table.setColumnCount(6)
+        self.breakpoint_table.setHorizontalHeaderLabels(["启用", "文件", "行", "条件", "验证", "操作"])
         self.breakpoint_table.horizontalHeader().setStretchLastSection(False)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.breakpoint_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.breakpoint_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.breakpoint_table.verticalHeader().setVisible(False)
         self.breakpoint_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.breakpoint_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -845,6 +867,12 @@ class DebugWorkbenchTab(QWidget):
                 editable=True,
                 tooltip="双击编辑条件表达式；留空表示普通断点",
             )
+            self._set_table_item(
+                row,
+                4,
+                self._breakpoint_verify_label(breakpoint.verified, breakpoint.message),
+                tooltip=self._breakpoint_verify_tooltip(breakpoint.verified, breakpoint.message),
+            )
             remove_button = QPushButton("删除")
             remove_button.setObjectName("debugTableDangerButton")
             remove_button.setCursor(Qt.PointingHandCursor)
@@ -852,7 +880,7 @@ class DebugWorkbenchTab(QWidget):
             remove_button.clicked.connect(
                 lambda _checked=False, path=breakpoint.path, line=breakpoint.line: self._remove_breakpoint(path, line)
             )
-            self.breakpoint_table.setCellWidget(row, 4, remove_button)
+            self.breakpoint_table.setCellWidget(row, 5, remove_button)
         self.breakpoint_table.blockSignals(False)
         self._breakpoint_table_syncing = False
         self._refresh_breakpoint_quick_editor()
@@ -898,7 +926,7 @@ class DebugWorkbenchTab(QWidget):
     def _on_breakpoint_table_clicked(self, row: int, column: int) -> None:
         if not (0 <= int(row) < len(self._breakpoint_rows)):
             return
-        if int(column) in {0, 3, 4}:
+        if int(column) in {0, 3, 4, 5}:
             return
         breakpoint = self._breakpoint_rows[int(row)]
         self._load_source(breakpoint.path)
@@ -1082,6 +1110,21 @@ class DebugWorkbenchTab(QWidget):
         if tooltip:
             item.setToolTip(tooltip)
         self.breakpoint_table.setItem(row, column, item)
+
+    def _breakpoint_verify_label(self, verified: bool, message: str = "") -> str:
+        if verified:
+            return "已验证"
+        if message:
+            return "未验证"
+        return "待验证"
+
+    def _breakpoint_verify_tooltip(self, verified: bool, message: str = "") -> str:
+        label = self._breakpoint_verify_label(verified, message)
+        if message:
+            return f"{label}: {message}"
+        if verified:
+            return "已由调试后端确认"
+        return "等待未来 Keil 回读验证"
 
     def _refresh_diagnostics_table(self) -> None:
         if not hasattr(self, "diagnostics_table"):
@@ -1335,6 +1378,9 @@ class DebugWorkbenchTab(QWidget):
             enabled_count = sum(1 for decoration in breakpoint_decorations if decoration.enabled)
             disabled_count = len(breakpoint_decorations) - enabled_count
             conditional_count = sum(1 for decoration in breakpoint_decorations if decoration.label)
+            verified_count = sum(1 for decoration in breakpoint_decorations if decoration.verified)
+            unverified_count = sum(1 for decoration in breakpoint_decorations if decoration.message and not decoration.verified)
+            pending_count = len(breakpoint_decorations) - verified_count - unverified_count
             detail = f"{len(breakpoint_decorations)} 个断点"
             subparts = []
             if enabled_count:
@@ -1343,6 +1389,12 @@ class DebugWorkbenchTab(QWidget):
                 subparts.append(f"停用 {disabled_count}")
             if conditional_count:
                 subparts.append(f"条件 {conditional_count}")
+            if verified_count:
+                subparts.append(f"已验证 {verified_count}")
+            if unverified_count:
+                subparts.append(f"未验证 {unverified_count}")
+            if pending_count:
+                subparts.append(f"待验证 {pending_count}")
             if subparts:
                 detail += f"（{' / '.join(subparts)}）"
             parts.append(detail)

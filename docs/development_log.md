@@ -1550,3 +1550,70 @@ Make source-side breakpoint state easier to read at a glance: enabled, disabled,
   - show pending/verified/unverified status in the breakpoint table and gutter tooltip
   - keep the state local and dry-run only for now
   - prepare a clean UI path for future Keil breakpoint readback verification
+
+## Stage 27 - Local Breakpoint Verification Placeholders
+
+### Goal
+
+Prepare the debugger workbench for future Keil breakpoint readback by adding local-only verification state display now, without adding any hardware or UVSOCK execution path.
+
+### Completed
+
+- Reused the existing `Breakpoint.verified` and `Breakpoint.message` fields to model:
+  - `待验证`: no backend readback yet
+  - `已验证`: backend confirmed the breakpoint
+  - `未验证`: backend rejected or failed to find the breakpoint, with a message
+- Extended `BreakpointStore.set_verified()` to accept an optional message.
+- Added `BreakpointStore.set_message()` for future backend/UI integration.
+- Extended `LineDecoration` with `verified` and `message`.
+- Passed breakpoint verification state into source decorations.
+- Added a `验证` column to the local breakpoint table.
+- Added verification labels and tooltips:
+  - `待验证`
+  - `已验证`
+  - `未验证`
+- Updated gutter tooltips to include verification state and failure/rejection messages.
+- Updated source marker text to summarize:
+  - enabled/disabled count
+  - conditional count
+  - verified/unverified/pending count
+- Added `DebugWorkbenchTab.set_breakpoint_verification()` as a local UI integration hook for later Keil readback results.
+- Kept all verification state local and dry-run-only.
+- Extended the debug workbench UI probe to cover pending, verified, and unverified breakpoint states in:
+  - marker text
+  - gutter tooltip text
+  - breakpoint table verification column
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- `未验证` currently means “local placeholder for future backend rejection/failure”; there is no live Keil readback yet.
+- The data path is intentionally small so a future UVSOCK controller can set verification results without refactoring the UI.
+
+### Next Target
+
+- Add a dry-run breakpoint verification summary:
+  - include verification-state counts in the sync-breakpoint transaction preview
+  - keep audit/history records aware of pending/verified/unverified local breakpoint states
+  - continue no-hardware until a deliberate UVSOCK smoke stage
