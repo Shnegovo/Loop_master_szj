@@ -3985,3 +3985,81 @@ configuration as suspicious.
   - explicit CLI/tool invocation
   - no UI modal dependency
   - log result and leave uVision/process state clear.
+
+## Milestone 44 Update - Debug Workbench Variable Preset Panel
+
+### Goal
+
+Move project-aware variable presets out of diagnostics-only text and into a
+usable Debug Workbench panel so the user can directly pick recommended write or
+scope variables.
+
+### Completed
+
+- Added a `变量预设` panel to the Debug Workbench navigation/sidebar.
+- Added `DebugWorkbenchTab.set_variable_presets(...)`.
+- Added `DebugWorkbenchTab.variablePresetWriteRequested(expression, value)`.
+- The preset table shows:
+  - expression
+  - default value
+  - type
+  - label/purpose
+  - tooltip with write/read-only status.
+- `写入预设` opens the existing Keil live-write flow with the selected preset's
+  expression/default value already filled in.
+- Double-clicking a writable preset triggers the same write-flow signal.
+- Read/scope-only presets are visible but greyed and do not emit write requests.
+- MainWindow now refreshes the preset panel when:
+  - the Debug Workbench is initialized
+  - project/target summary changes
+  - backend changes
+  - diagnostics refresh.
+- The existing Keil write confirmation, AXF/RAM checks, command fallback and
+  JSONL audit path are reused; the preset panel does not bypass safety.
+- Updated `tools/ui_debug_workbench_probe.py`:
+  - synthetic fixture now includes `debug_setpoint`
+  - asserts the preset table contains `debug_setpoint`
+  - clicks `写入预设` with patched text/confirmation dialogs
+  - verifies the fake backend receives the write
+  - keeps the existing fake `自动调试` click coverage.
+
+### Verified
+
+- `python -m py_compile src/ui/debug_workbench_tab.py src/ui/gui.py tools/ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-variable-presets --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-variable-presets\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-variable-presets\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-variable-presets\03_debug_workbench_narrow.png`
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+- `python tools/keil_debug_options_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/keil_debug_profile_probe.py`
+  - PASS.
+
+### Notes
+
+- This is the first visible preset panel. It does not yet add selected scope
+  presets to the oscilloscope collector; that remains a separate data-source
+  binding task.
+- The panel is intentionally compact to avoid crowding the source tree and
+  breakpoint list. If it becomes cramped on smaller screens, the next UI polish
+  should move presets into a right-side tab or collapsible section.
+
+### Next Target
+
+- Add hardware-facing F401 auto-debug smoke tooling:
+  - a CLI/probe that can run the auto transaction with explicit flags
+  - clear process cleanup/reporting
+  - no hidden hardware side effects.
+- Then bind scope presets to the oscilloscope/watch path:
+  - add selected read-only variables to a Keil/UVSOCK watch list
+  - show realistic sampling-rate warnings for Keil bridge mode.

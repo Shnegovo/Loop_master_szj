@@ -2037,6 +2037,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench = DebugWorkbenchTab()
         self._tab_debug_workbench.summaryChanged.connect(self._refresh_hero)
         self._tab_debug_workbench.summaryChanged.connect(self._sync_debug_command_preview)
+        self._tab_debug_workbench.summaryChanged.connect(self._refresh_debug_variable_presets)
         self._setup_debug_workbench_connections()
         self._register_workspace_page("debug_sources", "源码", self._tab_debug_workbench, domain="debug")
 
@@ -2059,10 +2060,12 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.sourceProviderSelectionChanged.connect(self._on_debug_source_provider_selected)
         self._tab_debug_workbench.sourceProviderConfigureRequested.connect(self._on_debug_source_provider_configure_requested)
         self._tab_debug_workbench.sourceRemapRequested.connect(self._on_debug_source_remap_requested)
+        self._tab_debug_workbench.variablePresetWriteRequested.connect(self._write_keil_live_variable_from_preset)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
+        self._refresh_debug_variable_presets()
         self._sync_debug_source_manifest_preview()
         self._sync_debug_command_preview()
 
@@ -2132,6 +2135,7 @@ class MainWindow(QMainWindow):
             tab.set_debug_status(status, controls_ready=True)
             self._sync_debug_source_manifest_preview()
             tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
+            self._refresh_debug_variable_presets()
         finally:
             self._debug_command_preview_suspended = False
         self._debug_command_history.clear()
@@ -2282,6 +2286,7 @@ class MainWindow(QMainWindow):
         self._sync_debug_source_manifest_preview()
         self._sync_debug_command_preview()
         self._refresh_hero()
+        self._refresh_debug_variable_presets()
         manifest = self._debug_source_preview_manifest or self._empty_debug_source_manifest(
             self._debug_backend_display_name(),
             "源码配置未生成有效清单",
@@ -3149,7 +3154,10 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(summary)
         self._refresh_hero()
 
-    def _write_keil_live_variable_from_workbench(self):
+    def _write_keil_live_variable_from_preset(self, expression: str, value_text: str) -> None:
+        self._write_keil_live_variable_from_workbench(default_expression=expression, default_value=value_text)
+
+    def _write_keil_live_variable_from_workbench(self, default_expression: str = "", default_value: str = ""):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 写变量", "当前调试后端不是 Keil / UVSOCK。")
             return
@@ -3167,7 +3175,11 @@ class MainWindow(QMainWindow):
             return
 
         preset_profile = self._current_keil_variable_preset_profile()
-        default_expr, default_value = keil_live_write_seed(preset_profile)
+        default_expr, preset_value = keil_live_write_seed(preset_profile)
+        if default_expression:
+            default_expr = str(default_expression)
+        if default_value:
+            preset_value = str(default_value)
         prompt_hint = keil_live_write_prompt_hint(preset_profile)
         text, ok = ask_pcl_text(
             self,
@@ -3176,7 +3188,7 @@ class MainWindow(QMainWindow):
                 "第一行填写变量或表达式，第二行填写新值。\n"
                 f"{prompt_hint}"
             ),
-            text=f"{default_expr}\n{default_value}".strip(),
+            text=f"{default_expr}\n{preset_value}".strip(),
             placeholder="变量名\n新值",
             confirm_text="下一步",
             cancel_text="取消",
@@ -3361,6 +3373,7 @@ class MainWindow(QMainWindow):
             return
         diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ()) or self._debug_workbench_idle_diagnostics())
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
+        self._refresh_debug_variable_presets()
 
     def _keil_profile_diagnostics(self) -> tuple[tuple[str, str], ...]:
         profile = self._make_current_keil_profile() or getattr(self, "_debug_keil_profile", None)
@@ -3372,6 +3385,38 @@ class MainWindow(QMainWindow):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             return ()
         return self._current_keil_variable_preset_profile().diagnostic_rows()
+
+    def _refresh_debug_variable_presets(self) -> None:
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._tab_debug_workbench.set_variable_presets(())
+            return
+        profile = self._current_keil_variable_preset_profile()
+        rows = []
+        for preset in profile.write_presets:
+            rows.append(
+                (
+                    preset.expression,
+                    preset.label,
+                    preset.value_type,
+                    preset.default_value,
+                    preset.purpose or preset.range_hint,
+                    True,
+                )
+            )
+        for preset in profile.scope_presets:
+            rows.append(
+                (
+                    preset.expression,
+                    preset.label,
+                    preset.value_type,
+                    preset.default_value,
+                    preset.purpose or preset.range_hint,
+                    False,
+                )
+            )
+        self._tab_debug_workbench.set_variable_presets(tuple(rows))
 
     def _keil_build_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_build_result", None)

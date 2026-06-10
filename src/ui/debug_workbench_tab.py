@@ -295,6 +295,7 @@ class DebugWorkbenchTab(QWidget):
     sourceProviderSelectionChanged = Signal(str)
     sourceProviderConfigureRequested = Signal(str)
     sourceRemapRequested = Signal()
+    variablePresetWriteRequested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -322,6 +323,7 @@ class DebugWorkbenchTab(QWidget):
         self._backend_selection_syncing = False
         self._source_provider_options: tuple[tuple[str, str, str], ...] = ()
         self._source_provider_selection_syncing = False
+        self._variable_presets: tuple[tuple[str, str, str, str, str, bool], ...] = ()
 
         self.setObjectName("debugWorkbenchTab")
         self._build_ui()
@@ -464,6 +466,23 @@ class DebugWorkbenchTab(QWidget):
     def set_backend_diagnostics(self, items: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> None:
         self._diagnostics = tuple((str(key), str(value)) for key, value in items)
         self._refresh_diagnostics_table()
+
+    def set_variable_presets(
+        self,
+        presets: tuple[tuple[str, str, str, str, str, bool], ...] | list[tuple[str, str, str, str, str, bool]],
+    ) -> None:
+        self._variable_presets = tuple(
+            (
+                str(expression),
+                str(label),
+                str(value_type),
+                str(default_value),
+                str(purpose),
+                bool(write_allowed),
+            )
+            for expression, label, value_type, default_value, purpose, write_allowed in presets
+        )
+        self._refresh_variable_preset_table()
 
     def set_backend_options(
         self,
@@ -779,6 +798,42 @@ class DebugWorkbenchTab(QWidget):
         self.diagnostics_table.setMinimumHeight(138)
         layout.addWidget(self.diagnostics_table, 1)
 
+        preset_title = QLabel("变量预设")
+        preset_title.setObjectName("debugSectionTitle")
+        layout.addWidget(preset_title)
+
+        self.variable_preset_table = QTableWidget()
+        self.variable_preset_table.setObjectName("debugVariablePresetTable")
+        self.variable_preset_table.setColumnCount(4)
+        self.variable_preset_table.setHorizontalHeaderLabels(["变量", "默认", "类型", "用途"])
+        self.variable_preset_table.horizontalHeader().setStretchLastSection(False)
+        self.variable_preset_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.variable_preset_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.variable_preset_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.variable_preset_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.variable_preset_table.verticalHeader().setVisible(False)
+        self.variable_preset_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.variable_preset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.variable_preset_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.variable_preset_table.setAlternatingRowColors(True)
+        self.variable_preset_table.verticalHeader().setDefaultSectionSize(24)
+        self.variable_preset_table.verticalHeader().setMinimumSectionSize(22)
+        self.variable_preset_table.setMinimumHeight(92)
+        self.variable_preset_table.cellDoubleClicked.connect(self._on_variable_preset_double_clicked)
+        layout.addWidget(self.variable_preset_table, 1)
+
+        preset_actions = QHBoxLayout()
+        preset_actions.setContentsMargins(0, 0, 0, 0)
+        preset_actions.setSpacing(7)
+        self.variable_preset_write_button = QPushButton("写入预设")
+        self.variable_preset_write_button.setObjectName("debugMiniButton")
+        self.variable_preset_write_button.setCursor(Qt.PointingHandCursor)
+        self.variable_preset_write_button.setEnabled(False)
+        self.variable_preset_write_button.clicked.connect(self._emit_selected_variable_preset)
+        preset_actions.addWidget(self.variable_preset_write_button)
+        preset_actions.addStretch(1)
+        layout.addLayout(preset_actions)
+
         bp_title = QLabel("本地断点")
         bp_title.setObjectName("debugSectionTitle")
         layout.addWidget(bp_title)
@@ -806,6 +861,7 @@ class DebugWorkbenchTab(QWidget):
         layout.addWidget(self.breakpoint_table, 1)
         layout.addWidget(self._build_breakpoint_quick_editor())
         self._refresh_diagnostics_table()
+        self._refresh_variable_preset_table()
         return panel
 
     def _on_backend_combo_changed(self) -> None:
@@ -1350,6 +1406,63 @@ class DebugWorkbenchTab(QWidget):
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setToolTip(text)
         self.diagnostics_table.setItem(row, column, item)
+
+    def _refresh_variable_preset_table(self) -> None:
+        if not hasattr(self, "variable_preset_table"):
+            return
+        self.variable_preset_table.setRowCount(len(self._variable_presets))
+        for row, (expression, label, value_type, default_value, purpose, write_allowed) in enumerate(self._variable_presets):
+            tooltip = "\n".join(
+                part
+                for part in (
+                    f"表达式: {expression}",
+                    f"名称: {label}",
+                    f"类型: {value_type}",
+                    f"默认: {default_value or '--'}",
+                    purpose,
+                    "可写入" if write_allowed else "推荐示波/只读",
+                )
+                if part
+            )
+            self._set_variable_preset_item(row, 0, expression, tooltip=tooltip)
+            self._set_variable_preset_item(row, 1, default_value or "--", tooltip=tooltip)
+            self._set_variable_preset_item(row, 2, value_type or "--", tooltip=tooltip)
+            self._set_variable_preset_item(row, 3, label or purpose or "--", tooltip=tooltip)
+            for column in range(4):
+                item = self.variable_preset_table.item(row, column)
+                if item is not None:
+                    item.setData(Qt.UserRole, (expression, default_value, write_allowed))
+                    if not write_allowed:
+                        item.setForeground(QColor("#8290a3"))
+        has_write = any(item[-1] for item in self._variable_presets)
+        self.variable_preset_write_button.setEnabled(has_write)
+        self.variable_preset_write_button.setToolTip(
+            "用选中的可写预设打开 Keil 写变量确认流程" if has_write else "当前工程没有可写变量预设"
+        )
+
+    def _set_variable_preset_item(self, row: int, column: int, text: str, *, tooltip: str = "") -> None:
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        if tooltip:
+            item.setToolTip(tooltip)
+        self.variable_preset_table.setItem(row, column, item)
+
+    def _on_variable_preset_double_clicked(self, row: int, _column: int) -> None:
+        self._emit_variable_preset_row(row)
+
+    def _emit_selected_variable_preset(self) -> None:
+        row = self.variable_preset_table.currentRow() if hasattr(self, "variable_preset_table") else -1
+        if row < 0 and self.variable_preset_table.rowCount() > 0:
+            row = 0
+        self._emit_variable_preset_row(row)
+
+    def _emit_variable_preset_row(self, row: int) -> None:
+        if row < 0 or row >= len(self._variable_presets):
+            return
+        expression, _label, _value_type, default_value, _purpose, write_allowed = self._variable_presets[row]
+        if not write_allowed:
+            return
+        self.variablePresetWriteRequested.emit(expression, default_value)
 
     def _refresh_source_provider_summary(self) -> None:
         if not hasattr(self, "source_provider_state_label"):
@@ -2037,7 +2150,8 @@ class DebugWorkbenchTab(QWidget):
                 color: #991b1b;
             }
             QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable,
-            QTableWidget#debugDiagnosticsTable, QPlainTextEdit#debugCodeEditor {
+            QTableWidget#debugDiagnosticsTable, QTableWidget#debugVariablePresetTable,
+            QPlainTextEdit#debugCodeEditor {
                 background: #fbfdff;
                 border: 1px solid #d2deea;
                 border-radius: 7px;
@@ -2067,7 +2181,8 @@ class DebugWorkbenchTab(QWidget):
             QTableWidget#debugBreakpointTable::item {
                 padding: 3px 6px;
             }
-            QTableWidget#debugDiagnosticsTable::item {
+            QTableWidget#debugDiagnosticsTable::item,
+            QTableWidget#debugVariablePresetTable::item {
                 padding: 3px 6px;
             }
             QHeaderView::section {

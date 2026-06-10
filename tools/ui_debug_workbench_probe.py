@@ -77,6 +77,9 @@ PROJECT = """<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 
 
 MAIN_C = """#include "pid.h"
+#include <stdint.h>
+
+volatile int32_t debug_setpoint = 1000;
 
 typedef struct {
     float target;
@@ -270,6 +273,20 @@ def _patch_confirmation(ok: bool):
 
     def restore() -> None:
         gui_module.ask_pcl_confirmation = original
+
+    return restore
+
+
+def _patch_input(value: str, ok: bool):
+    original = gui_module.ask_pcl_text
+
+    def fake_ask_text(*_args, **_kwargs):
+        return value, ok
+
+    gui_module.ask_pcl_text = fake_ask_text
+
+    def restore() -> None:
+        gui_module.ask_pcl_text = original
 
     return restore
 
@@ -513,6 +530,15 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 f"Keil source provider chips mismatch: "
                 f"{tab.source_provider_state_label.text()!r} / {tab.source_provider_count_label.text()!r}"
             )
+        preset_rows = [
+            tab.variable_preset_table.item(row, 0).text()
+            for row in range(tab.variable_preset_table.rowCount())
+            if tab.variable_preset_table.item(row, 0) is not None
+        ] if hasattr(tab, "variable_preset_table") else []
+        if "debug_setpoint" not in preset_rows:
+            issues.append(f"variable preset table missing debug_setpoint: {preset_rows!r}")
+        if getattr(tab, "variable_preset_write_button", None) is None or not tab.variable_preset_write_button.isEnabled():
+            issues.append("variable preset write button should be enabled for F401-style fixture")
         backend_labels = [
             tab.backend_combo.itemText(index)
             for index in range(tab.backend_combo.count())
@@ -735,6 +761,24 @@ Raw dump of debug contents of section .debug_line:
                 issues.append("read-only attach should expose explicit Keil live write action")
             elif "确认" not in write_button.toolTip() and "显式" not in write_button.toolTip():
                 issues.append(f"Keil live write action tooltip should mention explicit confirmation: {write_button.toolTip()!r}")
+            preset_write = getattr(tab, "variable_preset_write_button", None)
+            if preset_write is None or not preset_write.isEnabled():
+                issues.append("variable preset write button should remain enabled after attach")
+            else:
+                tab.variable_preset_table.selectRow(0)
+                restore_text = _patch_input("debug_setpoint\n6000", True)
+                restore_confirm = _patch_confirmation(True)
+                try:
+                    preset_write.click()
+                    _pump(app, 0.15)
+                finally:
+                    restore_confirm()
+                    restore_text()
+                if fake_backend.write_calls != 1:
+                    issues.append(f"preset write should request one fake write: {fake_backend.write_calls}")
+                last_write = getattr(window, "_debug_last_live_write_result", None)
+                if last_write is None or not last_write.written or last_write.expression != "debug_setpoint":
+                    issues.append(f"preset write result mismatch: {last_write!r}")
             sync_transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
             sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
             if "waiting_remote_snapshot=true" not in sync_text and "等待远端断点快照" not in sync_text:
@@ -757,8 +801,8 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"auto debug should request one fake build: {fake_backend.build_calls}")
                 if fake_backend.launch_calls != 1:
                     issues.append(f"auto debug should request one fake launch: {fake_backend.launch_calls}")
-                if fake_backend.write_calls != 1:
-                    issues.append(f"auto debug should request one fake write: {fake_backend.write_calls}")
+                if fake_backend.write_calls != 2:
+                    issues.append(f"auto debug should request a second fake write: {fake_backend.write_calls}")
                 auto_result = getattr(window, "_debug_keil_auto_debug_result", None)
                 if auto_result is None or not auto_result.succeeded:
                     issues.append(f"auto debug result missing or failed: {auto_result!r}")
