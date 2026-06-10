@@ -100,6 +100,22 @@ class SourceManifest:
 
 
 @dataclass(frozen=True)
+class SourcePathMappingHint:
+    missing_dir: str
+    count: int
+    raw_examples: tuple[str, ...] = ()
+    resolved_from: tuple[str, ...] = ()
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "missing_dir": self.missing_dir,
+            "count": self.count,
+            "raw_examples": list(self.raw_examples),
+            "resolved_from": list(self.resolved_from),
+        }
+
+
+@dataclass(frozen=True)
 class _ReadelfSourcePath:
     path: Path
     raw_path: str
@@ -369,6 +385,50 @@ def source_manifest_from_elf_dwarf(
         name=name or f"{elf.name} DWARF Sources",
         max_files=max_files,
     )
+
+
+def source_manifest_missing_path_hints(
+    manifest: SourceManifest,
+    *,
+    max_hints: int = 4,
+    max_examples: int = 3,
+) -> tuple[SourcePathMappingHint, ...]:
+    groups: dict[str, dict[str, object]] = {}
+    for entry in manifest.entries:
+        if entry.exists:
+            continue
+        missing_dir = str(entry.path.parent)
+        group = groups.setdefault(
+            missing_dir,
+            {
+                "count": 0,
+                "raw_examples": [],
+                "resolved_from": set(),
+            },
+        )
+        group["count"] = int(group["count"]) + 1
+        raw_examples = group["raw_examples"]
+        if isinstance(raw_examples, list):
+            raw_text = entry.raw_path or entry.name
+            if raw_text and raw_text not in raw_examples and len(raw_examples) < max_examples:
+                raw_examples.append(raw_text)
+        resolved_from = group["resolved_from"]
+        if isinstance(resolved_from, set) and entry.resolved_from:
+            resolved_from.add(entry.resolved_from)
+    hints: list[SourcePathMappingHint] = []
+    for missing_dir, group in groups.items():
+        raw_examples = tuple(str(item) for item in group.get("raw_examples", ()))
+        resolved_from = tuple(sorted(str(item) for item in group.get("resolved_from", ())))
+        hints.append(
+            SourcePathMappingHint(
+                missing_dir=missing_dir,
+                count=int(group.get("count", 0)),
+                raw_examples=raw_examples,
+                resolved_from=resolved_from,
+            )
+        )
+    hints.sort(key=lambda item: (-item.count, item.missing_dir.lower()))
+    return tuple(hints[:max(0, int(max_hints))])
 
 
 def source_entries_from_keil_project(

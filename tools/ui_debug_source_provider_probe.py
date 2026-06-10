@@ -143,7 +143,9 @@ def main() -> int:
         _assert(diag.get("源码缺失") == "1", f"compile_commands missing diagnostics mismatch: {diag!r}")
         _assert(diag.get("源码过滤") == "1", f"compile_commands filtered diagnostics mismatch: {diag!r}")
         _assert(diag.get("源码重复") == "1", f"compile_commands duplicate diagnostics mismatch: {diag!r}")
+        _assert("missing.c" in diag.get("映射示例", ""), f"compile_commands mapping example mismatch: {diag!r}")
         _assert("缺失 1" in tab.source_provider_missing_label.text(), "compile_commands missing chip mismatch")
+        _assert("映射提示" in tab.source_provider_missing_label.toolTip(), "compile_commands missing tooltip should include mapping hints")
         _assert(any("(缺失)" in text for text in _tree_texts(tab)), f"missing tree node absent: {_tree_texts(tab)!r}")
 
         gdb_text = (
@@ -159,6 +161,7 @@ def main() -> int:
         _assert(diag.get("源码缺失") == "1", f"GDB missing diagnostics mismatch: {diag!r}")
         _assert(diag.get("源码过滤") == "1", f"GDB filtered diagnostics mismatch: {diag!r}")
         _assert(diag.get("源码重复") == "1", f"GDB duplicate diagnostics mismatch: {diag!r}")
+        _assert("missing_gdb.c" in diag.get("映射示例", ""), f"GDB mapping example mismatch: {diag!r}")
 
         dwarf_text = f"""
 Raw dump of debug contents of section .debug_line:
@@ -187,6 +190,7 @@ Raw dump of debug contents of section .debug_line:
         _assert(diag.get("源码来源") == "ELF/DWARF", f"DWARF source label mismatch: {diag!r}")
         _assert(diag.get("源码缺失") == "1", f"DWARF missing diagnostics mismatch: {diag!r}")
         _assert(diag.get("源码过滤") == "1", f"DWARF filtered diagnostics mismatch: {diag!r}")
+        _assert("missing_dwarf.c" in diag.get("映射示例", ""), f"DWARF mapping example mismatch: {diag!r}")
         record = window._debug_source_config_record()
         _assert(record["provider_key"] == "elf_dwarf", f"config provider mismatch: {record!r}")
         _assert("readelf" not in " ".join(_tree_texts(tab)).lower(), "tree should not show launched readelf output")

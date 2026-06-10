@@ -2761,3 +2761,53 @@ Let the Debug Workbench accept explicit source-provider inputs without launching
   - let the user remap one missing prefix to a local source root
   - keep remapping data-only and previewable before any live backend work
   - keep the new focused source-provider probe separate from the larger Debug Workbench visual probe
+
+## Milestone 30 Update - Missing Source Mapping Hints
+
+### Goal
+
+Make missing-source diagnostics more actionable by summarizing where imported GDB/DWARF/compile database paths failed to resolve, without introducing live debugger actions or a full mapping-rule editor yet.
+
+### Completed
+
+- Added `SourcePathMappingHint` and `source_manifest_missing_path_hints()`.
+- Missing source entries are grouped by resolved missing directory.
+- Each hint keeps:
+  - missing directory
+  - missing file count
+  - raw path examples
+  - resolution provenance values such as `root_relative` or `directory_relative`
+- Debug Workbench diagnostics now show:
+  - `映射提示`
+  - `映射示例`
+- Source provider chips tooltip now includes mapping hint details when missing paths exist.
+- The focused source-provider UI probe now verifies mapping examples for compile commands and GDB text imports.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py src\ui\debug_workbench_tab.py tools\debug_source_manifest_probe.py tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir %TEMP%\loopmaster-ui-debug-workbench-path-hints --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+
+### Notes
+
+- This is still data-only and UI-only.
+- No Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access is used.
+- The next step is the actual preview remapping action: apply a user-selected local root to missing source prefixes and rebuild the manifest.
+
+### Next Target
+
+- Add data-only source remapping preview:
+  - choose a missing prefix/directory from the hint list
+  - map it to a local source root
+  - rebuild affected entries and show before/after missing counts
+  - keep remap state provider-neutral for Keil, GDB, DWARF and offline replay

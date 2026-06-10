@@ -40,7 +40,11 @@ from src.core.debug_workbench import (
     load_code_document,
     search_document,
 )
-from src.core.debug_sources import SourceManifest, source_manifest_from_keil_project
+from src.core.debug_sources import (
+    SourceManifest,
+    source_manifest_from_keil_project,
+    source_manifest_missing_path_hints,
+)
 from src.core.debug_transactions import DebugCommandHistoryEntry, DebugCommandTransaction
 from src.core.keil.commands import KeilCommandTransaction
 from src.core.keil.project import KeilProject, parse_keil_project
@@ -1345,6 +1349,9 @@ class DebugWorkbenchTab(QWidget):
         else:
             diagnostics = dict(manifest.diagnostics)
             missing = diagnostics.get("缺失", "")
+            if missing == "":
+                missing_count = sum(1 for entry in manifest.entries if not entry.exists)
+                missing = str(missing_count) if missing_count else ""
             provider_label = self._source_provider_label(manifest.provider)
             missing_text = f"缺失 {missing}" if missing and missing != "0" else "路径正常" if manifest.source_count else "路径 --"
             values = (
@@ -1361,6 +1368,12 @@ class DebugWorkbenchTab(QWidget):
             if manifest.diagnostics:
                 tooltip_lines.append("诊断:")
                 tooltip_lines.extend(f"- {key}: {value}" for key, value in manifest.diagnostics)
+            mapping_hints = source_manifest_missing_path_hints(manifest)
+            if mapping_hints:
+                tooltip_lines.append("映射提示:")
+                for hint in mapping_hints:
+                    examples = ", ".join(hint.raw_examples[:2]) if hint.raw_examples else "--"
+                    tooltip_lines.append(f"- {hint.missing_dir}: {hint.count} 个缺失，示例 {examples}")
             tooltip = "\n".join(tooltip_lines)
         labels = (
             self.source_provider_state_label,
@@ -1384,6 +1397,12 @@ class DebugWorkbenchTab(QWidget):
             value = diagnostics.get(key)
             if value not in (None, ""):
                 rows.append((f"源码{key}", str(value)))
+        mapping_hints = source_manifest_missing_path_hints(manifest)
+        if mapping_hints:
+            hint = mapping_hints[0]
+            rows.append(("映射提示", f"{hint.count} 个缺失位于 {hint.missing_dir}"))
+            if hint.raw_examples:
+                rows.append(("映射示例", ", ".join(hint.raw_examples[:3])))
         if manifest.root is not None:
             rows.append(("源码根", str(manifest.root)))
         return tuple(rows)

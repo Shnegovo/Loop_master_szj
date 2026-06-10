@@ -16,6 +16,7 @@ from src.core.debug_sources import (  # noqa: E402
     source_manifest_from_compile_commands,
     source_manifest_from_readelf_line_table_text,
     source_manifest_from_gdb_sources,
+    source_manifest_missing_path_hints,
     source_manifest_from_roots,
     source_manifest_from_keil_project,
     source_tree_from_entries,
@@ -118,6 +119,10 @@ Source files for which symbols will be read in on demand:
         _assert(gdb_diag.get("过滤") == "1", f"GDB diagnostics should count filtered paths: {gdb_diag!r}")
         _assert(gdb_diag.get("重复") == "1", f"GDB diagnostics should count duplicates: {gdb_diag!r}")
         _assert(gdb_diag.get("缺失") == "1", f"GDB diagnostics should count missing sources: {gdb_diag!r}")
+        gdb_hints = source_manifest_missing_path_hints(gdb_manifest)
+        _assert(len(gdb_hints) == 1, f"GDB missing path hint mismatch: {gdb_hints!r}")
+        _assert(gdb_hints[0].count == 1 and "missing.c" in " ".join(gdb_hints[0].raw_examples), f"GDB hint content mismatch: {gdb_hints!r}")
+        json.dumps([hint.to_record() for hint in gdb_hints], ensure_ascii=False, sort_keys=True)
         json.dumps(gdb_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         compile_commands_path = root / "compile_commands.json"
@@ -145,6 +150,9 @@ Source files for which symbols will be read in on demand:
         _assert(compile_diag.get("重复") == "1", f"compile_commands diagnostics should count duplicates: {compile_diag!r}")
         _assert(compile_diag.get("过滤") == "1", f"compile_commands diagnostics should count filtered paths: {compile_diag!r}")
         _assert(compile_diag.get("缺失") == "1", f"compile_commands diagnostics should count missing sources: {compile_diag!r}")
+        compile_hints = source_manifest_missing_path_hints(compile_manifest)
+        _assert(len(compile_hints) == 1, f"compile_commands missing hint mismatch: {compile_hints!r}")
+        _assert(compile_hints[0].count == 1 and compile_hints[0].resolved_from == ("directory_relative",), f"compile hint content mismatch: {compile_hints!r}")
         json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
         dwarf_text = f"""
