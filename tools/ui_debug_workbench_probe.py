@@ -329,10 +329,45 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"search navigation did not show active index: {tab.marker_label.text()!r}")
         if tab.source_tree.currentItem() is None or "main.c" not in tab.source_tree.currentItem().text(0):
             issues.append("source tree did not select the current source file")
+        tab._toggle_breakpoint(96)
+        _pump(app, 0.1)
+        row96 = _row_for_line(tab, 96)
+        if row96 < 0:
+            issues.append("gutter-created breakpoint line 96 was not added")
+        elif tab.breakpoint_table.currentRow() != row96 or "main.c:96" not in tab.breakpoint_editor_label.text():
+            issues.append(
+                f"gutter-created breakpoint was not auto-selected: row={tab.breakpoint_table.currentRow()} "
+                f"label={tab.breakpoint_editor_label.text()!r}"
+            )
+        tab._toggle_breakpoint(96)
+        _pump(app, 0.1)
+        if _row_for_line(tab, 96) >= 0:
+            issues.append("gutter second toggle did not remove line 96 breakpoint")
         tab.add_breakpoint(3, condition="speed > 60")
         tab.add_breakpoint(12, condition="speed_error > 40")
         tab.add_breakpoint(24, enabled=False, condition="speed_error < -12")
         tab.add_breakpoint(48)
+        tab._scroll_editor_to_line(31)
+        tab.current_line_condition_button.click()
+        _pump(app, 0.1)
+        row31 = _row_for_line(tab, 31)
+        if row31 < 0:
+            issues.append("current-line condition button did not create line 31 breakpoint")
+        elif tab.breakpoint_table.currentRow() != row31 or "main.c:31" not in tab.breakpoint_editor_label.text():
+            issues.append(
+                f"current-line condition breakpoint was not auto-selected: row={tab.breakpoint_table.currentRow()} "
+                f"label={tab.breakpoint_editor_label.text()!r}"
+            )
+        tab.breakpoint_editor_condition.setText("speed > 70")
+        tab.breakpoint_editor_condition.editingFinished.emit()
+        _pump(app, 0.1)
+        row31 = _row_for_line(tab, 31)
+        if row31 >= 0 and tab.breakpoint_table.item(row31, 3).text() != "speed > 70":
+            issues.append(f"current-line quick condition did not persist: {tab.breakpoint_table.item(row31, 3).text()!r}")
+        tab._toggle_breakpoint(31)
+        _pump(app, 0.1)
+        if _row_for_line(tab, 31) >= 0:
+            issues.append("current-line test breakpoint line 31 was not removed")
         tab.add_breakpoint(72)
         tab.breakpoint_table.setCurrentCell(2, 2)
         tab.breakpoint_table.cellClicked.emit(2, 2)

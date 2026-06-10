@@ -386,8 +386,8 @@ class DebugWorkbenchTab(QWidget):
         )
         if breakpoint_path is None:
             return
-        self._breakpoints.add(breakpoint_path, line, enabled=enabled, condition=condition)
-        self._refresh_breakpoint_views()
+        breakpoint = self._breakpoints.add(breakpoint_path, line, enabled=enabled, condition=condition)
+        self._refresh_breakpoint_views(select_path=breakpoint.path, select_line=breakpoint.line)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -648,6 +648,13 @@ class DebugWorkbenchTab(QWidget):
         self.marker_label = QLabel("未连接运行时")
         self.marker_label.setObjectName("debugHint")
         header.addWidget(self.marker_label)
+        self.current_line_condition_button = QPushButton("当前行条件")
+        self.current_line_condition_button.setObjectName("debugMiniButton")
+        self.current_line_condition_button.setCursor(Qt.PointingHandCursor)
+        self.current_line_condition_button.setToolTip("为当前源码行创建或编辑条件断点")
+        self.current_line_condition_button.clicked.connect(self._edit_current_line_breakpoint_condition)
+        self.current_line_condition_button.setEnabled(False)
+        header.addWidget(self.current_line_condition_button)
         layout.addLayout(header)
 
         self.editor = SourceCodeEditor()
@@ -707,6 +714,8 @@ class DebugWorkbenchTab(QWidget):
                     self._load_source(child.path)
                     return
         self.editor.set_code_document(None)
+        if hasattr(self, "current_line_condition_button"):
+            self.current_line_condition_button.setEnabled(False)
         self.file_label.setText("源码预览")
 
     def _on_source_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
@@ -722,8 +731,12 @@ class DebugWorkbenchTab(QWidget):
             self.editor.set_code_document(None)
             self.file_label.setText(path.name)
             self.summary_label.setText(f"源码读取失败：{exc}")
+            if hasattr(self, "current_line_condition_button"):
+                self.current_line_condition_button.setEnabled(False)
             return
         self._current_document = document
+        if hasattr(self, "current_line_condition_button"):
+            self.current_line_condition_button.setEnabled(True)
         self.file_label.setText(f"{document.path.name}  ·  {document.line_count} 行")
         self._select_source_tree_path(document.path)
         self._active_search_line = None
@@ -734,12 +747,17 @@ class DebugWorkbenchTab(QWidget):
     def _toggle_breakpoint(self, line: int) -> None:
         if self._current_document is None:
             return
-        self._breakpoints.toggle(self._current_document.path, line)
-        self._refresh_breakpoint_views()
+        breakpoint = self._breakpoints.toggle(self._current_document.path, line)
+        if breakpoint is None:
+            self._refresh_breakpoint_views()
+        else:
+            self._refresh_breakpoint_views(select_path=breakpoint.path, select_line=breakpoint.line)
 
-    def _refresh_breakpoint_views(self) -> None:
+    def _refresh_breakpoint_views(self, *, select_path: Path | None = None, select_line: int | None = None) -> None:
         self._refresh_decorations()
         self._refresh_summary()
+        if select_path is not None and select_line is not None:
+            self._select_breakpoint_row(select_path, select_line)
 
     def _refresh_decorations(self) -> None:
         if self._current_document is None:
@@ -869,6 +887,36 @@ class DebugWorkbenchTab(QWidget):
         if not self._breakpoints.remove(path, line):
             return
         self._refresh_breakpoint_views()
+
+    def _select_breakpoint_row(self, path: Path, line: int) -> None:
+        target_path = str(Path(path).expanduser().resolve()).lower()
+        target_line = int(line)
+        for row, breakpoint in enumerate(self._breakpoint_rows):
+            current_path = str(breakpoint.path.expanduser().resolve()).lower()
+            if current_path == target_path and int(breakpoint.line) == target_line:
+                self.breakpoint_table.setCurrentCell(row, 3)
+                self.breakpoint_table.selectRow(row)
+                self._refresh_breakpoint_quick_editor()
+                return
+        self._refresh_breakpoint_quick_editor()
+
+    def _current_editor_line(self) -> int:
+        if self._current_document is None:
+            return -1
+        return self.editor.textCursor().blockNumber() + 1
+
+    def _edit_current_line_breakpoint_condition(self) -> None:
+        if self._current_document is None:
+            return
+        line = self._current_editor_line()
+        if line <= 0:
+            return
+        breakpoint = self._breakpoints.get(self._current_document.path, line)
+        if breakpoint is None:
+            breakpoint = self._breakpoints.add(self._current_document.path, line)
+        self._refresh_breakpoint_views(select_path=breakpoint.path, select_line=breakpoint.line)
+        self.breakpoint_editor_condition.setFocus(Qt.OtherFocusReason)
+        self.breakpoint_editor_condition.selectAll()
 
     def _selected_breakpoint(self):
         row = self.breakpoint_table.currentRow() if hasattr(self, "breakpoint_table") else -1

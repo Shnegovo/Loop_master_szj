@@ -1426,3 +1426,63 @@ Make breakpoint editing feel less like spreadsheet editing and more like a moder
   - add a lightweight condition-edit shortcut for the current source line
   - keep source decorations, table selection, and dry-run diff preview synchronized
   - continue no-hardware until a deliberately scoped UVSOCK controller/smoke stage
+
+## Stage 25 - Source-Side Breakpoint Affordances
+
+### Goal
+
+Make source-first breakpoint work feel natural: when a breakpoint is created from the gutter or current source line, the breakpoint table and quick editor should immediately follow it so the user can edit conditions without hunting through the table.
+
+### Completed
+
+- Gutter-created breakpoints now auto-select their matching row in the local breakpoint table.
+- The breakpoint quick editor now follows newly created gutter breakpoints immediately.
+- Added a compact `当前行条件` action in the source editor header.
+- The current-line condition action:
+  - creates a breakpoint on the current source line when none exists
+  - selects the matching breakpoint row
+  - focuses/selects the quick editor condition input
+  - reuses the existing quick editor mutation path
+- The action disables itself when no source document is loaded.
+- Selection uses full path + line matching, so same-name files in different groups do not collide.
+- Extended the debug workbench UI probe to cover:
+  - gutter add auto-selection
+  - gutter second-toggle removal
+  - current-line condition breakpoint creation
+  - quick condition persistence from the source-side action
+  - cleanup without disturbing the Stage 22/23 diff baseline
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py`
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated debug workbench screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\ui_workspace_nav_probe.py --output-dir tools\ui-workspace-nav --width 1400 --height 820`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil`
+  - PASS.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS.
+
+### Notes
+
+- This stage still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The new source-side action is local-only and feeds the same dry-run breakpoint model used by the planned Keil sync controller.
+- Current-line condition editing is intentionally a small header action instead of a modal dialog, keeping the workbench compact.
+
+### Next Target
+
+- Improve source gutter/status readability:
+  - show clearer visual distinction for enabled, disabled, and conditional breakpoints
+  - expose concise hover/tooltips for breakpoint line state
+  - keep table, gutter, and quick editor state synchronized
+  - continue dry-run/no-hardware until a scoped UVSOCK smoke stage is selected
