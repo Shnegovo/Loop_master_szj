@@ -159,6 +159,8 @@ UVSC_STATUS_NAMES = {
 
 VTT_UINT64 = 20
 UVSOCK_SSTR_BYTES = 256
+UVSC_MAX_API_STR_SIZE = 1024
+UVSOCK_AMEM_HEADER_BYTES = 24
 
 
 class UvscError(RuntimeError):
@@ -220,6 +222,25 @@ class _UvsockOptions(ctypes.Structure):
     ]
 
 
+class _AmemHeader(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("nAddr", ctypes.c_uint64),
+        ("nBytes", ctypes.c_uint32),
+        ("ErrAddr", ctypes.c_uint64),
+        ("nErr", ctypes.c_uint32),
+    ]
+
+
+class _ExecCmd(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("flags", ctypes.c_uint32),
+        ("nRes", ctypes.c_uint32 * 7),
+        ("sCmd", _Sstr),
+    ]
+
+
 class KeilUvscLiveSession:
     """Explicit UVSOCK live session for real Keil debug commands.
 
@@ -254,7 +275,7 @@ class KeilUvscLiveSession:
             raise ValueError("UVSOCK port must be in range 1..65535")
 
         _configure_uvsc_signatures(library)
-        init_code = int(library.UVSC_Init(1, 65535))
+        init_code = int(library.UVSC_Init(int(port), int(port)))
         if init_code != 0:
             raise UvscError("UVSC_Init", init_code)
 
@@ -279,12 +300,17 @@ class KeilUvscLiveSession:
             if open_code != 0:
                 raise UvscError("UVSC_OpenConnection", open_code)
             session = cls(library, handle.value, owns_uvsc=True)
-            if require_debug:
-                session.enter_debug()
             if extended_stack:
                 session.set_extended_stack(True)
+            if require_debug:
+                session.enter_debug()
             return session
         except Exception:
+            if handle.value:
+                try:
+                    library.UVSC_CloseConnection(handle.value, 0)
+                except Exception:
+                    pass
             _safe_uvsc_uninit(library)
             raise
 
@@ -308,25 +334,56 @@ class KeilUvscLiveSession:
     def enter_debug(self) -> None:
         status = int(self.library.UVSC_DBG_ENTER(self.handle))
         if status != 0:
-            raise UvscError("UVSC_DBG_ENTER", status)
+            detail = self.last_error_text()
+            if "Target is in debug mode" in detail:
+                return
+            raise UvscError("UVSC_DBG_ENTER", status, detail)
 
     def exit_debug(self) -> None:
         status = int(self.library.UVSC_DBG_EXIT(self.handle))
         if status != 0:
-            raise UvscError("UVSC_DBG_EXIT", status)
+            raise UvscError("UVSC_DBG_EXIT", status, self.last_error_text())
 
     def set_extended_stack(self, enabled: bool = True) -> None:
         options = _UvsockOptions(flags=1 if enabled else 0)
         status = int(self.library.UVSC_GEN_SET_OPTIONS(self.handle, ctypes.byref(options)))
         if status != 0:
-            raise UvscError("UVSC_GEN_SET_OPTIONS", status)
+            raise UvscError("UVSC_GEN_SET_OPTIONS", status, self.last_error_text())
 
     def target_running(self) -> bool | None:
         running = ctypes.c_int(0)
         status = int(self.library.UVSC_DBG_STATUS(self.handle, ctypes.byref(running)))
         if status != 0:
-            raise UvscError("UVSC_DBG_STATUS", status)
+            raise UvscError("UVSC_DBG_STATUS", status, self.last_error_text())
         return bool(running.value)
+
+    def last_error_text(self) -> str:
+        msg_type = ctypes.c_int(0)
+        status = ctypes.c_int(0)
+        buffer = ctypes.create_string_buffer(UVSC_MAX_API_STR_SIZE)
+        try:
+            result = int(
+                self.library.UVSC_GetLastError(
+                    self.handle,
+                    ctypes.byref(msg_type),
+                    ctypes.byref(status),
+                    buffer,
+                    ctypes.sizeof(buffer),
+                )
+            )
+        except Exception:
+            return ""
+        text = buffer.value.decode("utf-8", errors="replace").strip()
+        parts = []
+        if result != 0:
+            parts.append(f"last_error_status={uvsc_status_name(result)}")
+        if msg_type.value:
+            parts.append(f"msg=0x{msg_type.value:X}")
+        if status.value:
+            parts.append(f"uv_status={status.value}")
+        if text:
+            parts.append(text)
+        return "; ".join(parts)
 
     def evaluate_expression(self, expression: str) -> tuple[str, int]:
         vset = _make_vset(expression)
@@ -341,15 +398,16 @@ class KeilUvscLiveSession:
             return "", status
         return _sstr_to_text(vset.str), status
 
-    def assign_expression(self, expression: str) -> int:
+    def assign_expression(self, expression: str) -> tuple[int, str]:
         vset = _make_vset(expression)
-        return int(
+        status = int(
             self.library.UVSC_DBG_CALC_EXPRESSION(
                 self.handle,
                 ctypes.byref(vset),
                 ctypes.sizeof(vset),
             )
         )
+        return status, "" if status == 0 else self.last_error_text()
 
     def write_expression_value(self, expression: str, value_text: str) -> UvscVariableWriteResult:
         expression = _sanitize_expression(expression)
@@ -364,7 +422,7 @@ class KeilUvscLiveSession:
                 error="value is empty",
             )
         assignment = f"{expression} = {value_text}"
-        assign_status = self.assign_expression(assignment)
+        assign_status, assign_error = self.assign_expression(assignment)
         if assign_status != 0:
             return UvscVariableWriteResult(
                 attempted=True,
@@ -373,7 +431,7 @@ class KeilUvscLiveSession:
                 readback_expression=expression,
                 value_text=value_text,
                 assign_status=assign_status,
-                error=uvsc_status_name(assign_status),
+                error=assign_error or uvsc_status_name(assign_status),
             )
         readback_text, readback_status = self.evaluate_expression(expression)
         return UvscVariableWriteResult(
@@ -387,6 +445,36 @@ class KeilUvscLiveSession:
             readback_status=readback_status,
             error="" if readback_status == 0 else uvsc_status_name(readback_status),
         )
+
+    def read_memory(self, address: int, size: int) -> bytes:
+        if int(address) < 0:
+            raise ValueError("memory address must be non-negative")
+        if not (1 <= int(size) <= 4096):
+            raise ValueError("memory read size must be in range 1..4096")
+        buffer = _make_amem_buffer(int(address), bytes(int(size)))
+        status = int(self.library.UVSC_DBG_MEM_READ(self.handle, buffer, ctypes.sizeof(buffer)))
+        if status != 0:
+            raise UvscError("UVSC_DBG_MEM_READ", status, self.last_error_text())
+        return bytes(buffer[UVSOCK_AMEM_HEADER_BYTES : UVSOCK_AMEM_HEADER_BYTES + int(size)])
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        if int(address) < 0:
+            raise ValueError("memory address must be non-negative")
+        payload = bytes(data)
+        if not (1 <= len(payload) <= 4096):
+            raise ValueError("memory write size must be in range 1..4096")
+        buffer = _make_amem_buffer(int(address), payload)
+        status = int(self.library.UVSC_DBG_MEM_WRITE(self.handle, buffer, ctypes.sizeof(buffer)))
+        if status != 0:
+            raise UvscError("UVSC_DBG_MEM_WRITE", status, self.last_error_text())
+
+    def execute_command(self, command: str, *, echo: bool = False) -> None:
+        cmd = _ExecCmd()
+        cmd.flags = 1 if echo else 0
+        _set_sstr(cmd.sCmd, _sanitize_expression(command))
+        status = int(self.library.UVSC_DBG_EXEC_CMD(self.handle, ctypes.byref(cmd), ctypes.sizeof(cmd)))
+        if status != 0:
+            raise UvscError("UVSC_DBG_EXEC_CMD", status, self.last_error_text())
 
 
 def check_uvsock_preflight(
@@ -463,7 +551,7 @@ def attempt_existing_uvsock_connection(
         )
 
     _configure_uvsc_signatures(library)
-    init_code = int(library.UVSC_Init(1, 65535))
+    init_code = int(library.UVSC_Init(int(port), int(port)))
     if init_code != 0:
         return preflight, UvscConnectionResult(
             attempted=True,
@@ -553,7 +641,7 @@ def build_uvision_uvsock_command(
 
     command: list[str] = [exe_path] if exe_path else []
     if project:
-        project_path = Path(project).expanduser()
+        project_path = Path(project).expanduser().resolve()
         if not project_path.exists():
             reasons.append(f"Keil project does not exist: {project_path}")
         command.append(str(project_path))
@@ -759,6 +847,20 @@ def _configure_uvsc_signatures(library) -> None:
     library.UVSC_DBG_CALC_EXPRESSION.restype = ctypes.c_int
     library.UVSC_DBG_EVAL_EXPRESSION_TO_STR.argtypes = [ctypes.c_int, ctypes.POINTER(_Vset), ctypes.c_int]
     library.UVSC_DBG_EVAL_EXPRESSION_TO_STR.restype = ctypes.c_int
+    library.UVSC_DBG_EXEC_CMD.argtypes = [ctypes.c_int, ctypes.POINTER(_ExecCmd), ctypes.c_int]
+    library.UVSC_DBG_EXEC_CMD.restype = ctypes.c_int
+    library.UVSC_DBG_MEM_READ.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    library.UVSC_DBG_MEM_READ.restype = ctypes.c_int
+    library.UVSC_DBG_MEM_WRITE.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    library.UVSC_DBG_MEM_WRITE.restype = ctypes.c_int
+    library.UVSC_GetLastError.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+    library.UVSC_GetLastError.restype = ctypes.c_int
 
 
 def _safe_uvsc_uninit(library) -> None:
@@ -807,3 +909,17 @@ def _make_vset(expression: str) -> _Vset:
     vset.val.v.u64 = 0
     _set_sstr(vset.str, _sanitize_expression(expression))
     return vset
+
+
+def _make_amem_buffer(address: int, data: bytes) -> ctypes.Array:
+    payload = bytes(data)
+    buffer_type = ctypes.c_ubyte * (UVSOCK_AMEM_HEADER_BYTES + len(payload))
+    buffer = buffer_type()
+    header = _AmemHeader.from_buffer(buffer)
+    header.nAddr = int(address)
+    header.nBytes = len(payload)
+    header.ErrAddr = 0
+    header.nErr = 0
+    if payload:
+        ctypes.memmove(ctypes.addressof(buffer) + UVSOCK_AMEM_HEADER_BYTES, payload, len(payload))
+    return buffer

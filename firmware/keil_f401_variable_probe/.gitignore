@@ -1,7 +1,10 @@
 Objects/
 Listings/
+DebugConfig/
+EventRecorderStub.scvd
 *.uvguix.*
 *.uvoptx
+!F401VariableProbe.uvoptx
 *.uvgui.*
 *.dep
 *.bak

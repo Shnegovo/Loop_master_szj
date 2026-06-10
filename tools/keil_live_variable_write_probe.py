@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from src.core.keil.uvsock import (  # noqa: E402
     KeilUvscLiveSession,
     _Vset,
+    _ExecCmd,
     _configure_uvsc_signatures,
     _sstr_to_text,
     _set_sstr,
@@ -42,6 +43,11 @@ class FakeUvscLibrary:
         self.UVSC_GEN_SET_OPTIONS = FakeFunction(self._set_options)
         self.UVSC_DBG_CALC_EXPRESSION = FakeFunction(self._calc)
         self.UVSC_DBG_EVAL_EXPRESSION_TO_STR = FakeFunction(self._eval)
+        self.UVSC_DBG_MEM_READ = FakeFunction(self._mem_read)
+        self.UVSC_DBG_MEM_WRITE = FakeFunction(self._mem_write)
+        self.UVSC_DBG_EXEC_CMD = FakeFunction(self._exec_cmd)
+        self.UVSC_GetLastError = FakeFunction(self._last_error)
+        self.memory = bytearray(b"\xE8\x03\x00\x00")
 
     def _init(self, *_args) -> int:
         self.calls.append(("init", None))
@@ -89,6 +95,29 @@ class FakeUvscLibrary:
         _set_sstr(vset.str, "5000")
         return 0
 
+    def _mem_read(self, handle: int, buffer, length: int) -> int:
+        self.calls.append(("mem_read", (handle, length)))
+        ctypes.memmove(ctypes.addressof(buffer) + 24, bytes(self.memory), len(self.memory))
+        return 0
+
+    def _mem_write(self, handle: int, buffer, length: int) -> int:
+        self.calls.append(("mem_write", (handle, length)))
+        raw = ctypes.string_at(ctypes.addressof(buffer) + 24, 4)
+        self.memory[:] = raw
+        return 0
+
+    def _exec_cmd(self, handle: int, cmd_ptr, length: int) -> int:
+        cmd = ctypes.cast(cmd_ptr, ctypes.POINTER(_ExecCmd)).contents
+        self.calls.append(("exec", (handle, _sstr_to_text(cmd.sCmd), length)))
+        return 0
+
+    def _last_error(self, handle: int, msg_type, status, buffer, max_len: int) -> int:
+        self.calls.append(("last_error", handle))
+        msg_type._obj.value = 0
+        status._obj.value = 0
+        ctypes.memset(buffer, 0, max_len)
+        return 0
+
 
 def _assert(condition: bool, message: str) -> None:
     if not condition:
@@ -101,8 +130,8 @@ def run() -> int:
 
     session = KeilUvscLiveSession(fake, 42, owns_uvsc=True)
     try:
-        session.enter_debug()
         session.set_extended_stack(True)
+        session.enter_debug()
         running = session.target_running()
         _assert(running is False, "target_running should decode fake halted state")
 
@@ -111,11 +140,15 @@ def run() -> int:
         _assert(result.expression == "debug_setpoint = 5000", "assignment expression mismatch")
         _assert(result.readback_expression == "debug_setpoint", "readback expression mismatch")
         _assert(result.readback_text == "5000", "readback value mismatch")
+        session.write_memory(0x20000008, (6000).to_bytes(4, "little", signed=True))
+        memory = session.read_memory(0x20000008, 4)
+        _assert(int.from_bytes(memory, "little", signed=True) == 6000, "memory readback mismatch")
+        session.execute_command("debug_setpoint = 7000")
     finally:
         session.close()
 
     names = [name for name, _payload in fake.calls]
-    expected = ["enter", "options", "status", "calc", "eval", "close", "uninit"]
+    expected = ["options", "enter", "status", "calc", "eval", "mem_write", "mem_read", "exec", "close", "uninit"]
     _assert(names == expected, f"call order mismatch: {names!r}")
     calc_payload = fake.calls[3][1]
     _assert(calc_payload[1] == "debug_setpoint = 5000", f"calc payload mismatch: {calc_payload!r}")

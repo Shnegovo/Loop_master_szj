@@ -10,6 +10,8 @@ The project is intentionally bare-metal and self-contained:
 - `f401_variable_probe.sct` places Flash at `0x08000000` and SRAM at
   `0x20000000`.
 - `F401VariableProbe.uvprojx` selects the Keil `STM32F401CCUx` device.
+- `F401VariableProbe.uvoptx` pins the validation target to ST-Link/SWD with
+  the STM32F4 256 KB flash algorithm, so uVision does not fall back to ULINK.
 
 ## Debug Variables
 
@@ -60,3 +62,24 @@ Flash algorithm under **Utilities**.
    - `debug_feedback = 0`
 5. Confirm `debug_error`, `debug_feedback`, `debug_counter`, and `debug_flags`
    continue changing and that written values can be read back.
+
+## LoopMaster Keil Smoke
+
+The most natural Keil smoke writes by C variable name through the uVision
+Command Window path, then verifies the resulting RAM bytes through the AXF
+symbol address:
+
+```powershell
+python tools\keil_live_write_probe.py --keil-root D:\Keil --launch-uvsock --wait-seconds 25 --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe" --port 4827 --write --exec-command "debug_setpoint = 5000" --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 5000
+```
+
+The direct memory fallback resolves the variable address from the AXF, writes
+RAM through `UVSC_DBG_MEM_WRITE`, and verifies with `UVSC_DBG_MEM_READ`:
+
+```powershell
+python tools\keil_live_write_probe.py --keil-root D:\Keil --launch-uvsock --wait-seconds 25 --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe" --port 4827 --write --prefer-memory --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 5000
+```
+
+The `UVSC_DBG_CALC_EXPRESSION` assignment path is still kept as an experimental
+UVSOCK route. For proven hardware writes, prefer the command path first and the
+AXF symbol plus memory-write flow as the fallback.

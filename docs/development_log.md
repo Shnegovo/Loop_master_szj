@@ -3335,3 +3335,89 @@ Create the first real Keil-side path that can modify a variable through uVision/
   - enter/debug-load the F401 target if possible
   - run `tools\keil_live_write_probe.py --write --expression debug_setpoint --value 5000`
   - then wire the same live write call into the Debug Workbench UI behind the existing confirmation/audit pattern
+
+## Milestone 38 Update - Real Keil/ST-Link F401 Memory Write Smoke
+
+### Goal
+
+Move from UVSOCK readiness to a verified physical F401 write path: launch or
+attach to uVision, enter the ST-Link debug session, write a known RAM variable,
+and read it back.
+
+### Completed
+
+- Added a committed `F401VariableProbe.uvoptx` for the F401 validation project.
+  - selects `STLink\ST-LINKIII-KEIL_SWO.dll`
+  - uses SWD protocol at 10 MHz
+  - uses the STM32F4 256 KB flash algorithm
+  - prevents uVision from falling back to ULINK on this validation target
+- Adjusted the F401 project metadata:
+  - added the F401 SVD path
+  - kept the STM32F401CCUx device, RAM and flash layout
+  - kept command-line build clean with Keil ARMCLANG V6.22
+- Hardened `KeilUvscLiveSession`:
+  - `UVSC_Init` now scopes to the requested UVSOCK port
+  - `UVSC_GetLastError` is surfaced for failed live commands
+  - `UVSC_DBG_ENTER` treats "Target is in debug mode" as an idempotent success
+  - failed connect/enter attempts close the UVSOCK handle before uninit
+  - added packed `AMEM` memory read/write helpers
+- Extended `tools\keil_live_write_probe.py`:
+  - waits for UVSOCK readiness after launch
+  - supports Keil Command Window commands through `UVSC_DBG_EXEC_CMD`
+  - supports direct RAM writes through `UVSC_DBG_MEM_WRITE`
+  - resolves `--symbol` from an AXF via `--axf`
+  - verifies writes with `UVSC_DBG_MEM_READ`
+  - keeps `UVSC_DBG_CALC_EXPRESSION` available as an experimental direct expression route
+- Added `tools\keil_f401_debug_config_probe.py` to keep the F401 debug config from regressing back to ULINK/F103 settings.
+
+### Verified
+
+- `python -m py_compile src\core\keil\uvsock.py tools\keil_live_variable_write_probe.py tools\keil_live_write_probe.py tools\keil_f401_debug_config_probe.py`
+  - PASS.
+- `python tools\keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools\keil_f401_debug_config_probe.py`
+  - PASS.
+- `python tools\keil_project_probe.py --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`
+  - PASS.
+- `D:\Keil\Keil_v5\UV4\uVision.com -b D:\LoopMaster_v2.1\firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx -t "STM32F401CCU6 Variable Probe" -j0 -o D:\LoopMaster_v2.1\firmware\keil_f401_variable_probe\build.log`
+  - PASS, `0 Error(s), 0 Warning(s)`.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --launch-uvsock --wait-seconds 25 --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe" --port 4827 --write --prefer-memory --address 0x20000008 --value-type int32 --value 5000`
+  - PASS, wrote and read back `debug_setpoint` by RAM address.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --port 4827 --write --prefer-memory --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 7777`
+  - PASS, resolved `debug_setpoint` to `0x20000008`, wrote and read back.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --port 4827 --write --prefer-memory --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 5000`
+  - PASS, restored the validation value.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --port 4827 --write --exec-command "debug_setpoint = 6000" --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 6000`
+  - PASS, assigned by C variable name through Keil Command Window semantics and read back the RAM bytes.
+- `python tools\keil_live_write_probe.py --keil-root D:\Keil --port 4827 --write --exec-command "debug_setpoint = 5000" --axf firmware\keil_f401_variable_probe\Objects\f401_variable_probe.axf --symbol debug_setpoint --value-type int32 --value 5000`
+  - PASS, restored the validation value through the command path.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil --attempt-existing --port 4827 --status`
+  - PASS, UVSOCK connected and target status was readable.
+
+### Notes
+
+- This is the first verified Keil-controlled physical-target write in this
+  branch. It uses Keil/uVision as debug master, ST-Link for the probe, and
+  LoopMaster/UVSOCK as the outside control panel.
+- Two real write paths are now verified:
+  - variable-name command: `UVSC_DBG_EXEC_CMD("debug_setpoint = 6000")`
+  - symbol-address memory write: AXF symbol -> `UVSC_DBG_MEM_WRITE` -> `UVSC_DBG_MEM_READ`
+- `UVSC_DBG_CALC_EXPRESSION` still returns `UVSC_STATUS_COMMAND_ERROR` for
+  `debug_setpoint = 5000` on the live target, so it stays secondary until the
+  exact uVision expression context requirement is nailed down.
+- The old failure `No ULINK2/ME Device found` was caused by missing reusable
+  uVision debug options. The committed `.uvoptx` fixes the F401 smoke target.
+
+### Next Target
+
+- Wire the proven Keil write paths into Debug Workbench:
+  - profile fields: Keil root, project, target, port, AXF
+  - launch/connect status with Chinese UI text
+  - prefer `UVSC_DBG_EXEC_CMD` for C variable-name writes when a symbol name is available
+  - keep `UVSC_DBG_MEM_WRITE` as the explicit address/type fallback
+  - variable write confirmation and JSONL audit reuse
+  - type-aware packing for int/uint/float sizes
+  - stop/start controls using the already exported UVSOCK halt/run functions
+- Keep investigating expression and `UVSC_DBG_VARIABLE_SET` for richer watch
+  semantics, but do not block the UI integration on them.
