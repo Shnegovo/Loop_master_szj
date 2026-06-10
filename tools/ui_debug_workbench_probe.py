@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 import time
@@ -144,6 +145,19 @@ def _write_fixture(root: Path) -> Path:
     (project_dir / "startup.s").write_text("; synthetic startup\n", encoding="utf-8")
     project_path = project_dir / "DebugDemo.uvprojx"
     project_path.write_text(PROJECT, encoding="utf-8")
+    (root / "compile_commands.json").write_text(
+        json.dumps(
+            [
+                {"directory": str(root), "command": "cc -c Core/Src/main.c", "file": "Core/Src/main.c"},
+                {"directory": str(root), "command": "cc -c Core/Src/pid.c", "file": "Core/Src/pid.c"},
+                {"directory": str(root), "command": "cc -c Core/Inc/pid.h", "file": "Core/Inc/pid.h"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (root / "build").mkdir(exist_ok=True)
+    (root / "build" / "DebugDemo.elf").write_bytes(b"\x7fELF")
     return project_path
 
 
@@ -381,6 +395,20 @@ def run(output_dir: Path, width: int, height: int) -> int:
         window._show_workspace_page("debug_sources")
         tab = window._tab_debug_workbench
         tab.load_project(project_path)
+        window._elf_path = project_path.parent.parent / "build" / "DebugDemo.elf"
+        window._recent_elf_path = window._elf_path
+        provider_labels = [
+            tab.source_provider_combo.itemText(index)
+            for index in range(tab.source_provider_combo.count())
+        ] if hasattr(tab, "source_provider_combo") else []
+        for label in ("自动", "Keil 工程", "编译数据库", "源码根", "ELF/DWARF", "GDB 文本"):
+            if label not in provider_labels:
+                issues.append(f"source provider selector missing {label}: {provider_labels!r}")
+        if "Keil 工程" not in tab.source_provider_state_label.text() or "4 文件" not in tab.source_provider_count_label.text():
+            issues.append(
+                f"Keil source provider chips mismatch: "
+                f"{tab.source_provider_state_label.text()!r} / {tab.source_provider_count_label.text()!r}"
+            )
         backend_labels = [
             tab.backend_combo.itemText(index)
             for index in range(tab.backend_combo.count())
@@ -408,13 +436,54 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"OpenOCD source preview tree missing groups: {tab.source_tree.topLevelItemCount()}")
                 if "OpenOCD / GDB 复用源码预览" not in tab.summary_label.text():
                     issues.append(f"OpenOCD summary did not show source preview: {tab.summary_label.text()!r}")
+                if "preview" not in tab.source_provider_state_label.text().lower() and "预览" not in tab.summary_label.text():
+                    issues.append(f"OpenOCD source provider chip did not reflect preview: {tab.source_provider_state_label.text()!r}")
                 diag = {
                     tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
                     for row in range(tab.diagnostics_table.rowCount())
                     if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
                 }
+                if diag.get("源码文件") != str(source_manifest.source_count):
+                    issues.append(f"OpenOCD source diagnostics missing source rows: {diag!r}")
                 if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
                     issues.append(f"OpenOCD placeholder diagnostics mismatch: {diag!r}")
+                compile_index = tab.source_provider_combo.findData("compile_commands")
+                if compile_index < 0:
+                    issues.append("source provider selector missing compile_commands data")
+                else:
+                    tab.source_provider_combo.setCurrentIndex(compile_index)
+                    _pump(app, 0.15)
+                    compile_manifest = getattr(tab, "source_manifest", None)
+                    if compile_manifest is None or compile_manifest.provider != "compile_commands":
+                        issues.append(f"compile_commands source preview mismatch: {compile_manifest!r}")
+                    elif compile_manifest.source_count != 3:
+                        issues.append(f"compile_commands source count mismatch: {compile_manifest.source_count}")
+                    if "编译数据库" not in tab.source_provider_state_label.text():
+                        issues.append(f"compile_commands source chip mismatch: {tab.source_provider_state_label.text()!r}")
+                    diag = {
+                        tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+                        for row in range(tab.diagnostics_table.rowCount())
+                        if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+                    }
+                    if diag.get("源码来源") != "编译数据库" or diag.get("源码文件") != "3":
+                        issues.append(f"compile_commands source diagnostics mismatch: {diag!r}")
+                roots_index = tab.source_provider_combo.findData("manual_roots")
+                if roots_index < 0:
+                    issues.append("source provider selector missing manual_roots data")
+                else:
+                    tab.source_provider_combo.setCurrentIndex(roots_index)
+                    _pump(app, 0.15)
+                    roots_manifest = getattr(tab, "source_manifest", None)
+                    if roots_manifest is None or not roots_manifest.provider.endswith("_roots_preview"):
+                        issues.append(f"manual roots source preview mismatch: {roots_manifest!r}")
+                    elif roots_manifest.source_count < 4:
+                        issues.append(f"manual roots source count mismatch: {roots_manifest.source_count}")
+                    if "源码根" not in tab.source_provider_state_label.text() and "roots preview" not in tab.source_provider_state_label.text():
+                        issues.append(f"manual roots source chip mismatch: {tab.source_provider_state_label.text()!r}")
+                auto_index = tab.source_provider_combo.findData("auto")
+                if auto_index >= 0:
+                    tab.source_provider_combo.setCurrentIndex(auto_index)
+                    _pump(app, 0.15)
                 window._discover_debug_backend_for_workbench()
                 _pump(app, 0.15)
                 placeholder_transactions = getattr(tab, "_command_transactions", ())

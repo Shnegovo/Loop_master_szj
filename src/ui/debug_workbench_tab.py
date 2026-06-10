@@ -288,6 +288,7 @@ class DebugWorkbenchTab(QWidget):
     summaryChanged = Signal()
     debugActionRequested = Signal(str)
     backendSelectionChanged = Signal(str)
+    sourceProviderSelectionChanged = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -313,6 +314,8 @@ class DebugWorkbenchTab(QWidget):
         self._backend_controls_ready = False
         self._backend_options: tuple[tuple[str, str, str], ...] = ()
         self._backend_selection_syncing = False
+        self._source_provider_options: tuple[tuple[str, str, str], ...] = ()
+        self._source_provider_selection_syncing = False
 
         self.setObjectName("debugWorkbenchTab")
         self._build_ui()
@@ -414,6 +417,7 @@ class DebugWorkbenchTab(QWidget):
         self._search_index = -1
         self._rebuild_source_tree()
         self._load_first_existing_source()
+        self._refresh_diagnostics_table()
         self._refresh_summary()
 
     def restore_project_source_manifest(self) -> bool:
@@ -423,10 +427,12 @@ class DebugWorkbenchTab(QWidget):
             self._current_document = None
             self._rebuild_source_tree()
             self._load_first_existing_source()
+            self._refresh_diagnostics_table()
             self._refresh_summary()
             return False
         self._rebuild_source_tree()
         self._load_first_existing_source()
+        self._refresh_diagnostics_table()
         self._refresh_summary()
         return True
 
@@ -476,6 +482,31 @@ class DebugWorkbenchTab(QWidget):
                 self.backend_combo.setCurrentIndex(selected_index)
         finally:
             self._backend_selection_syncing = False
+
+    def set_source_provider_options(
+        self,
+        options: tuple[tuple[str, str, str], ...] | list[tuple[str, str, str]],
+        selected: str,
+    ) -> None:
+        self._source_provider_options = tuple(
+            (str(key), str(label), str(note))
+            for key, label, note in options
+        )
+        if not hasattr(self, "source_provider_combo"):
+            return
+        self._source_provider_selection_syncing = True
+        try:
+            self.source_provider_combo.clear()
+            selected_index = 0
+            for index, (key, label, note) in enumerate(self._source_provider_options):
+                self.source_provider_combo.addItem(label, key)
+                self.source_provider_combo.setItemData(index, note, Qt.ToolTipRole)
+                if key == selected:
+                    selected_index = index
+            if self.source_provider_combo.count():
+                self.source_provider_combo.setCurrentIndex(selected_index)
+        finally:
+            self._source_provider_selection_syncing = False
 
     def set_command_transactions(
         self,
@@ -677,9 +708,22 @@ class DebugWorkbenchTab(QWidget):
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(9)
 
+        source_header = QHBoxLayout()
+        source_header.setContentsMargins(0, 0, 0, 0)
+        source_header.setSpacing(8)
         title = QLabel("源码树")
         title.setObjectName("debugSectionTitle")
-        layout.addWidget(title)
+        source_header.addWidget(title)
+        source_header.addStretch(1)
+        self.source_provider_combo = PclComboBox()
+        self.source_provider_combo.setObjectName("debugSourceProviderCombo")
+        self.source_provider_combo.setMinimumWidth(118)
+        self.source_provider_combo.setToolTip("选择源码来源预览")
+        self.source_provider_combo.currentIndexChanged.connect(self._on_source_provider_combo_changed)
+        source_header.addWidget(self.source_provider_combo)
+        layout.addLayout(source_header)
+
+        layout.addWidget(self._build_source_manifest_strip())
 
         self.source_tree = QTreeWidget()
         self.source_tree.setObjectName("debugSourceTree")
@@ -746,6 +790,31 @@ class DebugWorkbenchTab(QWidget):
         key = self.backend_combo.currentData()
         if key:
             self.backendSelectionChanged.emit(str(key))
+
+    def _on_source_provider_combo_changed(self) -> None:
+        if self._source_provider_selection_syncing:
+            return
+        key = self.source_provider_combo.currentData()
+        if key:
+            self.sourceProviderSelectionChanged.emit(str(key))
+
+    def _build_source_manifest_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setObjectName("debugSourceStrip")
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(6)
+        self.source_provider_state_label = QLabel("来源 --")
+        self.source_provider_state_label.setObjectName("debugSourceChip")
+        row.addWidget(self.source_provider_state_label)
+        self.source_provider_count_label = QLabel("0 文件")
+        self.source_provider_count_label.setObjectName("debugSourceChip")
+        row.addWidget(self.source_provider_count_label)
+        self.source_provider_missing_label = QLabel("路径 --")
+        self.source_provider_missing_label.setObjectName("debugSourceChip")
+        row.addWidget(self.source_provider_missing_label)
+        row.addStretch(1)
+        return strip
 
     def _build_breakpoint_quick_editor(self) -> QFrame:
         editor = QFrame()
@@ -834,6 +903,7 @@ class DebugWorkbenchTab(QWidget):
                 placeholder = QTreeWidgetItem(["未打开工程"])
                 placeholder.setDisabled(True)
                 self.source_tree.addTopLevelItem(placeholder)
+                self._refresh_source_provider_summary()
                 return
             target_name = self.target_combo.currentData() or self.target_combo.currentText() or None
             if target_name:
@@ -845,12 +915,14 @@ class DebugWorkbenchTab(QWidget):
             placeholder = QTreeWidgetItem(["未加载源码清单"])
             placeholder.setDisabled(True)
             self.source_tree.addTopLevelItem(placeholder)
+            self._refresh_source_provider_summary()
             return
         self._source_tree = self._source_manifest.tree
         if not self._source_tree.children:
             placeholder = QTreeWidgetItem([f"{self._source_manifest.name} 无源码文件"])
             placeholder.setDisabled(True)
             self.source_tree.addTopLevelItem(placeholder)
+            self._refresh_source_provider_summary()
             return
         for group in self._source_tree.children:
             group_item = QTreeWidgetItem([group.name])
@@ -865,6 +937,7 @@ class DebugWorkbenchTab(QWidget):
                         file_item.setDisabled(True)
                 group_item.addChild(file_item)
         self.source_tree.expandToDepth(0)
+        self._refresh_source_provider_summary()
 
     def _on_target_changed(self) -> None:
         if self._source_manifest_mode != "keil":
@@ -1233,11 +1306,12 @@ class DebugWorkbenchTab(QWidget):
     def _refresh_diagnostics_table(self) -> None:
         if not hasattr(self, "diagnostics_table"):
             return
-        items = self._diagnostics or (
+        backend_items = self._diagnostics or (
             ("Keil 根目录", "等待发现"),
             ("UVSOCK", "等待发现"),
             ("uVision", "未检测"),
         )
+        items = self._source_diagnostic_rows() + tuple(backend_items)
         self.diagnostics_table.setRowCount(len(items))
         for row, (key, value) in enumerate(items):
             self._set_diagnostics_item(row, 0, key)
@@ -1248,6 +1322,80 @@ class DebugWorkbenchTab(QWidget):
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setToolTip(text)
         self.diagnostics_table.setItem(row, column, item)
+
+    def _refresh_source_provider_summary(self) -> None:
+        if not hasattr(self, "source_provider_state_label"):
+            return
+        manifest = self._source_manifest
+        if manifest is None:
+            values = ("来源 --", "0 文件", "路径 --")
+            tooltip = "尚未加载源码清单"
+        else:
+            diagnostics = dict(manifest.diagnostics)
+            missing = diagnostics.get("缺失", "")
+            provider_label = self._source_provider_label(manifest.provider)
+            missing_text = f"缺失 {missing}" if missing and missing != "0" else "路径正常" if manifest.source_count else "路径 --"
+            values = (
+                provider_label,
+                f"{manifest.source_count} 文件",
+                missing_text,
+            )
+            tooltip_lines = [
+                f"名称: {manifest.name}",
+                f"provider: {manifest.provider}",
+                f"root: {manifest.root or '--'}",
+                f"project: {manifest.project_path or '--'}",
+            ]
+            if manifest.diagnostics:
+                tooltip_lines.append("诊断:")
+                tooltip_lines.extend(f"- {key}: {value}" for key, value in manifest.diagnostics)
+            tooltip = "\n".join(tooltip_lines)
+        labels = (
+            self.source_provider_state_label,
+            self.source_provider_count_label,
+            self.source_provider_missing_label,
+        )
+        for label, value in zip(labels, values):
+            label.setText(value)
+            label.setToolTip(tooltip)
+
+    def _source_diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        manifest = self._source_manifest
+        if manifest is None:
+            return (("源码来源", "未加载"),)
+        diagnostics = dict(manifest.diagnostics)
+        rows: list[tuple[str, str]] = [
+            ("源码来源", self._source_provider_label(manifest.provider).replace("来源 ", "")),
+            ("源码文件", str(manifest.source_count)),
+        ]
+        for key in ("缺失", "重复", "过滤", "截断"):
+            value = diagnostics.get(key)
+            if value not in (None, ""):
+                rows.append((f"源码{key}", str(value)))
+        if manifest.root is not None:
+            rows.append(("源码根", str(manifest.root)))
+        return tuple(rows)
+
+    def _source_provider_label(self, provider: str) -> str:
+        labels = {
+            "keil": "Keil 工程",
+            "elf_dwarf": "ELF/DWARF",
+            "compile_commands": "编译数据库",
+            "compile_commands_missing": "编译数据库",
+            "gdb_info_sources": "GDB 源码表",
+            "gdb_text_pending": "GDB 文本",
+            "manual_roots": "源码根",
+            "manual_roots_missing": "源码根",
+            "elf_dwarf_pending": "ELF/DWARF",
+        }
+        provider_text = str(provider)
+        if provider_text.endswith("_roots_preview"):
+            text = "源码根预览"
+        elif provider_text.endswith("_preview"):
+            text = "复用预览"
+        else:
+            text = labels.get(provider_text, provider_text.replace("_", " "))
+        return f"来源 {text}"
 
     def _refresh_command_plan_preview(self) -> None:
         if not hasattr(self, "plan_focus_label"):
@@ -1619,6 +1767,20 @@ class DebugWorkbenchTab(QWidget):
                 border: 1px solid #d2deea;
                 border-radius: 5px;
             }
+            QFrame#debugSourceStrip {
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
+            QLabel#debugSourceChip {
+                color: #475569;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 6px;
+                background: #ffffff;
+                border: 1px solid #dce6f0;
+                border-radius: 5px;
+            }
             QFrame#debugBreakpointEditor {
                 background: #f8fbff;
                 border: 1px solid #d2deea;
@@ -1642,6 +1804,22 @@ class DebugWorkbenchTab(QWidget):
                 border-color: #9fb8d4;
             }
             QComboBox#debugCombo:focus, QLineEdit#debugSearch:focus {
+                border-color: #2563eb;
+                background: #ffffff;
+            }
+            QComboBox#debugSourceProviderCombo {
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                border-radius: 6px;
+                padding: 4px 7px;
+                selection-background-color: #2563eb;
+                selection-color: white;
+                font-size: 9pt;
+            }
+            QComboBox#debugSourceProviderCombo:hover {
+                border-color: #9fb8d4;
+            }
+            QComboBox#debugSourceProviderCombo:focus {
                 border-color: #2563eb;
                 background: #ffffff;
             }

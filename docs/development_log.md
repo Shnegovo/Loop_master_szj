@@ -2481,3 +2481,61 @@ Let the Debug Workbench consume non-Keil source manifests in the UI so OpenOCD/G
 ### Next Target
 
 - Add a small source-provider selector/path diagnostics surface for explicit ELF/DWARF, `compile_commands.json`, GDB text and manual-root previews, then use it to show missing-source path mapping hints.
+
+## Milestone 30 Update - Source Provider Selector
+
+### Goal
+
+Make source provenance visible and controllable in the Debug Workbench without crowding the top toolbar, so multi-toolchain sessions can explain where the source tree came from before live OpenOCD/GDB, pyOCD or Keil control is enabled.
+
+### Completed
+
+- Added a compact source-provider selector to the left `源码树` header.
+- Added source status chips for:
+  - active source provider
+  - source file count
+  - missing-path state
+- Source diagnostics are now folded into the existing diagnostics table ahead of backend diagnostics:
+  - `源码来源`
+  - `源码文件`
+  - `源码缺失`
+  - `源码重复`
+  - `源码过滤`
+  - `源码截断`
+  - `源码根`
+- MainWindow now tracks an explicit source provider key:
+  - `自动`
+  - `Keil 工程`
+  - `编译数据库`
+  - `源码根`
+  - `ELF/DWARF`
+  - `GDB 文本`
+- Explicit `compile_commands` and manual-root preview paths are wired.
+- `ELF/DWARF` and `GDB 文本` are visible as pending explicit providers, but selecting them does not launch tools or processes yet.
+- Extended `tools\ui_debug_workbench_probe.py` to verify:
+  - provider selector labels
+  - Keil source chips
+  - OpenOCD/GDB preview source diagnostics
+  - explicit `compile_commands` preview
+  - explicit manual-root preview
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+
+### Notes
+
+- Default backend/source switching still does not run `readelf`, OpenOCD, pyOCD, GDB or Keil, and does not touch ST-Link.
+- The provider selector is intentionally placed in the source-tree panel instead of the top toolbar to avoid narrow-layout clipping.
+- This adds the UI path for provenance and explicit providers; actual file pickers/path mapping dialogs are still pending.
+
+### Next Target
+
+- Move to lifecycle/exit hardening: centralize worker shutdown registration and add close probes for sampling, serial and debug-worker stuck scenarios.

@@ -435,6 +435,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_source_preview_manifest: SourceManifest | None = None
         self._debug_command_preview_suspended = False
+        self._debug_source_provider_key = "auto"
         cfg = self._load_config()
         if cfg:
             keil_root = cfg.get("keil_root", "")
@@ -1995,7 +1996,9 @@ class MainWindow(QMainWindow):
     def _setup_debug_workbench_connections(self):
         self._tab_debug_workbench.debugActionRequested.connect(self._on_debug_workbench_action)
         self._tab_debug_workbench.backendSelectionChanged.connect(self._on_debug_backend_selected)
+        self._tab_debug_workbench.sourceProviderSelectionChanged.connect(self._on_debug_source_provider_selected)
         self._refresh_debug_backend_options()
+        self._refresh_debug_source_provider_options()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._debug_workbench_idle_diagnostics())
         self._sync_debug_source_manifest_preview()
@@ -2054,11 +2057,35 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(f"已切换调试后端：{descriptor.display_name}")
         self._refresh_hero()
 
+    def _refresh_debug_source_provider_options(self):
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        options = [
+            ("auto", "自动", "根据当前后端和已加载工程选择最安全的源码预览"),
+            ("keil", "Keil 工程", "使用当前 Keil 工程中的分组和文件路径"),
+            ("compile_commands", "编译数据库", "从当前 ELF 附近的 compile_commands.json 读取源码列表"),
+            ("manual_roots", "源码根", "从当前 ELF 附近目录轻量扫描源码文件"),
+            ("elf_dwarf", "ELF/DWARF", "后续显式触发 readelf -wl，不在切换后端时自动启动外部进程"),
+            ("gdb_text", "GDB 文本", "后续粘贴或导入 GDB info sources 文本"),
+        ]
+        self._tab_debug_workbench.set_source_provider_options(options, self._debug_source_provider_key)
+
+    def _on_debug_source_provider_selected(self, provider_key: str):
+        provider_key = str(provider_key or "auto")
+        if provider_key == self._debug_source_provider_key:
+            return
+        self._debug_source_provider_key = provider_key
+        self._sync_debug_source_manifest_preview()
+        self._sync_debug_command_preview()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"源码来源：{self._debug_source_provider_label(provider_key)}")
+        self._refresh_hero()
+
     def _sync_debug_source_manifest_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
             return
         tab = self._tab_debug_workbench
-        if self._debug_backend_kind == DebugBackendKind.KEIL:
+        if self._debug_backend_kind == DebugBackendKind.KEIL and self._debug_source_provider_key in {"auto", "keil"}:
             tab.restore_project_source_manifest()
             self._debug_source_preview_manifest = tab.source_manifest
             return
@@ -2069,6 +2096,36 @@ class MainWindow(QMainWindow):
     def _build_debug_source_preview_manifest(self) -> SourceManifest:
         provider_name = self._debug_backend_display_name()
         diagnostics: list[tuple[str, str]] = []
+        provider_key = self._debug_source_provider_key
+        if provider_key == "keil":
+            project = getattr(self._tab_debug_workbench, "_project", None)
+            if project is not None:
+                from src.core.debug_sources import source_manifest_from_keil_project
+
+                return source_manifest_from_keil_project(project)
+            return self._empty_debug_source_manifest(
+                provider_name,
+                "当前没有可复用的 Keil 工程源码清单",
+                diagnostics,
+            )
+        if provider_key == "compile_commands":
+            return self._build_compile_commands_source_preview(provider_name, diagnostics)
+        if provider_key == "manual_roots":
+            return self._build_manual_roots_source_preview(provider_name, diagnostics)
+        if provider_key == "elf_dwarf":
+            return self._empty_debug_source_manifest(
+                provider_name,
+                "ELF/DWARF 需要显式加载，当前不会在切换后端时自动运行 readelf",
+                diagnostics,
+                provider="elf_dwarf_pending",
+            )
+        if provider_key == "gdb_text":
+            return self._empty_debug_source_manifest(
+                provider_name,
+                "GDB info sources 文本导入尚未接入",
+                diagnostics,
+                provider="gdb_text_pending",
+            )
         existing = getattr(self._tab_debug_workbench, "source_manifest", None)
         if existing is not None and existing.source_count:
             entries = existing.entries
@@ -2085,38 +2142,120 @@ class MainWindow(QMainWindow):
                 ) + tuple(diagnostics),
                 metadata={"backend": self._debug_backend_kind.value, "preview": "reuse"},
             )
+        compile_manifest = self._try_compile_commands_source_preview(provider_name, diagnostics)
+        if compile_manifest.source_count:
+            return compile_manifest
+        roots_manifest = self._try_manual_roots_source_preview(provider_name)
+        if roots_manifest.source_count:
+            return roots_manifest
+        return self._empty_debug_source_manifest(provider_name, "未找到 ELF/DWARF、compile_commands 或源码根", diagnostics)
+
+    def _build_compile_commands_source_preview(
+        self,
+        provider_name: str,
+        diagnostics: list[tuple[str, str]],
+    ) -> SourceManifest:
+        manifest = self._try_compile_commands_source_preview(provider_name, diagnostics)
+        if manifest.source_count:
+            return manifest
+        return self._empty_debug_source_manifest(
+            provider_name,
+            "当前 ELF 附近未找到可用 compile_commands.json",
+            diagnostics,
+            provider="compile_commands_missing",
+        )
+
+    def _try_compile_commands_source_preview(
+        self,
+        provider_name: str,
+        diagnostics: list[tuple[str, str]],
+    ) -> SourceManifest:
         compile_commands = self._find_compile_commands_file()
         if compile_commands is not None:
             try:
-                manifest = source_manifest_from_compile_commands(
+                return source_manifest_from_compile_commands(
                     compile_commands,
                     name=f"{provider_name} 编译数据库预览",
                 )
-                return manifest
             except Exception as exc:
                 diagnostics.append(("compile_commands", f"不可用：{exc}"))
+        return SourceManifest(
+            name=f"{provider_name} 编译数据库预览",
+            root=self._elf_path.parent if self._elf_path else None,
+            provider="compile_commands_missing",
+            entries=(),
+            diagnostics=tuple(diagnostics),
+            metadata={"backend": self._debug_backend_kind.value, "preview": "compile_commands"},
+        )
+
+    def _build_manual_roots_source_preview(
+        self,
+        provider_name: str,
+        diagnostics: list[tuple[str, str]],
+    ) -> SourceManifest:
+        manifest = self._try_manual_roots_source_preview(provider_name)
+        if manifest.source_count:
+            return manifest
+        return self._empty_debug_source_manifest(
+            provider_name,
+            "当前 ELF 附近未找到源码根",
+            diagnostics,
+            provider="manual_roots_missing",
+        )
+
+    def _try_manual_roots_source_preview(self, provider_name: str) -> SourceManifest:
         roots = self._debug_source_roots()
         if roots:
-            manifest = source_manifest_from_roots(
+            return source_manifest_from_roots(
                 roots,
                 name=f"{provider_name} 源码根预览",
                 provider=f"{self._debug_backend_kind.value}_roots_preview",
                 max_files=1200,
             )
-            if manifest.source_count:
-                return manifest
+        return SourceManifest(
+            name=f"{provider_name} 源码根预览",
+            root=None,
+            provider=f"{self._debug_backend_kind.value}_roots_preview",
+            entries=(),
+            diagnostics=(("源码根", "未发现"),),
+            metadata={"backend": self._debug_backend_kind.value, "preview": "manual_roots"},
+        )
+
+    def _empty_debug_source_manifest(
+        self,
+        provider_name: str,
+        reason: str,
+        diagnostics: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+        *,
+        provider: str | None = None,
+    ) -> SourceManifest:
         return SourceManifest(
             name=f"{provider_name} 源码预览",
             root=self._elf_path.parent if self._elf_path else None,
-            provider=f"{self._debug_backend_kind.value}_preview",
+            provider=provider or f"{self._debug_backend_kind.value}_preview",
             entries=(),
             diagnostics=(
                 ("后端", provider_name),
-                ("源码来源", "未找到 ELF/DWARF、compile_commands 或源码根"),
+                ("源码来源", reason),
                 ("安全边界", "不会启动进程、连接探针或写目标"),
             ) + tuple(diagnostics),
-            metadata={"backend": self._debug_backend_kind.value, "preview": "empty"},
+            metadata={
+                "backend": self._debug_backend_kind.value,
+                "provider_key": self._debug_source_provider_key,
+                "preview": "empty",
+            },
         )
+
+    def _debug_source_provider_label(self, provider_key: str) -> str:
+        labels = {
+            "auto": "自动",
+            "keil": "Keil 工程",
+            "compile_commands": "编译数据库",
+            "manual_roots": "源码根",
+            "elf_dwarf": "ELF/DWARF",
+            "gdb_text": "GDB 文本",
+        }
+        return labels.get(str(provider_key), str(provider_key))
 
     def _debug_source_roots(self) -> tuple[Path, ...]:
         roots: list[Path] = []
