@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.core.debug_snapshots import RemoteBreakpoint, RemoteBreakpointSnapshot
+
 
 class KeilCommandKind(str, Enum):
     DISCOVER = "discover"
@@ -59,52 +61,8 @@ class KeilBreakpointIntent:
     message: str = ""
 
 
-@dataclass(frozen=True)
-class KeilRemoteBreakpoint:
-    path: Path | None = None
-    line: int = 0
-    enabled: bool | None = None
-    condition: str | None = ""
-    remote_id: str = ""
-    raw_location: str = ""
-    verified: bool = True
-    message: str = ""
-
-
-@dataclass(frozen=True)
-class KeilBreakpointRemoteSnapshot:
-    schema_version: int
-    snapshot_id: str
-    project_path: Path | None
-    target_name: str
-    captured_at: str
-    complete: bool
-    breakpoints: tuple[KeilRemoteBreakpoint, ...]
-    error: str = ""
-
-    def to_record(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "snapshot_id": self.snapshot_id,
-            "project_path": str(self.project_path) if self.project_path else "",
-            "target_name": self.target_name,
-            "captured_at": self.captured_at,
-            "complete": self.complete,
-            "error": self.error,
-            "breakpoints": [
-                {
-                    "path": str(item.path) if item.path is not None else "",
-                    "line": item.line,
-                    "enabled": item.enabled,
-                    "condition": item.condition,
-                    "remote_id": item.remote_id,
-                    "raw_location": item.raw_location,
-                    "verified": item.verified,
-                    "message": item.message,
-                }
-                for item in self.breakpoints
-            ],
-        }
+KeilRemoteBreakpoint = RemoteBreakpoint
+KeilBreakpointRemoteSnapshot = RemoteBreakpointSnapshot
 
 
 @dataclass(frozen=True)

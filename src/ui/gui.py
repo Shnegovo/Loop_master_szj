@@ -37,8 +37,8 @@ from src.core.debug_workbench import (
     debug_command_plans_for_status,
     make_debug_status,
 )
+from src.core.debug_backend_registry import create_default_debug_backend_registry
 from src.core.keil.commands import KeilCommandHistory, build_keil_debug_transactions, transaction_by_key
-from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -450,9 +450,12 @@ class MainWindow(QMainWindow):
                     for name, color in saved_colors.items()
                     if QColor(str(color)).isValid()
                 }
-        self._debug_backend = KeilUvSockBackendAdapter(
-            KeilBackendConfig(root=self._keil_root, port=self._debug_uvsock_port)
+        self._debug_backend_registry = create_default_debug_backend_registry(
+            keil_root=self._keil_root,
+            uvsock_port=self._debug_uvsock_port,
         )
+        self._debug_backend_kind = self._debug_backend_registry.default_kind()
+        self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
 
         self._plot_panes: list[ScopePane] = []
         self._workspace_pages: list[WorkspacePage] = []

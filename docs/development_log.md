@@ -1975,3 +1975,76 @@ Continue the read-only backend milestone by making backend session evidence visi
   - add backend registry/controller plumbing so UI selection can later switch between Keil, OpenOCD/GDB, pyOCD and offline replay
   - add no-hardware fake OpenOCD/GDB and pyOCD adapter probes before any live probe collision risk
   - then run a separate opt-in Keil live read-only smoke only after uVision is already open in Debug mode
+
+## Milestone 30 - Backend-Neutral Debug Foundation
+
+### Goal
+
+Start the larger multi-toolchain architecture slice so Keil remains the first real backend, but OpenOCD/GDB, pyOCD and offline replay can plug into the same workbench model without copying Keil-specific snapshot and transaction types.
+
+### Completed
+
+- Added backend-neutral snapshot models in `src\core\debug_snapshots.py`:
+  - `RemoteBreakpoint`
+  - `RemoteBreakpointSnapshot`
+  - `DebugPcLocation`
+  - `TargetSnapshot`
+  - generic `to_record()` / `from_record()` helpers
+- Updated `DebugBackendSessionSnapshot` to use common PC and remote-breakpoint snapshot types instead of importing Keil breakpoint snapshots.
+- Kept Keil compatibility by preserving:
+  - `KeilRemoteBreakpoint`
+  - `KeilBreakpointRemoteSnapshot`
+  as aliases to the common snapshot models.
+- Added `src\core\debug_backend_registry.py`:
+  - registry stores backend factories rather than live sessions
+  - default registry still creates Keil / UVSOCK first
+  - optional placeholders register `OpenOCD / GDB`, `pyOCD` and `离线回放`
+  - placeholders return data-only, read-only, unavailable snapshots and do not start processes or connect probes
+- Added `src\core\debug_transactions.py`:
+  - backend-neutral `DebugCommandTransaction`
+  - backend-neutral guard states
+  - unavailable-backend dry-run transaction builder
+  - snapshot evidence preservation in generic audit records
+- Updated `MainWindow` to create its debug backend through the registry instead of directly instantiating `KeilUvSockBackendAdapter`.
+- Added no-hardware probes:
+  - `tools\debug_snapshot_model_probe.py`
+  - `tools\debug_backend_registry_probe.py`
+  - `tools\debug_transaction_shell_probe.py`
+- Verified fake OpenOCD/GDB, pyOCD and offline backend placeholders can be registered and audited without launching external tools.
+
+### Verified
+
+- `python -m py_compile src\core\debug_snapshots.py src\core\debug_backend.py src\core\debug_backend_registry.py src\core\debug_transactions.py src\core\debug_workbench.py src\core\keil\backend.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_snapshot_model_probe.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py tools\debug_backend_adapter_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+
+### Notes
+
+- This milestone does not launch Keil, OpenOCD or pyOCD.
+- This milestone does not access ST-Link/F401CCU6, halt/run/step a target, sync breakpoints, write variables, flash firmware or open live GDB/UVSOCK sessions.
+- The new OpenOCD/GDB and pyOCD entries are intentionally unavailable placeholders; their value is proving the registry, snapshot and dry-run audit surfaces are no longer Keil-only.
+- The next live Keil smoke remains constrained to `OpenConnection -> DBG_STATUS -> CloseConnection` after uVision is manually opened in Debug mode.
+
+### Next Target
+
+- Continue Milestone 30 with controller/UI selection wiring:
+  - surface backend selection in the Debug Workbench without changing the visual style
+  - keep unavailable backends visibly blocked and dry-run only
+  - move Keil transaction UI typing toward generic `DebugCommandTransaction` while preserving current Keil preview behavior
+  - start extracting source provider / `SourceManifest` so Keil `.uvprojx`, ELF/DWARF and GDB source lists can feed the same editor tree

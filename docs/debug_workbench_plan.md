@@ -65,13 +65,17 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 
 ## 下一大里程碑
 
-`Debug Backend Adapter + Keil Read-Only Session Snapshot`
+`Backend-Neutral Debug Foundation`
 
 - 已完成第一块：抽出可扩展的调试后端 adapter 边界，`发现 Keil` 已改为通过 Keil adapter 产出状态和诊断。
 - 已新增 Keil backend adapter probe，验证 discover 不连接、只读 snapshot 不启用 Halt/Run/Step/写变量/同步断点。
 - 已接入 `连接` 动作为显式 opt-in 的 Keil 只读连接快照：用户点击连接时才执行 `OpenConnection -> DBG_STATUS -> CloseConnection`，并且只显示状态/诊断，不开放运行控制。
 - 已加入 PC 和远端断点只读占位：当前标记为 incomplete，诊断显示“待 Keil 回读/枚举”，并喂给现有 dry-run diff，让同步断点保持等待而不是误判 ready。
 - 已把 backend snapshot ID 和精简证据写入 dry-run transaction、history、tooltip 和 JSONL audit，后续 live smoke 能追溯每个 UI 决策来自哪次只读快照。
+- 已抽出 backend-neutral snapshot 模型：`RemoteBreakpoint`、`RemoteBreakpointSnapshot`、`DebugPcLocation`、`TargetSnapshot`；Keil 旧类型保持兼容别名。
+- 已加入 `DebugBackendRegistry`：默认仍使用 Keil / UVSOCK，且可注册 OpenOCD/GDB、pyOCD、离线回放占位后端。
+- 已加入 backend-neutral `DebugCommandTransaction` shell，用于不可用后端的 dry-run/audit，不连接探针、不启动外部进程。
+- 已加入 fake OpenOCD/GDB、pyOCD、离线回放的 no-hardware 探针，证明多后端入口可以先安全存在。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -83,9 +87,9 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
    - 增加“采样中关闭、串口连接中关闭、调试器读卡住模拟”的关闭探针。
 
 2. 架构底座
-   - 抽出 `DebugBackendRegistry` 和 backend selector：`Keil 主控`、`OpenOCD/GDB`、`pyOCD`、`离线回放` 共用同一个工作台入口。
-   - 抽出通用 `DebugCommandTransaction`：dry-run、audit、history、guard 通用化，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
-   - 抽出通用 `RemoteBreakpointSnapshot`、`PcLocation`、`SourceManifest`，先用 fake backend 探针验证 UI 不再依赖 Keil 类型。
+   - 接入 backend selector UI：`Keil 主控`、`OpenOCD/GDB`、`pyOCD`、`离线回放` 共用同一个工作台入口，不可用后端显示明确 blocked dry-run。
+   - 继续把 Keil transaction UI typing 迁移到通用 `DebugCommandTransaction`，Keil/OpenOCD/pyOCD/GDB 分别实现命令预览和执行器。
+   - 抽出通用 `SourceManifest`，先用 fake backend 探针验证 UI 不再依赖 Keil 工程类型。
    - 抽出 `Transport`：Keil、Serial、pyOCD、文件回放、未来 USB/RTT/网络都走统一接口。
    - 抽出 `Decoder`：Raw、CSV、FireWater、JustFloat、HEX、后续自定义协议注册。
    - 抽出 `AcquisitionSession`：统一日志、样本、时间戳、错误状态和缓冲区。

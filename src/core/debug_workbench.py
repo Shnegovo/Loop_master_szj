@@ -83,6 +83,7 @@ class LineDecoration:
 class DebugBackendKind(str, Enum):
     NONE = "none"
     KEIL = "keil"
+    OPENOCD_GDB = "openocd_gdb"
     PYOCD = "pyocd"
     OFFLINE = "offline"
 

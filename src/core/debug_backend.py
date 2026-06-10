@@ -9,37 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from src.core.debug_snapshots import DebugPcLocation, RemoteBreakpointSnapshot, to_record
+
 if TYPE_CHECKING:
     from src.core.debug_workbench import DebugBackendKind, DebugWorkbenchStatus
-    from src.core.keil.commands import KeilBreakpointRemoteSnapshot
 
 
 @dataclass(frozen=True)
 class DebugBackendDiagnostic:
     key: str
     value: str
-
-
-@dataclass(frozen=True)
-class DebugPcLocation:
-    path: Path | None = None
-    line: int | None = None
-    address: int | None = None
-    function: str = ""
-    source: str = ""
-    complete: bool = False
-    message: str = ""
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "path": str(self.path) if self.path else "",
-            "line": self.line,
-            "address": self.address,
-            "function": self.function,
-            "source": self.source,
-            "complete": self.complete,
-            "message": self.message,
-        }
 
 
 @dataclass(frozen=True)
@@ -60,7 +39,7 @@ class DebugBackendSessionSnapshot:
     project_path: Path | None = None
     target_name: str = ""
     pc_location: DebugPcLocation | None = None
-    remote_breakpoint_snapshot: "KeilBreakpointRemoteSnapshot | None" = None
+    remote_breakpoint_snapshot: RemoteBreakpointSnapshot | None = None
     remote_breakpoint_snapshot_id: str = ""
 
     def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
@@ -83,12 +62,8 @@ class DebugBackendSessionSnapshot:
             "port": self.port,
             "project_path": str(self.project_path) if self.project_path else "",
             "target_name": self.target_name,
-            "pc_location": self.pc_location.to_record() if self.pc_location else None,
-            "remote_breakpoint_snapshot": (
-                self.remote_breakpoint_snapshot.to_record()
-                if self.remote_breakpoint_snapshot is not None
-                else None
-            ),
+            "pc_location": to_record(self.pc_location) if self.pc_location else None,
+            "remote_breakpoint_snapshot": to_record(self.remote_breakpoint_snapshot) if self.remote_breakpoint_snapshot is not None else None,
             "remote_breakpoint_snapshot_id": self.remote_breakpoint_snapshot_id,
             "status": {
                 "backend": self.status.backend.value,
