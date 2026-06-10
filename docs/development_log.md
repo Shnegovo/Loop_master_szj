@@ -3190,3 +3190,72 @@ Expose the new dry-run session controller in the Debug Workbench diagnostics wit
   - read session/target status only
   - do not Halt/Run/Step/sync breakpoints/write variables
   - if Keil is not reachable, add an OpenOCD/GDB or pyOCD read-only discovery path next
+
+## Milestone 36 Update - Real Variable Write Polish and F401 Probe Target
+
+### Goal
+
+Stop expanding dry-run-only scaffolding and push a real user-facing variable modification flow forward. The working rule for the next stages is:
+
+- Real function first.
+- Architecture is added only where it directly supports the real function being delivered.
+
+### Completed
+
+- Polished the existing pyOCD/ST-Link variable write path in the LoopMaster scope panel:
+  - replaced the native single-line input with the PCL-styled input dialog
+  - added an explicit PCL confirmation step before target writes
+  - confirmation shows variable name, address, type, current value and new value
+  - restore now has its own confirmation step
+  - success messages now state that write/restore was read-back verified
+  - restore keeps the first pre-write raw bytes so repeated writes can still recover the original value
+- Added local write audit logging:
+  - `loopmaster_variable_writes.jsonl`
+  - records write/restore action, variable, address, type, target state, sampling state and verified result
+  - added `文件 -> 查看变量写入记录`
+  - kept the audit file ignored as local runtime state
+- Added `tools\ui_variable_write_flow_probe.py`:
+  - fake backend, no hardware, offscreen UI
+  - verifies write button enablement gates
+  - verifies write calls carry address/type/value
+  - verifies temporary old raw bytes are captured
+  - verifies restore calls and clears state
+  - verifies input cancel and confirmation cancel do not touch the backend
+- Added a minimal Keil STM32F401CCU6 validation firmware:
+  - `firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`
+  - `main.c`
+  - `startup_stm32f401ccux.s`
+  - `f401_variable_probe.sct`
+  - `README.md`
+  - exposes `debug_setpoint`, `debug_feedback`, `debug_counter`, `debug_gain`, `debug_error`, `debug_flags`
+  - intended as the fixed target for LoopMaster/Keil/ST-Link variable read-write validation
+
+### Verified
+
+- `python -m py_compile src\ui\pcl_theme.py src\ui\gui.py tools\ui_variable_write_flow_probe.py`
+  - PASS.
+- `python tools\ui_variable_write_flow_probe.py`
+  - PASS.
+- `python tools\keil_project_probe.py --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS; local Keil/UVSOCK DLL is available, uVision is not currently running.
+
+### Notes
+
+- This stage improves the already-real pyOCD/ST-Link memory write path. It does not yet execute Keil UVSOCK variable writes.
+- Keil launch/connect feasibility exists locally, but the production Keil backend still reports `can_write_variables=False`.
+- The F401 project is deliberately small so the next live write stage has known symbols and a safe RAM-only target.
+
+### Next Target
+
+- Implement real Keil live variable modification against the F401 probe project:
+  - add a persistent UVSOCK session wrapper instead of one-shot preflight only
+  - wire `UVSC_DBG_VARIABLE_SET` and expression readback/eval wrappers
+  - keep RAM/type/readback safety gates consistent with the pyOCD path
+  - add a Keil project profile so LoopMaster can launch uVision with `.uvprojx`, target and port
+  - run the first smoke on the F401 variables (`debug_setpoint`, `debug_gain`, `debug_feedback`) before adding broader debugger features

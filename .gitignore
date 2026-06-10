@@ -13,6 +13,7 @@ dist/
 *.log
 *.tmp
 *.bak
+loopmaster_variable_writes.jsonl
 
 loopmaster.json
 

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListView,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -433,6 +434,17 @@ def apply_pcl_theme(app: QApplication) -> None:
         QPushButton#dialogPrimary:hover {{
             background: #4890f5;
             border-color: #4890f5;
+        }}
+        QPushButton#dialogSecondary {{
+            background: #f7fbff;
+            border: 1px solid #c9d9eb;
+            color: {TEXT};
+            min-width: 82px;
+        }}
+        QPushButton#dialogSecondary:hover {{
+            background: #eaf2fe;
+            border-color: {ACCENT_SOFT};
+            color: {ACCENT_DARK};
         }}
         QPushButton#debugBtn, QPushButton#debugPrimaryBtn {{
             min-height: 30px;
@@ -1566,6 +1578,82 @@ class PclMessageDialog(QDialog):
         layout.addLayout(buttons)
 
 
+class PclInputDialog(QDialog):
+    """Frameless PCL-style single-line input dialog."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        title: str,
+        message: str,
+        *,
+        text: str = "",
+        placeholder: str = "",
+        confirm_text: str = "确定",
+        cancel_text: str = "取消",
+        kind: str = "info",
+    ):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setObjectName("pclDialog")
+        self.setMinimumWidth(460)
+        self.setMaximumWidth(640)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 18, 18, 18)
+
+        card = QFrame()
+        card.setObjectName("pclDialogCard")
+        install_card_shadow(card, blur_radius=24, y_offset=7, alpha=48)
+        outer.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        icon = QLabel("!" if kind == "warning" else "i")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setObjectName("dialogIconWarning" if kind == "warning" else "dialogIconInfo")
+        head.addWidget(icon)
+
+        text_stack = QVBoxLayout()
+        text_stack.setSpacing(5)
+        title_label = QLabel(title)
+        title_label.setObjectName("dialogTitle")
+        body_label = QLabel(message)
+        body_label.setObjectName("dialogBody")
+        body_label.setWordWrap(True)
+        text_stack.addWidget(title_label)
+        text_stack.addWidget(body_label)
+        head.addLayout(text_stack, stretch=1)
+        layout.addLayout(head)
+
+        self.input = QLineEdit()
+        self.input.setText(text)
+        self.input.setPlaceholderText(placeholder)
+        self.input.selectAll()
+        layout.addWidget(self.input)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton(cancel_text)
+        cancel.setObjectName("dialogSecondary")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        ok = QPushButton(confirm_text)
+        ok.setObjectName("dialogPrimary")
+        ok.clicked.connect(self.accept)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+
+    def value(self) -> str:
+        return self.input.text()
+
+
 class PclLoadingDialog(QDialog):
     """Frameless loading dialog for long synchronous work."""
 
@@ -1609,6 +1697,108 @@ class PclLoadingDialog(QDialog):
 def show_pcl_message(parent: QWidget | None, title: str, message: str, kind: str = "info") -> int:
     dialog = PclMessageDialog(parent, title, message, kind)
     return dialog.exec()
+
+
+def ask_pcl_confirmation(
+    parent: QWidget | None,
+    title: str,
+    message: str,
+    *,
+    confirm_text: str = "继续",
+    cancel_text: str = "取消",
+    kind: str = "warning",
+) -> bool:
+    confirm = PclConfirmDialog(parent, title, message, confirm_text, cancel_text, kind)
+    return confirm.exec() == QDialog.Accepted
+
+
+class PclConfirmDialog(QDialog):
+    """Frameless PCL-style confirmation dialog."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        title: str,
+        message: str,
+        confirm_text: str = "继续",
+        cancel_text: str = "取消",
+        kind: str = "warning",
+    ):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setObjectName("pclDialog")
+        self.setMinimumWidth(430)
+        self.setMaximumWidth(620)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 18, 18, 18)
+
+        card = QFrame()
+        card.setObjectName("pclDialogCard")
+        install_card_shadow(card, blur_radius=24, y_offset=7, alpha=48)
+        outer.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        icon = QLabel("!" if kind == "warning" else "i")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setObjectName("dialogIconWarning" if kind == "warning" else "dialogIconInfo")
+        head.addWidget(icon)
+
+        text_stack = QVBoxLayout()
+        text_stack.setSpacing(4)
+        title_label = QLabel(title)
+        title_label.setObjectName("dialogTitle")
+        body_label = QLabel(message)
+        body_label.setObjectName("dialogBody")
+        body_label.setWordWrap(True)
+        text_stack.addWidget(title_label)
+        text_stack.addWidget(body_label)
+        head.addLayout(text_stack, stretch=1)
+        layout.addLayout(head)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton(cancel_text)
+        cancel.setObjectName("dialogSecondary")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        ok = QPushButton(confirm_text)
+        ok.setObjectName("dialogPrimary")
+        ok.clicked.connect(self.accept)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+
+
+def ask_pcl_text(
+    parent: QWidget | None,
+    title: str,
+    message: str,
+    *,
+    text: str = "",
+    placeholder: str = "",
+    confirm_text: str = "确定",
+    cancel_text: str = "取消",
+    kind: str = "info",
+) -> tuple[str, bool]:
+    dialog = PclInputDialog(
+        parent,
+        title,
+        message,
+        text=text,
+        placeholder=placeholder,
+        confirm_text=confirm_text,
+        cancel_text=cancel_text,
+        kind=kind,
+    )
+    ok = dialog.exec() == QDialog.Accepted
+    return dialog.value(), ok
 
 
 class PclHoverFilter(QObject):

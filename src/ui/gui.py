@@ -68,6 +68,8 @@ from src.ui.pcl_theme import (
     PclLoadingDialog,
     animate_page_enter,
     apply_pcl_theme,
+    ask_pcl_confirmation,
+    ask_pcl_text,
     install_card_shadow,
     polish_combo_popup,
     show_pcl_message,
@@ -421,6 +423,7 @@ class MainWindow(QMainWindow):
         self._probe_list: list[dict] = []
         self._pack_path: Optional[Path] = None
         self._config_path = Path("loopmaster.json")
+        self._variable_write_audit_path = Path("loopmaster_variable_writes.jsonl")
         self._recent_elf_path: Optional[Path] = None
         self._loaded_elf_this_session = False
         self._saved_monitored_variables: list[str] = []
@@ -1019,6 +1022,10 @@ class MainWindow(QMainWindow):
         act_log = QAction("查看日志", self)
         act_log.triggered.connect(self._on_view_log)
         self._file_menu.addAction(act_log)
+
+        act_write_audit = QAction("查看变量写入记录", self)
+        act_write_audit.triggered.connect(self._on_view_variable_write_audit)
+        self._file_menu.addAction(act_write_audit)
 
         act_exit = QAction("退出", self)
         act_exit.triggered.connect(self.close)
@@ -3937,6 +3944,78 @@ class MainWindow(QMainWindow):
             return str(int(round(value)))
         return f"{value:.7g}"
 
+    def _current_selected_value_text(self) -> str:
+        row = self._value_table.currentRow()
+        if row < 0 or not self._value_table.item(row, 1):
+            return ""
+        current_text = self._value_table.item(row, 1).text().strip()
+        return "" if current_text == "--" else current_text
+
+    def _confirm_variable_write(
+        self,
+        path: str,
+        addr: int,
+        ti: TypeInfo,
+        current_text: str,
+        value_text: str,
+    ) -> bool:
+        current = current_text or "未知"
+        sampling_note = "当前正在采样，写入会与采样读内存串行排队。" if self._collector.is_running else "目标已暂停，写入后会立即回读校验。"
+        message = (
+            f"变量：{path}\n"
+            f"地址：0x{addr:08X}\n"
+            f"类型：{format_type(ti)}\n"
+            f"当前值：{current}\n"
+            f"新值：{value_text.strip()}\n\n"
+            f"{sampling_note}\n"
+            "仅允许 RAM 中的基础数值/枚举变量，失败会拒绝或回滚。"
+        )
+        return ask_pcl_confirmation(
+            self,
+            "确认临时写入",
+            message,
+            confirm_text="写入",
+            cancel_text="取消",
+            kind="warning",
+        )
+
+    def _confirm_variable_restore(self, path: str, addr: int, ti: TypeInfo) -> bool:
+        message = (
+            f"变量：{path}\n"
+            f"地址：0x{addr:08X}\n"
+            f"类型：{format_type(ti)}\n\n"
+            "将恢复到本次会话第一次临时写入前保存的原始字节，并在写回后校验。"
+        )
+        return ask_pcl_confirmation(
+            self,
+            "确认恢复变量",
+            message,
+            confirm_text="恢复",
+            cancel_text="取消",
+            kind="warning",
+        )
+
+    def _append_variable_write_audit(self, action: str, path: str, addr: int, ti: TypeInfo, result: dict):
+        record = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "action": action,
+            "variable": path,
+            "address": f"0x{addr:08X}",
+            "type": format_type(ti),
+            "target_state": getattr(self, "_target_state_value", "--"),
+            "sampling": bool(self._collector.is_running),
+            "result": {
+                key: (value.hex() if isinstance(value, (bytes, bytearray)) else value)
+                for key, value in (result or {}).items()
+            },
+        }
+        try:
+            with open(self._variable_write_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+                f.write("\n")
+        except Exception as exc:
+            logger.warning("变量写入审计日志保存失败：%s", exc)
+
     def _on_halt_target(self):
         if not self._backend.is_connected:
             self._show_warning("暂停失败", "请先连接调试器。")
@@ -3966,20 +4045,25 @@ class MainWindow(QMainWindow):
             return
 
         addr, ti = self._registry[path]
-        current_text = ""
-        row = self._value_table.currentRow()
-        if row >= 0 and self._value_table.item(row, 1):
-            current_text = self._value_table.item(row, 1).text()
-            if current_text == "--":
-                current_text = ""
+        current_text = self._current_selected_value_text()
 
-        value, ok = QInputDialog.getText(
+        value, ok = ask_pcl_text(
             self,
             "临时写入变量",
-            f"{path}\n地址：0x{addr:08X}\n类型：{format_type(ti)}\n\n新值：",
+            f"{path}\n地址：0x{addr:08X}\n类型：{format_type(ti)}\n\n请输入新值，支持十进制或 0x 十六进制整数，浮点类型支持小数。",
             text=current_text,
+            placeholder="例如 60、0x3C、0.125",
+            confirm_text="下一步",
+            cancel_text="取消",
+            kind="info",
         )
         if not ok:
+            return
+        value = value.strip()
+        if not value:
+            self._show_warning("临时写入", "写入值不能为空。")
+            return
+        if not self._confirm_variable_write(path, addr, ti, current_text, value):
             return
 
         try:
@@ -3990,13 +4074,15 @@ class MainWindow(QMainWindow):
 
         if path not in self._temporary_writes:
             self._temporary_writes[path] = (addr, ti, result["old_raw"])
+        self._append_variable_write_audit("write", path, addr, ti, result)
         self._idle_read()
         self._refresh_debug_buttons()
         self._show_info(
             "临时写入完成",
             f"{self._short_value_name(path)}\n"
             f"{self._format_debug_value(result['old_value'])} -> "
-            f"{self._format_debug_value(result['new_value'])}",
+            f"{self._format_debug_value(result['new_value'])}\n"
+            "已回读校验，恢复按钮可回到首次写入前的原始值。",
         )
 
     def _on_restore_value(self):
@@ -4009,6 +4095,8 @@ class MainWindow(QMainWindow):
             return
 
         addr, ti, raw = self._temporary_writes[path]
+        if not self._confirm_variable_restore(path, addr, ti):
+            return
         try:
             result = self._backend.restore_variable_raw(addr, ti, raw)
         except Exception as e:
@@ -4016,11 +4104,13 @@ class MainWindow(QMainWindow):
             return
 
         self._temporary_writes.pop(path, None)
+        self._append_variable_write_audit("restore", path, addr, ti, result)
         self._idle_read()
         self._refresh_debug_buttons()
         self._show_info(
             "恢复完成",
-            f"{self._short_value_name(path)} 已恢复为 {self._format_debug_value(result['value'])}",
+            f"{self._short_value_name(path)} 已恢复为 {self._format_debug_value(result['value'])}\n"
+            "已回读校验。",
         )
 
     def _curve_color_names(self) -> list[str]:
@@ -4253,6 +4343,16 @@ class MainWindow(QMainWindow):
                 subprocess.Popen(["notepad.exe", log_path])
         else:
             self._show_info("日志", "日志文件尚未创建。")
+
+    def _on_view_variable_write_audit(self):
+        audit_path = self._variable_write_audit_path.resolve()
+        if audit_path.exists():
+            try:
+                os.startfile(audit_path)
+            except Exception:
+                subprocess.Popen(["notepad.exe", str(audit_path)])
+        else:
+            self._show_info("变量写入记录", "还没有变量写入或恢复记录。")
 
     def _on_import_pack(self):
         path = self._choose_open_file(

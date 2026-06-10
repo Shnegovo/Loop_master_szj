@@ -1,0 +1,7 @@
+Objects/
+Listings/
+*.uvguix.*
+*.uvoptx
+*.uvgui.*
+*.dep
+*.bak
