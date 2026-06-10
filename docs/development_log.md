@@ -2955,3 +2955,51 @@ Make saved source-path remaps survive provider rebuilds and config restore, so i
   - keep every action dry-run/read-only until an explicit hardware smoke stage
   - move new debug panels out of `gui.py` into registered workbench modules
   - add an explicit open-source license and update the README/release notes for public users
+
+## Milestone 32 Update - Public Repository Baseline
+
+### Goal
+
+Make the now-public repository understandable and legally usable for outside users without changing runtime behavior.
+
+### Completed
+
+- Switched `Shnegovo/Loop_master_szj` to `PUBLIC` on GitHub.
+- Verified unauthenticated access:
+  - repository page returns `200 OK`
+  - `v2.1.0` release asset redirects and returns `200 OK`
+  - release asset size is `100197322` bytes
+- Added a root `LICENSE` file using MIT License.
+- Rewrote `README.md` for the current v2.1 direction:
+  - release download link
+  - current capabilities
+  - dry-run/live-debug safety boundary
+  - source-run instructions
+  - hardware requirements
+  - development probes
+  - short-term and long-term roadmap
+
+### Verified
+
+- `python -m py_compile main.py src\ui\gui.py src\ui\debug_workbench_tab.py tools\ui_debug_source_provider_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `gh repo view Shnegovo/Loop_master_szj --json visibility,isPrivate,url`
+  - `visibility=PUBLIC`, `isPrivate=false`.
+- `gh release view v2.1.0 --repo Shnegovo/Loop_master_szj --json assets,url`
+  - release asset is present and uploaded.
+
+### Notes
+
+- This stage only changes public-facing docs/license and repository visibility.
+- No Keil, OpenOCD, pyOCD, GDB, `readelf`, ST-Link, serial hardware or target MCU access is used.
+- The installer is still unsigned, so Windows/browser reputation prompts are expected.
+
+### Next Target
+
+- Start the backend-neutral debug session contract:
+  - model session lifecycle, capabilities and command safety levels
+  - support Keil/OpenOCD-GDB/pyOCD/offline replay without live execution
+  - add no-hardware probes for contract behavior
+  - keep UI integration modular and avoid growing `gui.py`

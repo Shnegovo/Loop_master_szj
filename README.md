@@ -1,124 +1,111 @@
 # LoopMaster
 
-非侵入式 MCU 变量示波器 —— 通过 SWD 实时采样 ARM 微控制器内存变量，支持波形显示和结构体成员展开。
+LoopMaster 是一个面向嵌入式调试和调参的现代化桌面工作台。当前版本重点覆盖 MCU 变量示波、串口助手、源码/断点预览和后续 Keil/OpenOCD/pyOCD 调试链适配底座。
 
-## 功能
+目标体验不是复刻传统 IDE 的旧窗口，而是把示波、变量、串口、源码、断点和记录回放逐步整合成一个更流畅的调试面板。
 
-- **静态分析**：解析 ELF/AXF 固件，提取符号表、全局变量（含 DWARF 类型信息）、结构体/联合体内存布局
-- **实时示波器**：通过 CMSIS-DAP/DAPLink 探针非侵入式读取变量，实时绘制波形
-- **结构体展开**：支持递归展开结构体成员，可单独勾选每个成员进行监控
-- **采样率预设**：1/10/50/100/200/500/1000 Hz 一键切换，支持自定义
+## 下载
 
-## 安装
+Windows 用户可以直接下载 Release 安装包：
 
-```bash
-cd D:\PythonProjects\LoopMaster
-.venv\Scripts\activate
+- [LoopMaster_v2.1.exe](https://github.com/Shnegovo/Loop_master_szj/releases/download/v2.1.0/LoopMaster_v2.1.exe)
+
+如果 Windows Defender 或浏览器提示未知发布者，这是因为当前安装包还没有代码签名。
+
+## 当前能力
+
+- MCU 变量示波：解析 ELF/AXF 符号和 DWARF 类型，选择变量后通过调试探针读取 RAM 变量并绘制波形。
+- 多窗格示波器：支持多曲线、多窗格、变量分配、颜色和滚动视图。
+- 串口助手：支持串口收发和 VOFA 风格数据示波的基础工作流。
+- 调试工作台：支持 Keil 工程源码树、源码预览、断点可视化、命令预览和后端占位切换。
+- 源码来源配置：支持 Keil 工程、`compile_commands.json`、手动源码根、粘贴的 GDB `info sources` 文本、粘贴的 `readelf -wl` 文本。
+- 缺失源码映射：可以把导入清单里的缺失路径映射到本地源码根，并在后续重建源码清单时自动重放。
+- 关闭流程治理：应用关闭时会清理采样、串口和后台任务，避免主进程残留。
+
+## 调试链状态
+
+LoopMaster 正在向“现代化 Keil 外置调试面板 + 多后端调试工作台”推进。
+
+当前安全边界：
+
+- 已实现的是大量 dry-run、预览、解析和 UI 层能力。
+- Keil/OpenOCD/pyOCD/GDB 的实时控制能力仍在分阶段建设中。
+- 默认不会自动启动 Keil、OpenOCD、pyOCD、GDB 或 `readelf`。
+- 默认不会自动 Halt/Run/Step、写变量、刷写 Flash 或操作目标 MCU。
+- 未来任何写变量、同步断点、控制运行状态的能力都必须有明确 UI 状态、校验和日志。
+
+## 从源码运行
+
+建议使用 Python 3.11 或更新版本。
+
+```powershell
+git clone https://github.com/Shnegovo/Loop_master_szj.git
+cd Loop_master_szj
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python main.py
 ```
 
-requirements:
+也可以显式启动 scope 命令：
 
-```
-rich>=3.0
-PyYAML>=6.0
-openpyxl>=3.0
-pyocd>=0.36
-pyside6>=6.6
-pyqtgraph>=0.13
-numpy>=1.24
-```
-
-## 使用方法
-
-### 启动 GUI
-
-```bash
-# 直接启动（无需参数，启动后导入文件）
+```powershell
 python main.py scope
-
-# 带 ELF 文件启动
-python main.py scope input_files/Gimbal_G0B1.elf
-
-# 带 CMSIS-Pack 和指定目标
-python main.py scope input_files/Gimbal_G0B1.elf --pack path/to/STM32G0xx.pack --target stm32g0b1retx
+python main.py scope path\to\firmware.elf
 ```
 
-### GUI 操作流程
+## 常用 CLI
 
-1. **导入固件**：点击左侧面板顶部的 `Import ELF/AXF` 按钮，选择 .elf/.axf 文件
-2. **连接探针**：Probe → Scan Probes 扫描，然后 Connect 连接目标芯片
-3. **选择变量**：在左侧树中勾选要监控的变量；展开结构体可勾选单个成员
-4. **设置采样率**：点击预设按钮（1/10/50/100/200/500/1k Hz）或使用微调框自定义
-5. **开始/停止**：点击绿色 START 按钮开始采样，红色 STOP 停止
-6. **导出**：Export CSV 导出时间序列数据
-
-### 状态指示
-
-- 状态栏 ● 红色 = 探针未连接，● 绿色 = 已连接
-- 状态栏右侧显示实际采样率
-
-### CLI 命令
-
-```bash
-# 查看 ELF 基本信息
-python main.py info input_files/Gimbal_G0B1.elf
-
-# 列出符号表
-python main.py symbols input_files/Gimbal_G0B1.elf
-python main.py symbols input_files/Gimbal_G0B1.elf --internal       # 含内部符号
-python main.py symbols input_files/Gimbal_G0B1.elf -o csv --output-file output/symbols.csv
-
-# 列出全局变量（含 DWARF 类型信息）
-python main.py variables input_files/Gimbal_G0B1.elf
-python main.py variables input_files/Gimbal_G0B1.elf --filter gimbal
-python main.py variables input_files/Gimbal_G0B1.elf --sort name
-python main.py variables input_files/Gimbal_G0B1.elf -o json --output-file output/vars.json
-python main.py variables input_files/Gimbal_G0B1.elf -o excel --output-file output/vars.xlsx
-
-# 查看结构体内存布局
-python main.py struct input_files/Gimbal_G0B1.elf --list            # 列出所有结构体
-python main.py struct input_files/Gimbal_G0B1.elf -n __DMA_HandleTypeDef
-python main.py struct input_files/Gimbal_G0B1.elf -n __DMA_HandleTypeDef -o json
+```powershell
+python main.py info path\to\firmware.elf
+python main.py symbols path\to\firmware.elf
+python main.py variables path\to\firmware.elf
+python main.py struct path\to\firmware.elf --list
 ```
 
 ## 硬件要求
 
-- **调试探针**：CMSIS-DAP / DAPLink（自动检测）
-- **目标芯片**：ARM Cortex-M 系列（SWD 连接）
-- **接线**：SWCLK + SWDIO + GND
+基础变量示波需要：
 
-## 配置
+- ARM Cortex-M 目标芯片
+- CMSIS-DAP、DAPLink、ST-Link 等 pyOCD 可识别调试探针
+- SWDIO、SWCLK、GND 正确连接
 
-`config/settings.yaml`：
+串口助手需要：
 
-```yaml
-scope:
-  swd_freq: 4000000      # SWD 时钟频率 (Hz)
-  sample_rate: 100        # 默认采样率
-  buffer_seconds: 10      # 默认缓冲区时长（秒）
+- Windows 可识别的串口设备
+- 正确的 TX/RX/GND 接线
 
-parser:
-  dwarf:
-    max_type_depth: 10    # 类型展开最大深度
+## 开发与验证
 
-  output:
-    default_format: table # table/csv/json/excel
-    csv_delimiter: ","
-    excel_sheet_name: Variables
+本仓库包含一些无硬件探针脚本，用于验证 UI、源码清单和调试工作台基础行为：
+
+```powershell
+python tools\debug_source_manifest_probe.py
+python tools\ui_debug_source_provider_probe.py
+python tools\debug_backend_registry_probe.py
+python tools\debug_transaction_shell_probe.py
 ```
 
-## 文件夹结构
+UI 相关修改建议同时运行对应截图探针，并人工检查输出截图。
 
-```
-LoopMaster/
-  main.py                  # 入口
-  config/settings.yaml     # 配置
-  input_files/             # 固件文件 (.elf, .map)
-  output/                  # 输出文件
-  src/
-    core/                  # 核心：数据模型、采样引擎、SWD 后端
-    parser/                # ELF/DWARF 解析、变量清单、结构体布局
-    ui/                    # CLI + GUI
-    utils/                 # 导出器 (CSV/JSON/Excel/Rich)
-```
+## 路线
+
+短期重点：
+
+- 完善 Release 说明、校验值和后续代码签名。
+- 建立 backend-neutral 的调试 session contract。
+- 让 Keil、OpenOCD/GDB、pyOCD 和离线回放共享同一套源码、断点、命令、状态和审计模型。
+- 在不碰硬件的 dry-run 探针里先把 UI/架构跑稳。
+
+长期方向：
+
+- Keil UVSOCK / Debug Commands 只读连接。
+- 变量 Watch、写变量、读回校验、审计日志。
+- 可视化断点、当前 PC、调用栈、寄存器、内存视图和 Fault 分析。
+- SWO/ITM/RTT、USB CDC/HID、UDP/TCP、BLE、Modbus 等多数据源。
+- PID 调参辅助、记录回放、硬件在环测试和报告导出。
+
+## 许可证
+
+本项目使用 MIT License，详见 [LICENSE](LICENSE)。
