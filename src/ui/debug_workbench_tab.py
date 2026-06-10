@@ -662,6 +662,7 @@ class DebugWorkbenchTab(QWidget):
             ("disconnect", "断开"),
             ("halt", "暂停"),
             ("run", "运行"),
+            ("write_variables", "写变量"),
         ):
             button = QPushButton(title)
             button.setObjectName("debugActionButton")
@@ -1674,10 +1675,19 @@ class DebugWorkbenchTab(QWidget):
         actions = {action.key: action for action in self._session.actions()}
         for key, button in self._action_buttons.items():
             action = actions.get(key, DebugAction(key, button.text(), False, "等待后端状态"))
-            enabled = bool(action.enabled and self._backend_controls_ready)
+            explicit_keil_write = (
+                key == "write_variables"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value in {"keil_attached", "paused", "running"}
+            )
+            enabled = bool((action.enabled or explicit_keil_write) and self._backend_controls_ready)
             button.setEnabled(enabled)
             if enabled:
-                button.setToolTip(action.title)
+                if explicit_keil_write and not action.enabled:
+                    button.setToolTip("显式通过 Keil/UVSOCK 写变量，写入前会再次确认")
+                else:
+                    button.setToolTip(action.title)
             elif action.enabled and not self._backend_controls_ready:
                 button.setToolTip("等待调试后端控制器接入")
             else:

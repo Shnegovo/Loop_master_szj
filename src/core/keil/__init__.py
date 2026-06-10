@@ -52,6 +52,14 @@ from src.core.keil.uvsock import (
     start_uvision_uvsock,
     uvsc_status_name,
 )
+from src.core.keil.live_write import (
+    KeilLiveVariableWriteRequest,
+    KeilLiveVariableWriteResult,
+    KeilResolvedVariable,
+    resolve_keil_live_variable,
+    write_keil_live_variable,
+    write_keil_live_variable_existing,
+)
 
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
@@ -72,6 +80,9 @@ __all__ = [
     "KeilProjectFile",
     "KeilTarget",
     "KeilRemoteBreakpoint",
+    "KeilLiveVariableWriteRequest",
+    "KeilLiveVariableWriteResult",
+    "KeilResolvedVariable",
     "KeilUvscLiveSession",
     "UvscError",
     "UvscConnectionResult",
@@ -94,8 +105,11 @@ __all__ = [
     "parse_keil_project",
     "project_summary_lines",
     "read_pe_exports",
+    "resolve_keil_live_variable",
     "run_uvsock_smoke",
     "start_uvision_uvsock",
     "transaction_by_key",
+    "write_keil_live_variable",
+    "write_keil_live_variable_existing",
     "uvsc_status_name",
 ]

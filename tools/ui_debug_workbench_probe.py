@@ -614,12 +614,17 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"read-only attach diagnostic mismatch {key}: {diag!r}")
             blocked_actions = [
                 key
-                for key in ("halt", "run", "step", "sync_breakpoints", "write_variables")
+                for key in ("halt", "run", "step", "sync_breakpoints")
                 if getattr(tab, "_action_buttons", {}).get(key) is not None
                 and getattr(tab, "_action_buttons", {})[key].isEnabled()
             ]
             if blocked_actions:
                 issues.append(f"read-only attach enabled dangerous actions: {blocked_actions!r}")
+            write_button = getattr(tab, "_action_buttons", {}).get("write_variables")
+            if write_button is None or not write_button.isEnabled():
+                issues.append("read-only attach should expose explicit Keil live write action")
+            elif "确认" not in write_button.toolTip() and "显式" not in write_button.toolTip():
+                issues.append(f"Keil live write action tooltip should mention explicit confirmation: {write_button.toolTip()!r}")
             sync_transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
             sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
             if "waiting_remote_snapshot=true" not in sync_text and "等待远端断点快照" not in sync_text:

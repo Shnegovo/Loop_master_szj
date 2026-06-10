@@ -13,6 +13,11 @@ from src.core.debug_backend import (
     now_iso,
 )
 from src.core.keil.commands import KeilBreakpointRemoteSnapshot
+from src.core.keil.live_write import (
+    KeilLiveVariableWriteRequest,
+    KeilLiveVariableWriteResult,
+    write_keil_live_variable_existing,
+)
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugCapabilities,
@@ -116,6 +121,19 @@ class KeilUvSockBackendAdapter:
             project_path=project_path or status.project_path,
             target_name=target_name or status.target_name,
             connection_attempted=bool(connection and connection.attempted),
+        )
+
+    def write_live_variable(
+        self,
+        request: KeilLiveVariableWriteRequest,
+        *,
+        require_debug: bool = True,
+    ) -> KeilLiveVariableWriteResult:
+        return write_keil_live_variable_existing(
+            request,
+            keil_root=self.config.root,
+            port=self.config.port,
+            require_debug=require_debug,
         )
 
     def _snapshot(

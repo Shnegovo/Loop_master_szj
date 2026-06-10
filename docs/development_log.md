@@ -3421,3 +3421,116 @@ and read it back.
   - stop/start controls using the already exported UVSOCK halt/run functions
 - Keep investigating expression and `UVSC_DBG_VARIABLE_SET` for richer watch
   semantics, but do not block the UI integration on them.
+
+## Milestone 39 Update - Debug Workbench Keil Live Variable Write
+
+### Goal
+
+Move the verified Keil/F401 write path from probe scripts into the actual Debug
+Workbench UI while keeping the default Keil attach path read-only.
+
+### Completed
+
+- Added reusable Keil live write service:
+  - `src/core/keil/live_write.py`
+  - request/result models for explicit live writes
+  - direct RAM write path using AXF/ELF symbol resolution
+  - Keil Command Window assignment fallback using `UVSC_DBG_EXEC_CMD`
+  - old/new/readback bytes and scalar formatting for audit/UI diagnostics
+  - DWARF struct-member resolution for expressions such as `AnglePID.Kp`
+- Added `KeilUvSockBackendAdapter.write_live_variable(...)` as the explicit
+  target-write entry point.
+- Kept `read_only_session_snapshot()` behavior unchanged:
+  - `can_write_variables=False`
+  - no halt/run/write capability is silently enabled by attach
+  - existing read-only adapter probes still pass
+- Added a Debug Workbench `写变量` action button.
+  - It is only enabled when Keil is attached/paused/running and the backend
+    controls are ready.
+  - It remains a separate explicit action instead of changing the meaning of
+    read-only attach.
+- Wired `MainWindow._write_keil_live_variable_from_workbench()`:
+  - prompts for variable/expression and value
+  - auto-discovers AXF from the loaded ELF or current Keil project target output
+  - shows a second confirmation before writing
+  - calls the Keil adapter live write method
+  - appends JSONL audit records to `loopmaster_variable_writes.jsonl`
+  - shows the last live write result in Debug Workbench diagnostics
+- Added `tools/keil_live_write_service_probe.py`:
+  - no-hardware fake-session coverage for scalar RAM writes
+  - `SpeedLevel` uint16 write coverage
+  - `AnglePID.Kp` struct-member float write coverage
+  - memory failure -> command assignment fallback coverage
+- Updated `tools/ui_debug_workbench_probe.py` so it treats `写变量` as a
+  deliberate explicit Keil action while still blocking halt/run/step/sync in
+  read-only contexts.
+
+### Balance-Car Reference Notes
+
+- Reference project:
+  `D:\学习资料\平衡车\平衡车入门教程资料\程序源码\平衡车程序\00-平衡车测试程序\平衡车测试程序-V1.0\Project.uvprojx`
+- Target: `Target 1`, device `STM32F103C8`.
+- Expected AXF output:
+  `D:\学习资料\平衡车\平衡车入门教程资料\程序源码\平衡车程序\00-平衡车测试程序\平衡车测试程序-V1.0\Objects\Project.axf`
+- Current reference folder has no built AXF yet, so LoopMaster will currently
+  fall back to Keil command assignment if the project is open in uVision Debug.
+- Best first write/read demo variables:
+  - write: `SpeedLevel`, `AngleAcc_Offset`, `AnglePID.Kp`, `AnglePID.Kd`
+  - read/scope: `Angle`, `AveSpeed`, `PWML`, `PWMR`
+- Avoid unsafe first demos:
+  - `RunFlag=1`
+  - direct PWM writes on a powered motor setup
+  - persistent store array writes such as `Store_Data`
+
+### Verified
+
+- `python -m py_compile src/core/keil/live_write.py src/core/keil/backend.py src/ui/debug_workbench_tab.py src/ui/gui.py tools/keil_live_write_service_probe.py tools/ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools/keil_live_write_service_probe.py`
+  - PASS.
+- `python tools/keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py --keil-root D:\Keil`
+  - PASS; uVision was not running, read-only discovery stayed safe.
+- `python tools/debug_workbench_model_probe.py`
+  - PASS.
+- `python tools/debug_session_contract_probe.py`
+  - PASS.
+- `python tools/keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools/keil_command_transaction_probe.py`
+  - PASS.
+- `python tools/debug_backend_registry_probe.py`
+  - PASS.
+- `python tools/ui_debug_source_provider_probe.py --output-dir tools/ui-debug-source-provider-live-write`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-live-write --width 1440 --height 900`
+  - PASS.
+- `python tools/keil_live_write_probe.py --keil-root D:\Keil --port 4827`
+  - PASS preflight-only; UVSOCK DLL loads, uVision is not currently running.
+
+### Notes
+
+- This stage adds a real UI execution path. A successful actual write still
+  depends on Keil/uVision being in Debug mode on a project/target, or on the
+  next stage's automatic launch/config profile.
+- For expressions with a built AXF, memory write is preferred because it gives
+  deterministic bytes and readback. For expressions without AXF, the Keil
+  command assignment fallback can still write variables visible to uVision.
+- Struct-member writes are now possible when DWARF debug info exists. This is
+  important for real PID work such as `AnglePID.Kp` / `SpeedPID.Target`.
+
+### Next Target
+
+- Build the Keil debug profile layer:
+  - project path, target, port, AXF, Keil root
+  - "launch uVision with UVSOCK" button/path
+  - "build selected project" helper and readable failure output
+  - reusable profile for the F401 probe and the F103 balance-car reference
+- Add first variable preset panel for Keil:
+  - safe write candidates from the balance-car project
+  - read/scope-only candidates for angle/speed/PWM
+  - range hints for PID-friendly tuning
+- Add Keil halt/run implementation behind explicit controls and probes.

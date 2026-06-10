@@ -57,6 +57,8 @@ from src.core.debug_transactions import (
     debug_transaction_by_key,
 )
 from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
+from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
+from src.core.keil.project import parse_keil_project
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
     Variable, TypeInfo, BaseType, StructType, ArrayType,
@@ -444,6 +446,8 @@ class MainWindow(QMainWindow):
         self._debug_command_history = DebugCommandHistory(max_entries=64)
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
+        self._debug_backend_diagnostics: tuple[tuple[str, str], ...] = ()
+        self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
         self._debug_source_preview_manifest: SourceManifest | None = None
         self._debug_command_preview_suspended = False
         self._debug_source_provider_key = "auto"
@@ -2053,6 +2057,9 @@ class MainWindow(QMainWindow):
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
+        if action_key == "write_variables":
+            self._write_keil_live_variable_from_workbench()
+            return
         if hasattr(self, "_sb_label"):
             self._sb_label.setText("该调试动作尚未接入后端。")
 
@@ -2079,6 +2086,8 @@ class MainWindow(QMainWindow):
         self._debug_session_controller.set_backend(kind)
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
+        self._debug_backend_diagnostics = ()
+        self._debug_last_live_write_result = None
         tab = self._tab_debug_workbench
         status = make_debug_status(
             state=DebugRuntimeState.DISCONNECTED,
@@ -2724,6 +2733,7 @@ class MainWindow(QMainWindow):
             )
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
+            self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
@@ -2738,6 +2748,7 @@ class MainWindow(QMainWindow):
                 error=message,
             )
             diagnostics = self._debug_workbench_error_diagnostics(message)
+            self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_session_controller.mark_error(
                 message,
                 project_path=previous.project_path,
@@ -2775,6 +2786,7 @@ class MainWindow(QMainWindow):
             )
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
+            self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
@@ -2789,6 +2801,7 @@ class MainWindow(QMainWindow):
                 error=message,
             )
             diagnostics = self._debug_workbench_error_diagnostics(message)
+            self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_session_controller.mark_error(
                 message,
                 project_path=previous.project_path,
@@ -2805,6 +2818,211 @@ class MainWindow(QMainWindow):
 
     def _connect_keil_read_only_for_debug_workbench(self):
         self._connect_debug_backend_read_only_for_workbench()
+
+    def _write_keil_live_variable_from_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 写变量", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "write_live_variable"):
+            self._show_warning("Keil 写变量", "当前 Keil 后端尚未提供写变量执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if status.state not in {
+            DebugRuntimeState.KEIL_ATTACHED,
+            DebugRuntimeState.PAUSED,
+            DebugRuntimeState.RUNNING,
+        }:
+            self._show_warning("Keil 写变量", "请先连接 Keil 调试会话。")
+            return
+
+        default_expr = self._default_keil_live_write_expression()
+        default_value = "6000" if default_expr == "debug_setpoint" else ""
+        text, ok = ask_pcl_text(
+            self,
+            "Keil Live 写变量",
+            (
+                "第一行填写变量或表达式，第二行填写新值。\n"
+                "示例：debug_setpoint\\n6000，或 AnglePID.Kp\\n40.0。"
+            ),
+            text=f"{default_expr}\n{default_value}".strip(),
+            placeholder="变量名\n新值",
+            confirm_text="下一步",
+            cancel_text="取消",
+            kind="warning",
+        )
+        if not ok:
+            return
+        try:
+            expression, value_text = self._parse_keil_live_write_text(text)
+        except ValueError as exc:
+            self._show_warning("Keil 写变量", str(exc))
+            return
+
+        axf = self._current_debug_axf_path()
+        request = KeilLiveVariableWriteRequest(
+            expression=expression,
+            value_text=value_text,
+            axf_path=axf,
+            prefer_memory=bool(axf),
+            allow_command_fallback=True,
+            connection_name="LoopMasterLiveWrite",
+        )
+        if not self._confirm_keil_live_write(request, status):
+            return
+
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"正在通过 Keil 写入 {expression}...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = self._debug_backend.write_live_variable(request)
+        except Exception as exc:
+            result = KeilLiveVariableWriteResult(
+                attempted=True,
+                written=False,
+                expression=expression,
+                value_text=value_text,
+                method="backend",
+                error=str(exc),
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_last_live_write_result = result
+        self._append_keil_live_write_audit(result)
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        if result.written:
+            self._show_info("Keil 写变量完成", result.summary())
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(result.summary())
+            self._connect_debug_backend_read_only_for_workbench()
+        else:
+            self._show_warning("Keil 写变量失败", result.summary())
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(result.summary())
+
+    def _parse_keil_live_write_text(self, text: str) -> tuple[str, str]:
+        lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+        if len(lines) < 2:
+            raise ValueError("请至少填写两行：变量名和新值。")
+        expression = lines[0]
+        value_text = lines[1]
+        if not expression:
+            raise ValueError("变量名不能为空。")
+        if not value_text:
+            raise ValueError("新值不能为空。")
+        return expression, value_text
+
+    def _default_keil_live_write_expression(self) -> str:
+        if self._elf_path and self._elf_path.name.lower() == "f401_variable_probe.axf":
+            return "debug_setpoint"
+        status = self._tab_debug_workbench.debug_status if hasattr(self, "_tab_debug_workbench") else None
+        project_path = status.project_path if status is not None else None
+        if project_path and project_path.name.lower() == "project.uvprojx":
+            return "SpeedLevel"
+        return "debug_setpoint"
+
+    def _current_debug_axf_path(self) -> Path | None:
+        candidates: list[Path] = []
+        for path in (getattr(self, "_elf_path", None), getattr(self, "_recent_elf_path", None)):
+            if path:
+                candidates.append(Path(path))
+        status = self._tab_debug_workbench.debug_status if hasattr(self, "_tab_debug_workbench") else None
+        project_path = status.project_path if status is not None else None
+        target_name = status.target_name if status is not None else ""
+        if project_path:
+            candidates.extend(self._debug_axf_candidates_from_project(project_path, target_name))
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve()
+            except OSError:
+                continue
+            if resolved.exists() and resolved.suffix.lower() in {".axf", ".elf", ".out"}:
+                return resolved
+        return None
+
+    def _debug_axf_candidates_from_project(self, project_path: Path, target_name: str = "") -> list[Path]:
+        try:
+            project = parse_keil_project(project_path)
+        except Exception:
+            return []
+        candidates: list[Path] = []
+        target = None
+        if target_name:
+            for item in project.targets:
+                if item.name == target_name:
+                    target = item
+                    break
+        target = target or project.default_target
+        if target is not None and target.output_path is not None:
+            candidates.append(target.output_path)
+        project_dir = Path(project_path).expanduser().resolve().parent
+        for name in (project.name, "Project", "project"):
+            candidates.append(project_dir / "Objects" / f"{name}.axf")
+        return candidates
+
+    def _confirm_keil_live_write(self, request: KeilLiveVariableWriteRequest, status) -> bool:
+        axf_text = str(request.axf_path) if request.axf_path else "未找到，将尝试 Keil 命令窗口赋值"
+        message = (
+            f"变量：{request.expression}\n"
+            f"新值：{request.value_text}\n"
+            f"工程：{status.project_path or '--'}\n"
+            f"AXF：{axf_text}\n\n"
+            "这会通过 UVSOCK 改变真实 MCU 调试会话中的变量。"
+            "优先走 RAM 内存写入并回读校验，解析失败会退回 Keil 命令窗口赋值。"
+        )
+        return ask_pcl_confirmation(
+            self,
+            "确认 Keil Live 写变量",
+            message,
+            confirm_text="写入",
+            cancel_text="取消",
+            kind="warning",
+        )
+
+    def _append_keil_live_write_audit(self, result: KeilLiveVariableWriteResult) -> None:
+        record = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "action": "keil_live_write",
+            "result": result.to_record(),
+        }
+        try:
+            with open(self._variable_write_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+                f.write("\n")
+        except Exception as exc:
+            logger.warning("Keil 写变量审计日志保存失败：%s", exc)
+
+    def _refresh_debug_workbench_diagnostics(self) -> None:
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ()) or self._debug_workbench_idle_diagnostics())
+        self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
+
+    def _keil_live_write_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_last_live_write_result", None)
+        if result is None:
+            return ()
+        rows = [
+            ("Keil 写变量", "成功" if result.written else "失败"),
+            ("写入目标", result.expression),
+            ("写入方法", result.method or "--"),
+        ]
+        if result.resolved is not None:
+            rows.extend(
+                [
+                    ("写入地址", f"0x{result.resolved.address:08X}"),
+                    ("写入类型", result.resolved.type_name or "--"),
+                ]
+            )
+        if result.readback_value:
+            rows.append(("写后回读", result.readback_value))
+        if result.error:
+            rows.append(("写入错误", result.error))
+        return tuple(rows)
 
     def _sync_debug_command_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -2903,7 +3121,7 @@ class MainWindow(QMainWindow):
         enabled = [command.key for command in commands if command.enabled_by_state]
         executable = [command.key for command in commands if command.execution_enabled]
         policy = controller.safety_policy
-        rows = tuple(diagnostics) + (
+        rows = tuple(diagnostics) + self._keil_live_write_diagnostics() + (
             ("会话合同", f"{snapshot.display_name} / {snapshot.state.value}"),
             ("目标状态", snapshot.target_state.value),
             ("安全策略", "dry-run" if policy.dry_run else policy.label),
