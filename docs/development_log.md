@@ -2652,3 +2652,58 @@ Make lower-level serial and SWD shutdown failures visible to controllers and the
 ### Next Target
 
 - Add data-only backend lifecycle metadata to the debug backend registry, so future Keil/OpenOCD/pyOCD workers can be listed and audited before any real worker is introduced.
+
+## Milestone 30 Update - Debug Backend Lifecycle Metadata
+
+### Goal
+
+Add data-only backend lifecycle metadata so Keil, OpenOCD/GDB, pyOCD and offline replay backends can declare future worker/shutdown behavior before any live debug worker is introduced.
+
+### Completed
+
+- Added `DebugBackendWorkerState` and `DebugBackendWorkerLifecycleRegistration`.
+- `DebugBackendDescriptor` can now carry lifecycle registration data without changing the adapter factory contract.
+- `DebugBackendRegistry.lifecycle()` and `DebugBackendRegistry.lifecycles()` expose lifecycle metadata without creating adapters.
+- Default Keil, OpenOCD/GDB, pyOCD and offline replay registrations now declare:
+  - no autostart
+  - read-only-first
+  - no default process launch
+  - no default probe connection
+  - no default target write
+- Kept `DebugBackendDescriptor` constructor compatibility by appending the new lifecycle field after existing fields.
+- Extended `tools\debug_backend_registry_probe.py` to verify lifecycle data is serializable, data-only, and does not call backend factories.
+
+### Verified
+
+- `python -m py_compile src\core\debug_backend.py src\core\debug_backend_registry.py src\core\debug_transactions.py src\core\lifecycle.py tools\debug_backend_registry_probe.py tools\debug_transaction_shell_probe.py tools\lifecycle_shutdown_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\lifecycle_shutdown_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir %TEMP%\loopmaster-stage-lifecycle-ui --width 1440 --height 900`
+  - PASS.
+- `python tools\ui_close_process_probe.py --scenario stuck-serial-worker --exit-timeout 10 --settle 1.0`
+  - PASS, close-to-exit about `1250.5ms`.
+- `python tools\serial_controller_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS, actual rate about `246.8Hz`.
+
+### Notes
+
+- This stage is registry/model-only.
+- No live debugger process is launched.
+- No ST-Link, Keil session, OpenOCD, pyOCD, GDB, serial hardware or target MCU access is used.
+- UI backend option tuples remain `(key, label, note)`; lifecycle metadata is not pushed into the selector contract.
+- Backend factory constructors must remain side-effect-free. Future OpenOCD/pyOCD/Keil worker startup belongs behind explicit opt-in actions and shutdown-report registration.
+
+### Next Target
+
+- Return to explicit source/path mapping actions:
+  - add file/directory selection for `compile_commands.json`, manual roots, ELF/DWARF and GDB text previews
+  - show missing-source diagnostics and path-mapping hints
+  - keep all providers backend-neutral so Keil, OpenOCD/GDB and pyOCD share the same `SourceManifest` route
+  - later surface lifecycle metadata in diagnostics without changing backend selector tuple shape

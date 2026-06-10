@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from src.core.debug_backend import DebugBackendAdapter
+from src.core.debug_backend import (
+    DebugBackendAdapter,
+    DebugBackendWorkerLifecycleRegistration,
+)
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugRuntimeState,
@@ -36,9 +39,19 @@ class DebugBackendDescriptor:
     factory: DebugBackendFactory
     read_only_first: bool = True
     notes: str = ""
+    lifecycle: DebugBackendWorkerLifecycleRegistration | None = None
 
     def create(self) -> DebugBackendAdapter:
         return self.factory()
+
+    def lifecycle_registration(self) -> DebugBackendWorkerLifecycleRegistration:
+        if self.lifecycle is not None:
+            return self.lifecycle
+        return DebugBackendWorkerLifecycleRegistration(
+            worker_key=self.kind.value,
+            read_only_first=self.read_only_first,
+            notes=self.notes,
+        )
 
 
 class DebugBackendRegistry:
@@ -60,6 +73,18 @@ class DebugBackendRegistry:
             return self._descriptors[backend_kind]
         except KeyError as exc:
             raise KeyError(f"debug backend is not registered: {backend_kind.value}") from exc
+
+    def lifecycle(
+        self,
+        kind: DebugBackendKind | str,
+    ) -> DebugBackendWorkerLifecycleRegistration:
+        return self.descriptor(kind).lifecycle_registration()
+
+    def lifecycles(self) -> tuple[DebugBackendWorkerLifecycleRegistration, ...]:
+        return tuple(
+            descriptor.lifecycle_registration()
+            for descriptor in self._descriptors.values()
+        )
 
     def create(self, kind: DebugBackendKind | str) -> DebugBackendAdapter:
         return self.descriptor(kind).create()
@@ -170,6 +195,11 @@ def create_default_debug_backend_registry(
             factory=lambda: KeilUvSockBackendAdapter(
                 KeilBackendConfig(root=root, port=port)
             ),
+            lifecycle=DebugBackendWorkerLifecycleRegistration(
+                worker_key="keil_uvsock",
+                read_only_first=True,
+                notes="Keil UVSOCK 后端先以显式 opt-in 只读连接为边界，默认不启动进程、不连接探针、不写目标。",
+            ),
             read_only_first=True,
             notes="Keil is the first real backend; all live control remains opt-in.",
         )
@@ -203,10 +233,27 @@ def _register_unavailable_placeholders(registry: DebugBackendRegistry) -> None:
                 kind=kind,
                 display_name=display_name,
                 factory=lambda k=kind, name=display_name, text=detail: UnavailableDebugBackend(k, name, text),
+                lifecycle=DebugBackendWorkerLifecycleRegistration(
+                    worker_key=_worker_key_for_backend(kind),
+                    read_only_first=True,
+                    notes=f"{detail} 当前仅登记生命周期元数据，不启动外部进程。",
+                ),
                 read_only_first=True,
                 notes=detail,
             )
         )
+
+
+def _worker_key_for_backend(kind: DebugBackendKind) -> str:
+    if kind == DebugBackendKind.KEIL:
+        return "keil_uvsock"
+    if kind == DebugBackendKind.OPENOCD_GDB:
+        return "openocd_gdb"
+    if kind == DebugBackendKind.PYOCD:
+        return "pyocd"
+    if kind == DebugBackendKind.OFFLINE:
+        return "offline"
+    return kind.value
 
 
 def _coerce_backend_kind(kind: DebugBackendKind | str) -> DebugBackendKind:

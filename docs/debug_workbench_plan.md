@@ -87,6 +87,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 已加入 ELF/DWARF source provider，可解析已捕获的 `readelf -wl` 行号表，或通过现有 readelf 路径从 AXF/ELF 生成同一套 `SourceManifest`。
 - 已把非 Keil `SourceManifest` 接入 Debug Workbench 源码树预览：OpenOCD/GDB、pyOCD、离线回放占位后端能复用当前源码树或安全 fallback，不再只有空后端下拉框。
 - 已加入源码来源选择器和路径诊断 chips，可显式选择自动、Keil 工程、编译数据库、源码根、ELF/DWARF 和 GDB 文本预览；后两者当前仅显示待接入，不自动启动外部工具。
+- 已加入 debug backend lifecycle metadata：Keil、OpenOCD/GDB、pyOCD、离线回放可以先声明 worker/process、opt-in、shutdown/report 参与方式，仍不启动外部调试进程。
 - 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
@@ -94,7 +95,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 1. 退出残留硬化
    - 已加入 shutdown report，关闭步骤会记录 stop timers、backend shutdown request、sampling、serial、config save、backend disconnect 的耗时和失败原因。
    - 已补充 sampling、slow-sampling、serial-worker、stuck-serial-worker 进程级关闭探针。
-   - 下一步把未来 Keil/OpenOCD/pyOCD debug worker 也登记到同一套 lifecycle/report 里。
+   - 未来真正引入 Keil/OpenOCD/pyOCD debug worker 时，必须先接入 backend lifecycle metadata 和 shutdown report，再开放 opt-in 执行。
    - 继续保持关闭期禁止新的 pyOCD/Keil/串口读写进入。
 
 2. 架构底座

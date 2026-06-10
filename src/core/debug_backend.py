@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -19,6 +20,39 @@ if TYPE_CHECKING:
 class DebugBackendDiagnostic:
     key: str
     value: str
+
+
+class DebugBackendWorkerState(str, Enum):
+    REGISTERED = "registered"
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class DebugBackendWorkerLifecycleRegistration:
+    worker_key: str
+    state: DebugBackendWorkerState = DebugBackendWorkerState.REGISTERED
+    autostart: bool = False
+    read_only_first: bool = True
+    may_start_process: bool = False
+    may_connect_probe: bool = False
+    may_write_target: bool = False
+    notes: str = ""
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "worker_key": self.worker_key,
+            "state": self.state.value,
+            "autostart": self.autostart,
+            "read_only_first": self.read_only_first,
+            "may_start_process": self.may_start_process,
+            "may_connect_probe": self.may_connect_probe,
+            "may_write_target": self.may_write_target,
+            "notes": self.notes,
+        }
 
 
 @dataclass(frozen=True)
