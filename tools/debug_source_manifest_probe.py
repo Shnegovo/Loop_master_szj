@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from src.core.debug_sources import (  # noqa: E402
     source_entries_from_paths,
     source_manifest_from_compile_commands,
+    source_manifest_from_readelf_line_table_text,
     source_manifest_from_gdb_sources,
     source_manifest_from_roots,
     source_manifest_from_keil_project,
@@ -132,6 +133,66 @@ Source files for which symbols will be read in on demand:
         _assert(any(entry.resolved_from == "directory_relative" for entry in compile_manifest.entries), "compile_commands should mark directory-relative paths")
         _assert(dict(compile_manifest.diagnostics).get("重复") == "1", "compile_commands diagnostics should count duplicates")
         json.dumps(compile_manifest.to_record(), ensure_ascii=False, sort_keys=True)
+
+        dwarf_text = f"""
+Raw dump of debug contents of section .debug_line:
+
+  The Directory Table (offset 0x22, lines 3, columns 1):
+  Entry Name
+  0     {root}
+  1     Core/Src
+  2     {inc_dir}
+
+  The File Name Table (offset 0x44, lines 5, columns 2):
+  Entry Dir Name
+  0     1   main.c
+  1     1   pid.cpp
+  2     2   pid.h
+  3     1   ignore.txt
+  4     1   main.c
+
+  Line Number Statements:
+"""
+        elf_path = root / "build" / "demo.elf"
+        elf_path.parent.mkdir()
+        elf_path.write_bytes(b"\x7fELF")
+        dwarf_manifest = source_manifest_from_readelf_line_table_text(
+            dwarf_text,
+            elf_path=elf_path,
+            source_roots=(root,),
+            max_files=10,
+        )
+        _assert(dwarf_manifest.provider == "elf_dwarf", "DWARF manifest provider mismatch")
+        _assert(dwarf_manifest.source_count == 3, f"DWARF manifest should filter and dedupe: {dwarf_manifest.source_count}")
+        _assert(len({entry.path for entry in dwarf_manifest.entries}) == 3, "DWARF manifest should dedupe paths")
+        _assert(all(entry.origin == "elf_dwarf" for entry in dwarf_manifest.entries), "DWARF entry origin mismatch")
+        _assert(any(entry.resolved_from in {"source_root_directory", "directory_absolute"} for entry in dwarf_manifest.entries), "DWARF entries should keep resolution provenance")
+        _assert(dict(dwarf_manifest.diagnostics).get("过滤") == "1", "DWARF diagnostics should count filtered paths")
+        _assert(dict(dwarf_manifest.diagnostics).get("重复") == "1", "DWARF diagnostics should count duplicates")
+        json.dumps(dwarf_manifest.to_record(), ensure_ascii=False, sort_keys=True)
+
+        legacy_dwarf_text = """
+The Directory Table:
+  1\tCore\\Src
+  2\tCore\\Inc
+
+The File Name Table:
+  1\t1\t0\t0\tmain.c
+  2\t2\t0\t0\tpid.h
+  3\t1\t0\t0\tstartup.s
+Line Number Statements:
+"""
+        (src_dir / "startup.s").write_text(".syntax unified\n", encoding="utf-8")
+        legacy_manifest = source_manifest_from_readelf_line_table_text(
+            legacy_dwarf_text,
+            elf_path=elf_path,
+            source_roots=(root,),
+            max_files=10,
+        )
+        legacy_names = {entry.name for entry in legacy_manifest.entries}
+        _assert({"main.c", "pid.h", "startup.s"} <= legacy_names, f"legacy DWARF names mismatch: {legacy_names!r}")
+        _assert(any(entry.language == "asm" for entry in legacy_manifest.entries), "legacy DWARF should classify ASM sources")
+        json.dumps(legacy_manifest.to_record(), ensure_ascii=False, sort_keys=True)
 
     print("PASS debug source manifest probe")
     return 0

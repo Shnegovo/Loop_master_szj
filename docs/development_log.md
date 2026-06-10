@@ -2393,3 +2393,43 @@ Add source provenance and diagnostics fields before introducing DWARF/ELF path r
 ### Next Target
 
 - Add ELF/DWARF-adjacent source discovery using the existing readelf path, then decide whether to expose a non-Keil source manifest preview in the Debug Workbench.
+
+## Milestone 30 Update - ELF/DWARF Source Discovery
+
+### Goal
+
+Add an ELF/DWARF-adjacent source provider so Keil AXF/ELF, OpenOCD/GDB, pyOCD and offline replay flows can recover source files from DWARF line tables without depending on a Keil project file.
+
+### Completed
+
+- Added `source_manifest_from_readelf_line_table_text()` to `src\core\debug_sources.py`.
+- Added `source_manifest_from_elf_dwarf()` as the future live wrapper around the existing `readelf -wl` route.
+- The ELF/DWARF provider:
+  - parses captured `readelf -wl` directory and file tables
+  - supports old `Entry Dir Time Size Name` and newer `Entry Dir Name` table shapes
+  - resolves absolute paths, source-root-relative paths and ELF-directory-relative paths
+  - filters to known C/C++/ASM source extensions
+  - deduplicates paths and records missing-source counts
+  - keeps raw DWARF path, directory and resolution provenance on every `SourceEntry`
+- Extended `tools\debug_source_manifest_probe.py` with synthetic DWARF line-table fixtures, including duplicate entries, non-source filtering and ASM classification.
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+
+### Notes
+
+- The probe uses synthetic text only; it does not launch Keil, OpenOCD, pyOCD, GDB or connect ST-Link.
+- This keeps the architecture Keil-first but backend-neutral: Keil `.uvprojx`, ELF/DWARF, `compile_commands.json`, GDB source lists and manual roots now all feed the same `SourceManifest` model.
+- Path mapping UI is still pending; missing source files are surfaced through diagnostics and provenance fields for the next slice.
+
+### Next Target
+
+- Expose non-Keil `SourceManifest` previews through backend placeholder snapshots or a safe workbench selector, then add path-mapping diagnostics for missing DWARF/GDB sources.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -96,6 +97,14 @@ class SourceManifest:
             "metadata": dict(self.metadata or {}),
             "entries": [entry.to_record() for entry in self.entries],
         }
+
+
+@dataclass(frozen=True)
+class _ReadelfSourcePath:
+    path: Path
+    raw_path: str
+    directory: str
+    resolved_from: str
 
 
 def source_entries_from_paths(
@@ -270,6 +279,76 @@ def source_manifest_from_compile_commands(
     )
 
 
+def source_manifest_from_readelf_line_table_text(
+    text: str,
+    *,
+    elf_path: str | Path | None = None,
+    source_roots: Iterable[str | Path] = (),
+    name: str = "ELF/DWARF Sources",
+    max_files: int = 5000,
+) -> SourceManifest:
+    elf = Path(elf_path).expanduser().resolve() if elf_path else None
+    roots = tuple(Path(root).expanduser().resolve() for root in source_roots)
+    parsed_paths = _readelf_source_paths(text, elf, roots)
+    entries: list[SourceEntry] = []
+    seen: set[str] = set()
+    filtered = 0
+    duplicate = 0
+    for parsed in parsed_paths:
+        if not _is_source_path(parsed.path):
+            filtered += 1
+            continue
+        key = str(parsed.path).lower()
+        if key in seen:
+            duplicate += 1
+            continue
+        seen.add(key)
+        entries.append(_source_entry_from_readelf_path(parsed, roots, elf))
+        if len(entries) >= max_files:
+            break
+    missing = sum(1 for entry in entries if not entry.exists)
+    return SourceManifest(
+        name=name,
+        root=roots[0] if roots else (elf.parent if elf else None),
+        provider="elf_dwarf",
+        entries=tuple(entries),
+        project_path=elf,
+        diagnostics=(
+            ("解析路径", str(len(parsed_paths))),
+            ("源码文件", str(len(entries))),
+            ("过滤", str(filtered)),
+            ("重复", str(duplicate)),
+            ("缺失", str(missing)),
+            ("截断", "是" if len(entries) >= max_files and len(parsed_paths) > max_files else "否"),
+        ),
+        metadata={
+            "max_files": str(max_files),
+            "source_roots": str(len(roots)),
+            "elf_path": str(elf) if elf else "",
+        },
+    )
+
+
+def source_manifest_from_elf_dwarf(
+    elf_path: str | Path,
+    *,
+    source_roots: Iterable[str | Path] = (),
+    name: str | None = None,
+    max_files: int = 5000,
+) -> SourceManifest:
+    elf = Path(elf_path).expanduser().resolve()
+    from src.parser.readelf import run_readelf
+
+    text = run_readelf(elf, "-wl")
+    return source_manifest_from_readelf_line_table_text(
+        text,
+        elf_path=elf,
+        source_roots=source_roots,
+        name=name or f"{elf.name} DWARF Sources",
+        max_files=max_files,
+    )
+
+
 def source_entries_from_keil_project(
     project: KeilProject,
     target_name: str | None = None,
@@ -390,3 +469,172 @@ def _compile_command_source_path(item: object, default_root: Path) -> tuple[Path
     if path.is_absolute():
         return path, raw_path, str(root)
     return (root / path).resolve(), raw_path, str(root)
+
+
+def _readelf_source_paths(
+    text: str,
+    elf_path: Path | None,
+    source_roots: tuple[Path, ...],
+) -> tuple[_ReadelfSourcePath, ...]:
+    directories: dict[int, str] = {}
+    paths: list[_ReadelfSourcePath] = []
+    in_dirs = False
+    in_files = False
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.rstrip()
+        if "The Directory Table" in line:
+            directories = {}
+            in_dirs = True
+            in_files = False
+            continue
+        if "The File Name Table" in line:
+            in_dirs = False
+            in_files = True
+            continue
+        if in_dirs:
+            parsed_dir = _parse_readelf_directory_row(line)
+            if parsed_dir is not None:
+                index, directory = parsed_dir
+                directories[index] = directory
+            continue
+        if in_files:
+            if "Line Number Statements" in line:
+                in_files = False
+                continue
+            parsed_file = _parse_readelf_file_row(line)
+            if parsed_file is None:
+                continue
+            _index, directory_index, file_name = parsed_file
+            directory = directories.get(directory_index, "")
+            paths.append(_resolve_readelf_source_path(file_name, directory, elf_path, source_roots))
+    return tuple(paths)
+
+
+def _parse_readelf_directory_row(line: str) -> tuple[int, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("Entry", "Name")):
+        return None
+    match = re.match(r"^(\d+)\s+(.+)$", stripped)
+    if not match:
+        return None
+    return int(match.group(1)), _clean_readelf_table_value(match.group(2))
+
+
+def _parse_readelf_file_row(line: str) -> tuple[int, int, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("Entry", "Dir")):
+        return None
+    old_match = re.match(r"^(\d+)\s+(\d+)\s+\d+\s+\d+\s+(.+)$", stripped)
+    if old_match:
+        return (
+            int(old_match.group(1)),
+            int(old_match.group(2)),
+            _clean_readelf_table_value(old_match.group(3)),
+        )
+    match = re.match(r"^(\d+)\s+(\d+)\s+(.+)$", stripped)
+    if not match:
+        return None
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        _clean_readelf_table_value(match.group(3)),
+    )
+
+
+def _clean_readelf_table_value(value: str) -> str:
+    cleaned = str(value).strip()
+    annotation = re.search(r"\):\s*(.+)$", cleaned)
+    if annotation:
+        cleaned = annotation.group(1).strip()
+    if cleaned.startswith("(indexed string:") and ":" in cleaned:
+        cleaned = cleaned.rsplit(":", 1)[-1].strip()
+    return cleaned.strip().strip('"').strip("'")
+
+
+def _resolve_readelf_source_path(
+    file_name: str,
+    directory: str,
+    elf_path: Path | None,
+    source_roots: tuple[Path, ...],
+) -> _ReadelfSourcePath:
+    raw_file = str(file_name).strip()
+    raw_directory = str(directory).strip()
+    file_path = Path(raw_file)
+    if file_path.is_absolute():
+        return _ReadelfSourcePath(
+            path=_resolve_path(file_path),
+            raw_path=raw_file,
+            directory=raw_directory,
+            resolved_from="file_absolute",
+        )
+
+    candidates: list[tuple[Path, str]] = []
+    directory_path = Path(raw_directory) if raw_directory else None
+    if directory_path is not None and directory_path.is_absolute():
+        candidates.append((directory_path / file_path, "directory_absolute"))
+    for root in source_roots:
+        if directory_path is not None and raw_directory:
+            candidates.append((root / directory_path / file_path, "source_root_directory"))
+        candidates.append((root / file_path, "source_root"))
+    if elf_path is not None:
+        if directory_path is not None and raw_directory:
+            candidates.append((elf_path.parent / directory_path / file_path, "elf_directory_relative"))
+        candidates.append((elf_path.parent / file_path, "elf_relative"))
+    if directory_path is not None and raw_directory:
+        candidates.append((directory_path / file_path, "directory_relative"))
+    candidates.append((file_path, "unresolved_relative"))
+
+    for candidate, resolved_from in candidates:
+        resolved = _resolve_path(candidate)
+        if resolved.exists():
+            return _ReadelfSourcePath(
+                path=resolved,
+                raw_path=raw_file,
+                directory=raw_directory,
+                resolved_from=resolved_from,
+            )
+
+    candidate, resolved_from = candidates[0]
+    return _ReadelfSourcePath(
+        path=_resolve_path(candidate),
+        raw_path=raw_file,
+        directory=raw_directory,
+        resolved_from=resolved_from,
+    )
+
+
+def _source_entry_from_readelf_path(
+    parsed: _ReadelfSourcePath,
+    source_roots: tuple[Path, ...],
+    elf_path: Path | None,
+) -> SourceEntry:
+    root = source_roots[0] if source_roots else (elf_path.parent if elf_path else None)
+    group = _group_for_path(parsed.path, root, "ELF/DWARF")
+    return SourceEntry(
+        path=parsed.path,
+        name=parsed.path.name,
+        group=group,
+        exists=parsed.path.exists(),
+        language=SOURCE_LANGUAGES.get(parsed.path.suffix.lower(), "text"),
+        origin="elf_dwarf",
+        raw_path=parsed.raw_path,
+        resolved_from=parsed.resolved_from,
+        compile_directory=parsed.directory,
+    )
+
+
+def _group_for_path(path: Path, root: Path | None, fallback: str) -> str:
+    if root is None:
+        return fallback
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return fallback
+    return str(relative.parent) if str(relative.parent) != "." else fallback
+
+
+def _resolve_path(path: Path) -> Path:
+    try:
+        return path.expanduser().resolve()
+    except OSError:
+        return path.expanduser()
