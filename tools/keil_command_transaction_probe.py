@@ -124,6 +124,12 @@ def _guard_state(transaction, key: str):
     raise AssertionError(f"missing guard {key} in {transaction.kind.value}")
 
 
+def _assert_preview_phrases(transaction, phrases: tuple[str, ...], context: str) -> None:
+    preview = " ".join(transaction.command_preview)
+    for phrase in phrases:
+        _assert(phrase in preview, f"{context} missing preview phrase {phrase}: {preview}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopmaster-keil-txn-") as tmp:
         root = Path(tmp)
@@ -167,9 +173,9 @@ def main() -> int:
 
         session.mark_attached(running=True, runtime_control=True, breakpoint_sync=True)
         breakpoints = (
-            SimpleNamespace(path=source_dir / "main.c", line=3, enabled=True, condition="speed > 60"),
-            SimpleNamespace(path=source_dir / "main.c", line=12, enabled=True, condition="speed_error > 40"),
-            SimpleNamespace(path=source_dir / "main.c", line=24, enabled=False, condition="speed_error < -12"),
+            SimpleNamespace(path=source_dir / "main.c", line=3, enabled=True, condition="speed > 60", verified=True, message=""),
+            SimpleNamespace(path=source_dir / "main.c", line=12, enabled=True, condition="speed_error > 40", verified=False, message=""),
+            SimpleNamespace(path=source_dir / "main.c", line=24, enabled=False, condition="speed_error < -12", verified=False, message="Keil did not confirm breakpoint"),
             SimpleNamespace(path=source_dir / "main.c", line=48, enabled=True, condition=""),
             SimpleNamespace(path=source_dir / "main.c", line=72, enabled=True, condition=""),
             SimpleNamespace(path=source_dir / "main.c", line=0, enabled=True, condition=""),
@@ -196,19 +202,38 @@ def main() -> int:
         _assert(running["sync_breakpoints"].breakpoint_diff_summary.disable_count == 1, "disable count mismatch")
         _assert(running["sync_breakpoints"].breakpoint_diff_summary.update_condition_count == 1, "update-condition count mismatch")
         _assert(running["sync_breakpoints"].breakpoint_diff_summary.noop_count == 1, "noop count mismatch")
+        _assert(running["sync_breakpoints"].breakpoint_diff_summary.verified_count == 1, "verified count mismatch")
+        _assert(running["sync_breakpoints"].breakpoint_diff_summary.unverified_count == 1, "unverified count mismatch")
+        _assert(running["sync_breakpoints"].breakpoint_diff_summary.pending_verify_count == 3, "pending verify count mismatch")
         _assert(running["sync_breakpoints"].breakpoint_diff_summary.snapshot_complete, "snapshot should be complete")
+        _assert_preview_phrases(
+            running["sync_breakpoints"],
+            ("diff_breakpoints(add=2", "verified=1", "unverified=1", "pending_verify=3"),
+            "running sync",
+        )
+        sync_record = running["sync_breakpoints"].audit_record()
+        _assert(sync_record["breakpoint_diff"]["verified_count"] == 1, "audit verified count missing")
+        _assert(sync_record["breakpoint_diff"]["unverified_count"] == 1, "audit unverified count missing")
+        _assert(sync_record["breakpoint_diff"]["pending_verify_count"] == 3, "audit pending count missing")
         _assert(
             _guard_state(running["sync_breakpoints"], "breakpoint_locations") == KeilCommandGuardState.BLOCKED,
             "invalid breakpoint line should block sync transaction",
+        )
+        _assert(
+            _guard_state(running["sync_breakpoints"], "breakpoint_verify") == KeilCommandGuardState.PASS,
+            "local verification inventory should not block dry-run sync",
         )
         _assert(
             _guard_state(running["sync_breakpoints"], "breakpoint_diff") == KeilCommandGuardState.PASS,
             "diff guard should be ready even when one breakpoint item is invalid",
         )
         history.record(running["halt"], timestamp="2026-06-10T00:00:02+00:00")
+        sync_history = history.record(running["sync_breakpoints"], timestamp="2026-06-10T00:00:02+00:00")
+        _assert(sync_history.breakpoint_diff_summary["verified_count"] == 1, "history should retain verification counts")
+        _assert(sync_history.breakpoint_diff_summary["pending_verify_count"] == 3, "history should retain pending verification counts")
         history.record(discovered["attach"], timestamp="2026-06-10T00:00:03+00:00")
-        _assert(len(history) == 3, "A/B/A history should preserve three segments")
-        _assert([entry.title for entry in history.all()] == ["连接调试会话", "暂停目标", "连接调试会话"], "history order changed")
+        _assert(len(history) == 3, "history should preserve bounded segments")
+        _assert([entry.title for entry in history.all()] == ["暂停目标", "同步断点", "连接调试会话"], "history order changed")
         _assert(history.recent(limit=1)[0].title == "连接调试会话", "recent should return newest first")
         _assert(history.recent(limit=3, kind="halt")[0].title == "暂停目标", "kind filter failed")
         _assert(history.recent(limit=3, blocked=True), "blocked filter should find dry-run guarded entries")
@@ -232,14 +257,53 @@ def main() -> int:
         )
         _assert(empty_sync["sync_breakpoints"].breakpoint_diff_summary is not None, "empty sync should still carry summary")
         _assert(empty_sync["sync_breakpoints"].breakpoint_diff_summary.operation_count == 0, "empty sync should be noop")
+        _assert(empty_sync["sync_breakpoints"].breakpoint_diff_summary.verified_count == 0, "empty sync verified count mismatch")
+        _assert(empty_sync["sync_breakpoints"].breakpoint_diff_summary.unverified_count == 0, "empty sync unverified count mismatch")
+        _assert(empty_sync["sync_breakpoints"].breakpoint_diff_summary.pending_verify_count == 0, "empty sync pending count mismatch")
         _assert(
             _guard_state(empty_sync["sync_breakpoints"], "breakpoint_diff") == KeilCommandGuardState.PASS,
             "complete empty remote snapshot should pass breakpoint diff guard",
         )
         _assert(
-            "diff_breakpoints(add=0, remove=0, enable=0, disable=0, update_condition=0, noop=0)"
-            in " ".join(empty_sync["sync_breakpoints"].command_preview),
-            "empty sync should render zero-count diff preview",
+            _guard_state(empty_sync["sync_breakpoints"], "breakpoint_verify") == KeilCommandGuardState.PASS,
+            "empty sync should pass local verification inventory",
+        )
+        _assert_preview_phrases(
+            empty_sync["sync_breakpoints"],
+            ("diff_breakpoints(add=0", "verified=0", "unverified=0", "pending_verify=0"),
+            "empty sync",
+        )
+
+        all_verified = (
+            SimpleNamespace(path=source_dir / "main.c", line=3, enabled=True, condition="", verified=True, message=""),
+            SimpleNamespace(path=source_dir / "main.c", line=12, enabled=True, condition="", verified=True, message=""),
+        )
+        all_verified_snapshot = KeilBreakpointRemoteSnapshot(
+            schema_version=1,
+            snapshot_id="keil-remote-breakpoint-all-verified",
+            project_path=project_path,
+            target_name="DebugDemo",
+            captured_at="2026-06-10T00:00:00+00:00",
+            complete=True,
+            breakpoints=(
+                KeilRemoteBreakpoint(path=source_dir / "main.c", line=3, enabled=True, condition="", remote_id="bp-ok-1"),
+                KeilRemoteBreakpoint(path=source_dir / "main.c", line=12, enabled=True, condition="", remote_id="bp-ok-2"),
+            ),
+            error="",
+        )
+        all_verified_sync = _transaction_map(
+            session,
+            project_path=project_path,
+            target_name="DebugDemo",
+            breakpoints=all_verified,
+            remote_breakpoint_snapshot=all_verified_snapshot,
+            source_paths=(source_dir / "main.c",),
+        )
+        _assert(all_verified_sync["sync_breakpoints"].breakpoint_diff_summary.verified_count == 2, "all-verified count mismatch")
+        _assert(all_verified_sync["sync_breakpoints"].breakpoint_diff_summary.pending_verify_count == 0, "all-verified pending mismatch")
+        _assert(
+            _guard_state(all_verified_sync["sync_breakpoints"], "breakpoint_verify") == KeilCommandGuardState.PASS,
+            "all-verified sync should pass verification inventory",
         )
 
         session.update_runtime(running=False, current_pc_line=2, run_line=3)
@@ -274,7 +338,10 @@ def main() -> int:
             _assert(phrase in write_text, f"write transaction missing safety phrase: {phrase}")
         history.record(paused["run"], timestamp="2026-06-10T00:00:04+00:00")
         _assert(len(history) == 3, "history should enforce bounded length")
-        _assert(history.all()[0].title == "暂停目标", "oldest segment eviction changed unexpectedly")
+        _assert(
+            [entry.title for entry in history.all()] == ["同步断点", "连接调试会话", "继续运行"],
+            "oldest segment eviction changed unexpectedly",
+        )
         for entry in history.all():
             json.dumps(entry.to_record(), ensure_ascii=False, sort_keys=True)
             _assert_data_only(entry)
@@ -282,11 +349,19 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="loopmaster-keil-audit-") as audit_tmp:
             audit_path = Path(audit_tmp) / "debug-audit.jsonl"
             _assert(not audit_path.exists(), "history recording should not auto-create an audit log")
-            append_keil_audit_log(audit_path, (transaction_by_key(write_ready.values(), "write_variables"),))
+            append_keil_audit_log(
+                audit_path,
+                (
+                    transaction_by_key(running.values(), "sync_breakpoints"),
+                    transaction_by_key(write_ready.values(), "write_variables"),
+                ),
+            )
             lines = audit_path.read_text(encoding="utf-8").splitlines()
-            _assert(len(lines) == 1, "audit log should contain one record")
-            record = json.loads(lines[0])
-            _assert(record["kind"] == "write_variables" and record["dry_run"], "audit record shape mismatch")
+            _assert(len(lines) == 2, "audit log should contain sync and write records")
+            sync_audit = json.loads(lines[0])
+            write_audit = json.loads(lines[1])
+            _assert(sync_audit["kind"] == "sync_breakpoints" and sync_audit["breakpoint_diff"]["verified_count"] == 1, "sync audit record shape mismatch")
+            _assert(write_audit["kind"] == "write_variables" and write_audit["dry_run"], "write audit record shape mismatch")
 
     print("PASS keil command transaction probe")
     return 0

@@ -1289,6 +1289,11 @@ class DebugWorkbenchTab(QWidget):
                         f"enable={diff.get('enable_count', 0)} disable={diff.get('disable_count', 0)} "
                         f"update_condition={diff.get('update_condition_count', 0)} noop={diff.get('noop_count', 0)}"
                     ),
+                    (
+                        "- 本地验证: "
+                        f"已验证={diff.get('verified_count', 0)} 未验证={diff.get('unverified_count', 0)} "
+                        f"待验证={diff.get('pending_verify_count', 0)}"
+                    ),
                 ]
             )
         sections.extend([
@@ -1323,6 +1328,9 @@ class DebugWorkbenchTab(QWidget):
                     f" disable={summary.get('disable_count', 0)}"
                     f" update_condition={summary.get('update_condition_count', 0)}"
                     f" noop={summary.get('noop_count', 0)}"
+                    f" verified={summary.get('verified_count', 0)}"
+                    f" unverified={summary.get('unverified_count', 0)}"
+                    f" pending={summary.get('pending_verify_count', 0)}"
                 )
             lines.append(
                 f"- #{entry.sequence} {entry.title} · {state}{repeat} · {entry.last_seen_at}{blocked}{diff}"

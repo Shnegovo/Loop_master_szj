@@ -55,6 +55,8 @@ class KeilBreakpointIntent:
     line: int
     enabled: bool = True
     condition: str = ""
+    verified: bool = False
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,9 @@ class KeilBreakpointDiffSummary:
     invalid_count: int
     duplicate_count: int
     conflict_count: int
+    pending_verify_count: int
+    verified_count: int
+    unverified_count: int
     changed_location_count: int
     operation_count: int
     snapshot_complete: bool
@@ -157,6 +162,9 @@ class KeilBreakpointDiffSummary:
             "invalid_count": self.invalid_count,
             "duplicate_count": self.duplicate_count,
             "conflict_count": self.conflict_count,
+            "pending_verify_count": self.pending_verify_count,
+            "verified_count": self.verified_count,
+            "unverified_count": self.unverified_count,
             "changed_location_count": self.changed_location_count,
             "operation_count": self.operation_count,
             "snapshot_complete": self.snapshot_complete,
@@ -532,6 +540,7 @@ def build_keil_breakpoint_diff_summary(
     remote_items = tuple(_breakpoint_intent(item) for item in remote_breakpoints)
     operations = tuple(breakpoint_ops) or diff_keil_breakpoints(local_items, remote_items, source_paths=source_paths)
     counts = _breakpoint_operation_counts(operations)
+    source_keys = {_normalise_path(path) for path in source_paths}
     local_keys = [_breakpoint_key(item) for item in local_items]
     remote_keys = [_breakpoint_key(item) for item in remote_items]
     snapshot_complete = bool(getattr(snapshot, "complete", False)) if snapshot is not None else bool(remote_items)
@@ -543,6 +552,10 @@ def build_keil_breakpoint_diff_summary(
     invalid_count = sum(1 for op in operations if not op.valid)
     duplicate_count = _duplicate_count(local_keys) + _duplicate_count(remote_keys)
     matched_count = len(set(local_keys) & set(remote_keys))
+    valid_local_items = tuple(item for item in local_items if _breakpoint_validity(item, source_keys)[0])
+    verified_count = sum(1 for item in valid_local_items if item.verified)
+    unverified_count = sum(1 for item in valid_local_items if item.message and not item.verified)
+    pending_verify_count = len(valid_local_items) - verified_count - unverified_count
     operation_count = sum(counts[action.value] for action in (
         KeilBreakpointSyncAction.ADD,
         KeilBreakpointSyncAction.REMOVE,
@@ -565,6 +578,9 @@ def build_keil_breakpoint_diff_summary(
         invalid_count=invalid_count,
         duplicate_count=duplicate_count,
         conflict_count=invalid_count,
+        pending_verify_count=pending_verify_count,
+        verified_count=verified_count,
+        unverified_count=unverified_count,
         changed_location_count=0,
         operation_count=operation_count,
         snapshot_complete=snapshot_complete,
@@ -753,7 +769,11 @@ def _command_preview(
             f"{key}={counts[key]}"
             for key in ("add", "remove", "enable", "disable", "update_condition", "noop")
         )
-        commands = [f"diff_breakpoints({count_text})"]
+        verify_text = (
+            f", verified={summary.verified_count}, unverified={summary.unverified_count}, "
+            f"pending_verify={summary.pending_verify_count}"
+        )
+        commands = [f"diff_breakpoints({count_text}{verify_text})"]
         for op in breakpoint_ops[:8]:
             if op.action == KeilBreakpointSyncAction.NOOP:
                 continue
@@ -825,6 +845,15 @@ def _breakpoint_guards(
             ),
         ),
         _guard(
+            "breakpoint_verify",
+            "本地验证",
+            KeilCommandGuardState.PASS,
+            (
+                f"已验证{breakpoint_diff_summary.verified_count} 未验证{breakpoint_diff_summary.unverified_count} "
+                f"待验证{breakpoint_diff_summary.pending_verify_count}，仅作为 Keil 回读状态提示"
+            ),
+        ),
+        _guard(
             "breakpoint_locations",
             "断点位置",
             KeilCommandGuardState.BLOCKED if invalid else KeilCommandGuardState.PASS,
@@ -849,7 +878,7 @@ def _breakpoint_summary_digest(
     snapshot_error: str,
 ) -> str:
     payload = {
-        "local": [(str(item.path), item.line, item.enabled, item.condition) for item in local_breakpoints],
+        "local": [(str(item.path), item.line, item.enabled, item.condition, item.verified, item.message) for item in local_breakpoints],
         "remote": [(str(item.path), item.line, item.enabled, item.condition) for item in remote_breakpoints],
         "ops": [(op.action.value, str(op.path), op.line, op.valid, op.reason) for op in operations],
         "complete": snapshot_complete,
@@ -980,6 +1009,8 @@ def _breakpoint_intent(item: object) -> KeilBreakpointIntent:
         line=int(getattr(item, "line", 0) or 0),
         enabled=bool(getattr(item, "enabled", True)),
         condition=str(getattr(item, "condition", "") or ""),
+        verified=bool(getattr(item, "verified", False)),
+        message=str(getattr(item, "message", "") or ""),
     )
 
 

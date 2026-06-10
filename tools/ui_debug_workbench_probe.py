@@ -206,7 +206,18 @@ def _row_for_line(tab, line: int) -> int:
     return -1
 
 
-def _sync_command_transactions(tab, history: KeilCommandHistory | None = None, port: int = 4827) -> None:
+def _assert_phrases(issues: list[str], text: str, phrases: tuple[str, ...], context: str) -> None:
+    for phrase in phrases:
+        if phrase not in text:
+            issues.append(f"{context} missing {phrase}: {text!r}")
+
+
+def _sync_command_transactions(
+    tab,
+    history: KeilCommandHistory | None = None,
+    port: int = 4827,
+    history_key: str | None = None,
+) -> None:
     status = tab.debug_status
     transactions = build_keil_debug_transactions(
         status,
@@ -221,7 +232,7 @@ def _sync_command_transactions(tab, history: KeilCommandHistory | None = None, p
     )
     tab.set_command_transactions(transactions)
     if history is not None:
-        focused = _focused_transaction(transactions)
+        focused = transaction_by_key(transactions, history_key) if history_key else _focused_transaction(transactions)
         if focused is not None:
             history.record(focused, event="previewed", source="ui_probe")
         tab.set_command_history_entries(history.recent(limit=5))
@@ -396,6 +407,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
         )
         _sync_command_transactions(tab, history)
         _sync_command_transactions(tab, history)
+        _sync_command_transactions(tab, history, history_key="sync_breakpoints")
         running_plans = _plan_rows(tab)
         required_plan_titles = {
             "连接调试会话",
@@ -415,8 +427,22 @@ def run(output_dir: Path, width: int, height: int) -> int:
             issues.append(f"run plan should wait while already running: {running_plans.get('继续运行')!r}")
         if "干跑" not in tab.plan_guard_label.text() or "未执行" not in tab.plan_guard_label.text():
             issues.append(f"top plan strip should show dry-run audit preview while running: {tab.plan_guard_label.text()!r}")
-        if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=1, noop=1)" not in tab.plan_guard_label.toolTip():
-            issues.append(f"sync breakpoint diff counts should be visible in the plan tooltip: {tab.plan_guard_label.toolTip()!r}")
+        _assert_phrases(
+            issues,
+            tab.plan_guard_label.toolTip(),
+            (
+                "diff_breakpoints(add=1",
+                "remove=1",
+                "enable=1",
+                "disable=1",
+                "update_condition=1",
+                "noop=1",
+                "verified=1",
+                "unverified=1",
+                "pending_verify=3",
+            ),
+            "sync breakpoint plan tooltip",
+        )
         if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():
             issues.append(f"marker label should summarize breakpoint states: {tab.marker_label.text()!r}")
         for phrase in ("已验证 1", "未验证 1", "待验证 3"):
@@ -449,6 +475,12 @@ def run(output_dir: Path, width: int, height: int) -> int:
         history_tip = tab.plan_history_label.toolTip()
         if "最近干跑命令历史" not in history_tip or "x2" not in history_tip:
             issues.append(f"history tooltip should show recent merged dry-run records: {history_tip!r}")
+        _assert_phrases(
+            issues,
+            history_tip,
+            ("verified=1", "unverified=1", "pending=3"),
+            "running history tooltip",
+        )
         running_tooltip = tab.plan_guard_label.toolTip()
         for phrase in ("UVSC_DBG_STOP_EXECUTION", "DebugDemo.uvprojx", "DebugDemo", "4827"):
             if phrase not in running_tooltip:
@@ -469,9 +501,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 issues.append(f"quick editor condition did not load selected breakpoint: {tab.breakpoint_editor_condition.text()!r}")
             tab.breakpoint_editor_clear.click()
             _pump(app, 0.1)
-            _sync_command_transactions(tab, history)
-            if "diff_breakpoints(add=1, remove=1, enable=1, disable=1, update_condition=0, noop=2)" not in tab.plan_guard_label.toolTip():
-                issues.append(f"quick condition clear did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            _sync_command_transactions(tab, history, history_key="sync_breakpoints")
+            _assert_phrases(
+                issues,
+                tab.plan_guard_label.toolTip(),
+                ("diff_breakpoints(add=1", "remove=1", "enable=1", "disable=1", "update_condition=0", "noop=2", "verified=1", "unverified=1", "pending_verify=3"),
+                "quick condition clear tooltip",
+            )
         row3 = _row_for_line(tab, 3)
         if row3 < 0:
             issues.append("enable-toggle row for line 3 was not found")
@@ -480,9 +516,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
             _pump(app, 0.1)
             tab.breakpoint_editor_enabled.setChecked(False)
             _pump(app, 0.1)
-            _sync_command_transactions(tab, history)
-            if "diff_breakpoints(add=1, remove=1, enable=0, disable=1, update_condition=1, noop=2)" not in tab.plan_guard_label.toolTip():
-                issues.append(f"quick enable toggle did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            _sync_command_transactions(tab, history, history_key="sync_breakpoints")
+            _assert_phrases(
+                issues,
+                tab.plan_guard_label.toolTip(),
+                ("diff_breakpoints(add=1", "remove=1", "enable=0", "disable=1", "update_condition=1", "noop=2", "verified=1", "unverified=1", "pending_verify=3"),
+                "quick enable toggle tooltip",
+            )
         row24 = _row_for_line(tab, 24)
         if row24 < 0:
             issues.append("enable-toggle row for line 24 was not found")
@@ -493,9 +533,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
             else:
                 checked_item.setCheckState(Qt.Checked)
                 _pump(app, 0.1)
-                _sync_command_transactions(tab, history)
-                if "diff_breakpoints(add=1, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
-                    issues.append(f"enable toggle for line 24 did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+                _sync_command_transactions(tab, history, history_key="sync_breakpoints")
+                _assert_phrases(
+                    issues,
+                    tab.plan_guard_label.toolTip(),
+                    ("diff_breakpoints(add=1", "remove=1", "enable=0", "disable=0", "update_condition=2", "noop=2", "verified=1", "unverified=1", "pending_verify=3"),
+                    "line 24 enable toggle tooltip",
+                )
         row72 = _row_for_line(tab, 72)
         if row72 < 0:
             issues.append("delete row for line 72 was not found")
@@ -506,13 +550,17 @@ def run(output_dir: Path, width: int, height: int) -> int:
             _pump(app, 0.1)
             tab.breakpoint_editor_delete.click()
             _pump(app, 0.1)
-            _sync_command_transactions(tab, history)
+            _sync_command_transactions(tab, history, history_key="sync_breakpoints")
             if tab.breakpoint_table.rowCount() != 4:
                 issues.append(f"quick delete did not remove row: {tab.breakpoint_table.rowCount()}")
             if "4 个本地断点" not in tab.summary_label.text():
                 issues.append(f"summary did not update after deletion: {tab.summary_label.text()!r}")
-            if "diff_breakpoints(add=0, remove=1, enable=0, disable=0, update_condition=2, noop=2)" not in tab.plan_guard_label.toolTip():
-                issues.append(f"quick delete action did not refresh diff counts: {tab.plan_guard_label.toolTip()!r}")
+            _assert_phrases(
+                issues,
+                tab.plan_guard_label.toolTip(),
+                ("diff_breakpoints(add=0", "remove=1", "enable=0", "disable=0", "update_condition=2", "noop=2", "verified=1", "unverified=1", "pending_verify=2"),
+                "quick delete tooltip",
+            )
         _pump(app, 0.35)
         screenshots.append(_save(window, output_dir, "01_debug_workbench_project"))
 
@@ -534,6 +582,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
             controls_ready=False,
         )
         _sync_command_transactions(tab, history)
+        _sync_command_transactions(tab, history, history_key="sync_breakpoints")
         paused_plans = _plan_rows(tab)
         if paused_plans.get("继续运行", {}).get("status") != "计划就绪":
             issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
@@ -552,8 +601,14 @@ def run(output_dir: Path, width: int, height: int) -> int:
             if phrase not in paused_tooltip:
                 issues.append(f"paused transaction tooltip missing {phrase}: {paused_tooltip!r}")
         paused_history_tip = tab.plan_history_label.toolTip()
-        if "继续运行" not in paused_history_tip or "暂停目标" not in paused_history_tip:
-            issues.append(f"history tooltip should retain running and paused segments: {paused_history_tip!r}")
+        if "继续运行" not in paused_history_tip or "同步断点" not in paused_history_tip:
+            issues.append(f"history tooltip should retain paused and breakpoint-sync segments: {paused_history_tip!r}")
+        _assert_phrases(
+            issues,
+            paused_history_tip,
+            ("verified=1", "unverified=1", "pending=2"),
+            "paused history tooltip",
+        )
         enabled_actions = [
             key
             for key, button in getattr(tab, "_action_buttons", {}).items()

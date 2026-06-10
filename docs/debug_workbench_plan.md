@@ -1,12 +1,12 @@
 # LoopMaster MCU Debug Workbench Plan
 
-LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持 Keil 作为调试主控，LoopMaster 作为外置现代面板负责变量示波、变量写入、串口助手、记录回放和后续工具扩展。
+LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持 Keil 作为第一条调试主控链路，LoopMaster 作为外置现代面板负责变量示波、变量写入、串口助手、记录回放和后续工具扩展；架构上必须保留 OpenOCD、pyOCD、GDB server 等多调试后端适配空间。
 
 ## 产品定位
 
-- Keil 负责连接调试器、控制目标芯片、保留断点和单步调试体验。
+- Keil 负责第一阶段连接调试器、控制目标芯片、保留断点和单步调试体验。
 - LoopMaster 通过 Keil Debug Commands、UVSOCK 或命令桥接读写变量，避免和 Keil 抢同一个 SWD/JTAG 调试口。
-- pyOCD 直连模式保留为独立调试模式，用于不打开 Keil 或需要直接控制探针的场景。
+- OpenOCD、pyOCD、GDB server 直连模式保留为并列调试后端，用于不打开 Keil、跨 IDE、跨探针或需要直接控制调试链的场景。
 - 串口、USB、SWO/RTT、网络、文件回放等数据源进入统一采集架构，不再只围绕 CAN 或单一协议设计。
 - UI 保持 PCL/Cockpit 风格的现代轻量工作台，目标是稳定、流畅、中文化、适合长时间调参。
 
@@ -20,6 +20,48 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 多窗格多曲线时显示 FPS 上限更保守，优先保证拖动和示波稳定。
 - 已有截图和流程探针覆盖：combo popup、串口助手集成、工作区导航、Halt/Run、分隔条、窄窗口、侧栏、轴按钮。
 - 已验证源码入口和打包 exe 关闭流程，LoopMaster 主进程关闭后不残留。
+
+## 长期推进规则
+
+- 后续不再把 stage 切得过细，优先按大版本或大里程碑推进。
+- 每个阶段结束时必须记录本阶段成果、验证结果、重要限制和下一个目标。
+- 小 UI 调整、探针补强、局部文案和局部整理默认并入当前里程碑，不单独开小阶段。
+- 只有大版本或大型里程碑收口时才进行打包和 Release。
+- 需要拆分排查、实现、复核或探针验证时，可以安排多 agent 并行推进，最后统一沉淀到同一个阶段记录。
+
+## 已收口里程碑
+
+`Keil Dry-Run Debugger Cohesion`
+
+- 已把断点验证状态汇总、同步断点干跑预览、历史/审计一致性和 UI 探针补强合并为一个较大的里程碑。
+- 仍保持 no-hardware、no live UVSOCK execution，不启动 Keil、不访问 ST-Link/F401CCU6、不执行断点同步或变量写入。
+- 详细完成项和验证结果记录在 `docs/development_log.md`。
+
+## Keil 调试链可行性确认
+
+- 官方资料确认 UVSOCK 可让第三方 client 控制和监控 uVision，并覆盖工程配置、构建和调试能力。
+- 官方 Debug Commands 文档确认 Keil 支持断点、内存、表达式、程序运行/单步等命令类别。
+- 本机 `D:\Keil\Keil_v5\UV4` 已确认存在 `UV4.exe`、`uVision.com`、`UVSC.dll`、`UVSC64.dll`、`UVSCWrapper.dll`。
+- `tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports` 已确认首选 `UVSC64.dll`，解析到 103 个导出，关键入口包括 `UVSC_OpenConnection`、`UVSC_DBG_STATUS`、`UVSC_DBG_EXEC_CMD`、`UVSC_DBG_EVAL_EXPRESSION_TO_STR`、`UVSC_DBG_VARIABLE_SET`、`UVSC_DBG_MEM_READ`、`UVSC_DBG_MEM_WRITE`、`UVSC_DBG_START_EXECUTION`、`UVSC_DBG_STOP_EXECUTION`。
+- `tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil` 已确认 DLL 可加载；当前没有运行中的 uVision，因此只能证明可预检，不能宣称已连接真实会话。
+- 结论：Keil 方案真实可行，但必须分级实测：先只读连接和状态快照，再读变量/断点快照，再 opt-in 写变量、断点同步和 Halt/Run/Step。
+
+## 多调试后端架构方向
+
+- 共用层：源码树、代码编辑器/装饰、断点模型、变量/Watch、示波、记录回放、审计日志、UI 状态机。
+- 后端层：每个调试链实现独立 adapter，例如 `KeilUvSockBackend`、`OpenOcdGdbBackend`、`PyOcdBackend`、`OfflineReplayBackend`。
+- 后端能力用 capability 暴露：attach、halt、run、step、read_variables、write_variables、breakpoint_sync、pc_location、memory_read、trace_stream。
+- 断点、变量写入和运行控制统一先走 transaction/dry-run，再由后端决定是否可以执行，防止 UI 直接调用某个后端的危险动作。
+- OpenOCD/pyOCD 优先走 GDB remote 或各自稳定 API；Keil 优先走 UVSOCK/Debug Commands；高速波形仍优先使用串口、SWO/ITM、RTT、USB 或网络流。
+
+## 下一大里程碑
+
+`Debug Backend Adapter + Keil Read-Only Session Snapshot`
+
+- 抽出可扩展的调试后端 adapter 边界，不把 Keil 逻辑继续写死在 UI 层。
+- 接入 Keil 只读连接烟测：在用户已经打开 uVision/UVSOCK 时执行 `OpenConnection -> DBG_STATUS -> CloseConnection`。
+- 只读捕获目标状态、当前 PC、工程/Target、远端断点列表或可用的近似快照，并喂给现有 dry-run diff/verification UI。
+- 继续禁止自动写变量、同步断点、Halt/Run/Step，直到下一轮 opt-in 执行里程碑。
 
 ## 下一轮优先级
 

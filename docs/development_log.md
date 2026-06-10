@@ -2,6 +2,14 @@
 
 This log records each development stage, what changed, how it was verified, and the next target. Keep it updated before each commit that closes a stage.
 
+## Development Cadence Rules
+
+- Stages should now represent major milestones or large version-level progress, not isolated micro tasks.
+- Each completed stage must record the milestone result, verification, important notes, and the next target before moving on.
+- Small UI polish, probe adjustments, and local cleanup should be bundled into the active milestone unless they are urgent blockers.
+- Packaging and GitHub Release work should happen only for major versions or large milestone closures, not for every small stage.
+- When the work can be split cleanly, use multiple agents in parallel for investigation, implementation, review, or probe runs, then merge the results into one milestone record.
+
 ## Stage 0 - v2.1.0 Baseline
 
 - Release: `v2.1.0`
@@ -1613,7 +1621,86 @@ Prepare the debugger workbench for future Keil breakpoint readback by adding loc
 
 ### Next Target
 
-- Add a dry-run breakpoint verification summary:
-  - include verification-state counts in the sync-breakpoint transaction preview
-  - keep audit/history records aware of pending/verified/unverified local breakpoint states
-  - continue no-hardware until a deliberate UVSOCK smoke stage
+- Milestone draft: `Keil Dry-Run Debugger Cohesion`
+  - combine the next dry-run debugger work into one larger milestone instead of splitting it into small UI/probe stages
+  - include breakpoint verification summaries, dry-run transaction preview/history consistency, and compact UI/probe polish as one milestone scope
+  - keep the scope no-hardware and no live UVSOCK execution until a deliberate controller/smoke milestone is selected
+  - close the milestone only after recording completed results, verification, notes, and the following target
+
+## Milestone 28 - Keil Dry-Run Debugger Cohesion
+
+### Goal
+
+Close the current dry-run debugger contract as one larger milestone: breakpoint verification inventory, sync-breakpoint preview/history/audit consistency, UI probe coverage, and a real feasibility check for the Keil debug chain without launching Keil or touching hardware.
+
+### Completed
+
+- Extended dry-run Keil breakpoint intents with local verification metadata:
+  - `verified`
+  - `message`
+- Extended breakpoint diff summaries and audit records with:
+  - `verified_count`
+  - `unverified_count`
+  - `pending_verify_count`
+- Added verification counts to `diff_breakpoints(...)` command preview.
+- Added `本地验证` guard/detail to sync-breakpoint transactions.
+- Kept local verification informational in dry-run:
+  - pending/unverified verification state does not block the transaction by itself
+  - invalid breakpoint locations still block sync readiness
+- Counted verification readiness only for valid local breakpoint rows, so invalid line `0` does not inflate pending verification.
+- Added breakpoint verification counts to Debug Workbench transaction tooltip and dry-run history tooltip.
+- Hardened Keil transaction probe coverage:
+  - normal sync with verified/unverified/pending local breakpoints
+  - empty local/remote sync
+  - all-verified sync
+  - JSONL audit record for `sync_breakpoints`
+  - bounded history behavior with sync records
+- Hardened Debug Workbench UI probe coverage:
+  - sync preview tooltip verification fields
+  - history tooltip verification fields
+  - quick condition clear, enable toggles, and delete flows
+- Confirmed the local Keil debug chain is technically viable:
+  - `D:\Keil\Keil_v5\UV4\UV4.exe`
+  - `D:\Keil\Keil_v5\UV4\uVision.com`
+  - `D:\Keil\Keil_v5\UV4\UVSC.dll`
+  - `D:\Keil\Keil_v5\UV4\UVSC64.dll`
+  - `D:\Keil\Keil_v5\UV4\UVSCWrapper.dll`
+- Confirmed `UVSC64.dll` exports the important UVSOCK/debug entry points needed for a real controller path, including open/close connection, status, expression eval, variable set, memory read/write, run and stop execution.
+- Updated the debug workbench plan so Keil is the first backend, not the only backend; future OpenOCD, pyOCD, GDB server and offline replay adapters should plug into a common debug backend boundary.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\keil\commands.py src\core\keil\__init__.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS, generated screenshots:
+    - `tools\ui-debug-workbench\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench\03_debug_workbench_narrow.png`
+- `python tools\keil_bridge_probe.py --keil-root D:\Keil --show-exports`
+  - PASS, selected `UVSC64.dll`, found 103 exports and all important exports.
+- `python tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil`
+  - PASS, DLL loaded; no running uVision, so no live connection attempted.
+- `python tools\keil_project_probe.py --project D:\Keil\code\HELLO\MDK-ARM\HELLO.uvprojx`
+  - PASS, parsed one target and 19 source files.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This milestone still does not launch Keil, access ST-Link/F401CCU6, attach to UVSOCK, halt/run the target, sync breakpoints, or write variables.
+- The Keil chain is feasible, but not yet proven end-to-end against a live uVision debug session.
+- The next hardware-facing work should be opt-in and split by risk: read-only connection/status first, then read variables/breakpoints, then explicit write/control actions.
+- Future architecture must keep Keil, OpenOCD, pyOCD, GDB server and offline replay as backend adapters behind the same workbench model.
+
+### Next Target
+
+- Milestone: `Debug Backend Adapter + Keil Read-Only Session Snapshot`
+  - extract a shared debug backend adapter boundary before adding more live controls
+  - keep the existing UI/source/breakpoint/transaction model backend-neutral
+  - add an opt-in Keil read-only smoke path for `OpenConnection -> DBG_STATUS -> CloseConnection`
+  - capture target status, project/target, PC location and remote breakpoint/variable snapshot where possible
+  - continue blocking write variables, breakpoint apply, Halt/Run/Step, reset and flash operations until a later opt-in execution milestone
