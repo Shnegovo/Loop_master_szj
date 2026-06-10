@@ -115,6 +115,37 @@ def source_entries_from_paths(
     return tuple(entries)
 
 
+def source_manifest_from_roots(
+    roots: Iterable[str | Path],
+    *,
+    name: str = "Manual Sources",
+    provider: str = "manual_roots",
+    max_files: int = 5000,
+) -> SourceManifest:
+    root_paths = tuple(Path(root).expanduser().resolve() for root in roots)
+    entries: list[SourceEntry] = []
+    for root in root_paths:
+        if not root.exists():
+            continue
+        if root.is_file():
+            if _is_source_path(root):
+                entries.extend(source_entries_from_paths((root,), root=root.parent))
+            continue
+        for path in sorted(root.rglob("*")):
+            if len(entries) >= max_files:
+                break
+            if path.is_file() and _is_source_path(path):
+                entries.extend(source_entries_from_paths((path,), root=root))
+        if len(entries) >= max_files:
+            break
+    return SourceManifest(
+        name=name,
+        root=root_paths[0] if root_paths else None,
+        provider=provider,
+        entries=tuple(entries[:max_files]),
+    )
+
+
 def source_entries_from_keil_project(
     project: KeilProject,
     target_name: str | None = None,
@@ -178,3 +209,7 @@ def _select_target(project: KeilProject, target_name: str | None) -> KeilTarget 
         if target.name == target_name:
             return target
     return None
+
+
+def _is_source_path(path: Path) -> bool:
+    return path.suffix.lower() in SOURCE_LANGUAGES

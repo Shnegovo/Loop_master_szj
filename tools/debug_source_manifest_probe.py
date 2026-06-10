@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.debug_sources import (  # noqa: E402
     source_entries_from_paths,
+    source_manifest_from_roots,
     source_manifest_from_keil_project,
     source_tree_from_entries,
 )
@@ -56,6 +57,8 @@ def main() -> int:
         inc_dir.mkdir(parents=True)
         (src_dir / "main.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
         (inc_dir / "pid.h").write_text("#pragma once\n", encoding="utf-8")
+        (src_dir / "ignore.txt").write_text("not source\n", encoding="utf-8")
+        (src_dir / "pid.cpp").write_text("int pid() { return 1; }\n", encoding="utf-8")
         project_path = project_dir / "ManifestDemo.uvprojx"
         project_path.write_text(PROJECT, encoding="utf-8")
 
@@ -77,6 +80,13 @@ def main() -> int:
         _assert({"Core\\Inc", "Core\\Src"} <= group_names or {"Core/Inc", "Core/Src"} <= group_names, f"path groups mismatch: {group_names!r}")
         _assert(path_entries[0].language == "c", "source path language mismatch")
         _assert(path_entries[1].language == "c-header", "header path language mismatch")
+
+        manual = source_manifest_from_roots((root / "Core",), name="Manual Core", max_files=2)
+        _assert(manual.provider == "manual_roots", "manual manifest provider mismatch")
+        _assert(manual.source_count == 2, f"manual manifest max_files mismatch: {manual.source_count}")
+        _assert(all(entry.path.suffix.lower() != ".txt" for entry in manual.entries), "manual manifest should ignore text files")
+        manual_record = manual.to_record()
+        json.dumps(manual_record, ensure_ascii=False, sort_keys=True)
 
     print("PASS debug source manifest probe")
     return 0

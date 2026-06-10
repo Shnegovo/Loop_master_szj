@@ -2237,3 +2237,40 @@ Extract a backend-neutral source manifest layer so Keil `.uvprojx` remains the f
 - Continue Milestone 30 with one of two larger next slices:
   - add an ELF/DWARF/manual-root `SourceManifest` provider and fake GDB source-list probe
   - or start the strictly opt-in Keil live read-only smoke (`OpenConnection -> DBG_STATUS -> CloseConnection`) if uVision is manually opened in Debug mode
+
+## Milestone 30 Update - Manual Source Root Provider
+
+### Goal
+
+Add the first non-Keil `SourceManifest` provider so future OpenOCD/GDB, pyOCD and offline workflows can build the editor tree from source roots without requiring a Keil project file.
+
+### Completed
+
+- Added `source_manifest_from_roots()` to `src\core\debug_sources.py`.
+- The provider scans source roots for known C/C++/ASM extensions and ignores unrelated files.
+- The provider supports a `max_files` cap to avoid accidentally walking huge trees.
+- Extended `tools\debug_source_manifest_probe.py` to cover:
+  - nested manual source roots
+  - non-source file filtering
+  - source count limiting
+  - JSON/data-only manifest output
+
+### Verified
+
+- `python -m py_compile src\core\debug_sources.py tools\debug_source_manifest_probe.py src\core\debug_workbench.py src\ui\debug_workbench_tab.py`
+  - PASS.
+- `python tools\debug_source_manifest_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench --width 1440 --height 900`
+  - PASS.
+
+### Notes
+
+- The manual source-root provider is not yet exposed in the UI; it is a backend/provider foundation for future OpenOCD/GDB and offline flows.
+- No debugger, probe, Keil, OpenOCD or pyOCD process is launched.
+
+### Next Target
+
+- Continue with a fake GDB source-list provider or, if uVision is manually opened in Debug mode, run the strictly opt-in Keil live read-only smoke.
