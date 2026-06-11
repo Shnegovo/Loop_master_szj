@@ -352,6 +352,7 @@ class DebugWorkbenchTab(QWidget):
         self._backend_selection_syncing = False
         self._source_provider_options: tuple[tuple[str, str, str], ...] = ()
         self._source_provider_selection_syncing = False
+        self._scope_acquisition_status = ("SWD", "LoopMaster 原轻侵入式 SWD 采集源")
         self._variable_presets: tuple[tuple[str, str, str, str, str, bool], ...] = ()
 
         self.setObjectName("debugWorkbenchTab")
@@ -585,6 +586,10 @@ class DebugWorkbenchTab(QWidget):
                 self.source_provider_combo.setCurrentIndex(selected_index)
         finally:
             self._source_provider_selection_syncing = False
+
+    def set_scope_acquisition_status(self, label: str, detail: str = "") -> None:
+        self._scope_acquisition_status = (str(label or "--"), str(detail or ""))
+        self._refresh_mode_boundary_strip()
 
     def set_command_transactions(
         self,
@@ -841,6 +846,7 @@ class DebugWorkbenchTab(QWidget):
         layout.addLayout(source_header)
 
         layout.addWidget(self._build_source_manifest_strip())
+        layout.addWidget(self._build_mode_boundary_strip())
 
         self.source_tree = QTreeWidget()
         self.source_tree.setObjectName("debugSourceTree")
@@ -1001,6 +1007,26 @@ class DebugWorkbenchTab(QWidget):
         self.source_provider_missing_label.setObjectName("debugSourceChip")
         row.addWidget(self.source_provider_missing_label)
         row.addStretch(1)
+        return strip
+
+    def _build_mode_boundary_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setObjectName("debugBoundaryStrip")
+        row = QVBoxLayout(strip)
+        row.setContentsMargins(10, 7, 10, 7)
+        row.setSpacing(5)
+        title = QLabel("链路边界")
+        title.setObjectName("debugBoundaryTitle")
+        row.addWidget(title)
+        self.boundary_backend_label = QLabel("调试 --")
+        self.boundary_backend_label.setObjectName("debugBoundaryChip")
+        row.addWidget(self.boundary_backend_label)
+        self.boundary_source_label = QLabel("源码 --")
+        self.boundary_source_label.setObjectName("debugBoundaryChip")
+        row.addWidget(self.boundary_source_label)
+        self.boundary_scope_label = QLabel("示波 SWD")
+        self.boundary_scope_label.setObjectName("debugBoundaryChip")
+        row.addWidget(self.boundary_scope_label)
         return strip
 
     def _build_breakpoint_quick_editor(self) -> QFrame:
@@ -1686,6 +1712,7 @@ class DebugWorkbenchTab(QWidget):
         for label, value in zip(labels, values):
             label.setText(value)
             label.setToolTip(tooltip)
+        self._refresh_mode_boundary_strip()
         if hasattr(self, "source_provider_remap_button"):
             has_hints = bool(manifest is not None and source_manifest_missing_path_hints(manifest))
             self.source_provider_remap_button.setEnabled(has_hints)
@@ -1740,6 +1767,35 @@ class DebugWorkbenchTab(QWidget):
         else:
             text = labels.get(provider_text, provider_text.replace("_", " "))
         return f"来源 {text}"
+
+    def _refresh_mode_boundary_strip(self) -> None:
+        if not hasattr(self, "boundary_backend_label"):
+            return
+        status = self._session.status
+        backend_text = self._backend_boundary_label(status.backend.value)
+        manifest = self._source_manifest
+        source_text = self._source_provider_label(manifest.provider).replace("来源 ", "") if manifest is not None else "--"
+        scope_label, scope_detail = self._scope_acquisition_status
+        self.boundary_backend_label.setText(f"调试 {backend_text}")
+        self.boundary_source_label.setText(f"源码 {source_text}")
+        self.boundary_scope_label.setText(f"示波 {scope_label}")
+        self.boundary_backend_label.setToolTip(f"调试后端：{backend_text}\n状态：{status.label}")
+        self.boundary_source_label.setToolTip(
+            f"源码来源：{source_text}\n文件：{manifest.source_count if manifest is not None else 0}"
+        )
+        self.boundary_scope_label.setToolTip(f"示波采集源：{scope_label}\n{scope_detail or '等待采集配置'}")
+        self._repolish(self.boundary_backend_label, self.boundary_source_label, self.boundary_scope_label)
+
+    @staticmethod
+    def _backend_boundary_label(value: str) -> str:
+        labels = {
+            "keil": "Keil",
+            "openocd_gdb": "OpenOCD",
+            "pyocd": "pyOCD",
+            "offline": "离线",
+            "none": "--",
+        }
+        return labels.get(str(value or ""), str(value or "--"))
 
     def _refresh_command_plan_preview(self) -> None:
         if not hasattr(self, "plan_focus_label"):
@@ -2038,6 +2094,7 @@ class DebugWorkbenchTab(QWidget):
                 button.setToolTip("等待调试后端控制器接入")
             else:
                 button.setToolTip(action.reason or "当前状态不可用")
+        self._refresh_mode_boundary_strip()
         self._refresh_command_plan_preview()
 
     def _repolish(self, *widgets: QWidget) -> None:
@@ -2208,6 +2265,25 @@ class DebugWorkbenchTab(QWidget):
             }
             QLabel#debugSourceChip {
                 color: #475569;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 6px;
+                background: #ffffff;
+                border: 1px solid #dce6f0;
+                border-radius: 5px;
+            }
+            QFrame#debugBoundaryStrip {
+                background: #fbfdff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
+            QLabel#debugBoundaryTitle {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 650;
+            }
+            QLabel#debugBoundaryChip {
+                color: #334155;
                 font-size: 9pt;
                 font-weight: 600;
                 padding: 2px 6px;

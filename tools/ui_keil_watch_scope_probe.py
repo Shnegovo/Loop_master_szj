@@ -170,6 +170,8 @@ def main() -> int:
         _pump(app, 0.1)
 
         _assert(window._scope_read_source == "keil_watch", "scope source should switch to Keil Watch")
+        boundary_scope = getattr(getattr(tab, "boundary_scope_label", None), "text", lambda: "")()
+        _assert("Keil Watch" in boundary_scope, f"debug boundary scope chip should switch to Keil Watch: {boundary_scope!r}")
         _assert("Angle" in window._monitored, f"Angle not monitored: {window._monitored!r}")
         _assert("Angle" in window._keil_watch_registry, "Angle missing from Keil watch registry")
         _assert(window._value_table.rowCount() >= 1, "value table should show watch variable")

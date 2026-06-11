@@ -607,6 +607,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 f"Keil source provider chips mismatch: "
                 f"{tab.source_provider_state_label.text()!r} / {tab.source_provider_count_label.text()!r}"
             )
+        boundary_labels = [
+            getattr(getattr(tab, attr, None), "text", lambda: "")()
+            for attr in ("boundary_backend_label", "boundary_source_label", "boundary_scope_label")
+        ]
+        boundary_text = " / ".join(boundary_labels)
+        if "调试 Keil" not in boundary_text or "源码 Keil 工程" not in boundary_text or "示波" not in boundary_text:
+            issues.append(f"mode boundary strip mismatch: {boundary_text!r}")
         preset_rows = [
             tab.variable_preset_table.item(row, 0).text()
             for row in range(tab.variable_preset_table.rowCount())

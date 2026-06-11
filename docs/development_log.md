@@ -6079,3 +6079,57 @@ gutter instead of hiding it only in the breakpoint table or tooltip.
   source manifest provider, and waveform acquisition source separate enough that
   SWD, serial, Keil Watch, OpenOCD/pyOCD, and TI MSPM0G3507 can be added without
   crowding the same right-side options.
+
+## Milestone 68 - Debug/Source/Scope Boundary Strip
+
+### Goal
+
+Make the Debug Workbench visibly distinguish three concepts that will keep
+growing as more tools are added:
+
+- Debug backend.
+- Source manifest provider.
+- Scope acquisition source.
+
+### Completed
+
+- Added a `链路边界` strip to the Debug Workbench navigation panel.
+- The strip now shows:
+  - `调试 ...` for backend/debugger selection,
+  - `源码 ...` for source provider,
+  - `示波 ...` for the active waveform acquisition source.
+- Synced the strip from `MainWindow` so it reflects current SWD vs Keil Watch
+  scope acquisition.
+- Kept the strip vertical so it remains readable in the fixed-width sidebar.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-boundary-final --width 1440 --height 900`
+  - PASS.
+  - The probe now asserts the boundary strip includes `调试 Keil`, `源码 Keil 工程`, and a `示波` source.
+  - Screenshots:
+    - `tools\ui-debug-workbench-boundary-final\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-boundary-final\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-boundary-final\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+  - The probe now asserts the boundary strip switches to `示波 Keil Watch` after adding a Keil Watch preset to scope.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+
+### Notes
+
+- This is a first visible boundary, not the final architecture. It prevents the
+  current UI from implying that debug backend, source provider, and waveform
+  data source are the same thing.
+- Serial waveform and future OpenOCD/pyOCD/TI adapters still need to plug into
+  this boundary through real source/acquisition models.
+
+### Next Target
+
+- Turn this visible boundary into a small model layer for acquisition sources:
+  SWD memory, Keil Watch, serial waveform, and future OpenOCD/pyOCD/TI should
+  advertise label, rate limits, write safety, and expected use cases.
+- Then start TI MSPM0G3507 notes from `D:\ti` after Keil basics remain stable.

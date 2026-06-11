@@ -2146,6 +2146,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.keilProfileConfigureRequested.connect(self._configure_keil_debug_runtime)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
+        self._refresh_debug_scope_acquisition_status()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
         self._refresh_debug_variable_presets()
@@ -2249,6 +2250,17 @@ class MainWindow(QMainWindow):
             ("gdb_text", "GDB 文本", "后续粘贴或导入 GDB info sources 文本"),
         ]
         self._tab_debug_workbench.set_source_provider_options(options, self._debug_source_provider_key)
+
+    def _refresh_debug_scope_acquisition_status(self) -> None:
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        source = getattr(self, "_scope_read_source", "swd")
+        label = self._scope_read_source_label()
+        if source == "keil_watch":
+            detail = "通过 Keil/UVSOCK Watch 读取表达式，适合低频联调；高速波形仍建议 SWD 或串口。"
+        else:
+            detail = "LoopMaster 原轻侵入式 SWD 内存采集源，适合变量示波和较高频轮询。"
+        self._tab_debug_workbench.set_scope_acquisition_status(label, detail)
 
     def _on_debug_source_provider_selected(self, provider_key: str):
         provider_key = str(provider_key or "auto")
@@ -4310,6 +4322,7 @@ class MainWindow(QMainWindow):
         self._monitored = set()
         self._monitor_list = []
         self._sync_value_table_placeholders()
+        self._refresh_debug_scope_acquisition_status()
 
     def _scope_registry(self) -> dict[str, tuple[int, TypeInfo]]:
         if getattr(self, "_scope_read_source", "swd") == "keil_watch":
