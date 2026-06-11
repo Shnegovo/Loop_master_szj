@@ -12,7 +12,12 @@ if str(ROOT) not in sys.path:
 from src.core.debug_backend import DebugBackendDiagnostic, DebugBackendSessionSnapshot, now_iso  # noqa: E402
 from src.core.debug_workbench import DebugBackendKind, DebugRuntimeState, make_debug_status  # noqa: E402
 from src.core.keil.auto_debug import KeilAutoDebugRequest, run_keil_auto_debug_transaction  # noqa: E402
-from src.core.keil.live_write import KeilLiveVariableWriteResult  # noqa: E402
+from src.core.keil.live_write import (  # noqa: E402
+    KeilLiveVariableReadResult,
+    KeilLiveVariableSmokeResult,
+    KeilLiveVariableWriteResult,
+    KeilResolvedVariable,
+)
 from src.core.keil.profile import KeilBuildResult, make_keil_debug_profile  # noqa: E402
 from src.core.keil.uvsock import UvscLaunchResult  # noqa: E402
 
@@ -42,10 +47,12 @@ class _FakeBackend:
         axf_exists: bool = True,
         connect_after: int = 1,
         write_ok: bool = True,
+        command_write: bool = False,
     ) -> None:
         self.axf_exists = bool(axf_exists)
         self.connect_after = int(connect_after)
         self.write_ok = bool(write_ok)
+        self.command_write = bool(command_write)
         self.calls: list[str] = []
         self.connect_calls = 0
 
@@ -128,15 +135,52 @@ class _FakeBackend:
 
     def write_live_variable(self, request, *, require_debug: bool = True):
         self.calls.append(f"write:{request.expression}={request.value_text}")
+        new_raw = int(request.value_text, 0).to_bytes(4, "little", signed=True)
+        if self.command_write:
+            return KeilLiveVariableWriteResult(
+                attempted=True,
+                written=self.write_ok,
+                expression=request.expression,
+                value_text=request.value_text,
+                method="command",
+                command=f"{request.expression} = {request.value_text}",
+                readback_value=request.value_text if self.write_ok else "",
+                error="" if self.write_ok else "fake command write failed",
+            )
         return KeilLiveVariableWriteResult(
             attempted=True,
             written=self.write_ok,
             expression=request.expression,
             value_text=request.value_text,
-            method="fake",
+            method="memory",
+            resolved=_resolved(request.expression),
+            old_raw=(5000).to_bytes(4, "little", signed=True),
+            new_raw=new_raw,
+            readback_raw=new_raw if self.write_ok else b"",
+            old_value="5000",
             readback_value=request.value_text if self.write_ok else "",
             error="" if self.write_ok else "fake write failed",
         )
+
+    def read_live_variable(self, request, *, require_debug: bool = True):
+        self.calls.append(f"read:{request.expression}")
+        return KeilLiveVariableReadResult(
+            attempted=True,
+            read=True,
+            expression=request.expression,
+            method="memory",
+            resolved=_resolved(request.expression),
+            raw=(5000).to_bytes(4, "little", signed=True),
+            value="5000",
+        )
+
+    def run_live_variable_smoke(self, request, *, require_debug: bool = True, read_before_write: bool = True):
+        self.calls.append(f"smoke:{request.expression}={request.value_text}:read={int(bool(read_before_write))}")
+        read = None
+        if read_before_write:
+            read = self.read_live_variable(request, require_debug=require_debug)
+        write = self.write_live_variable(request, require_debug=require_debug)
+        return KeilLiveVariableSmokeResult(read=read, write=write)
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -148,6 +192,18 @@ def _replace_profile_axf_missing(profile):
     from dataclasses import replace
 
     return replace(profile, axf_exists=False)
+
+
+def _resolved(expression: str) -> KeilResolvedVariable:
+    return KeilResolvedVariable(
+        expression=expression,
+        symbol=expression,
+        address=0x20000008,
+        size=4,
+        type_name="int",
+        source="probe",
+        ram_checked=True,
+    )
 
 
 def _step_map(result):
@@ -171,12 +227,16 @@ def main() -> int:
     )
     _assert(result.succeeded, result.summary())
     _assert(result.write is not None and result.write.expression == "debug_setpoint", "F401 default write mismatch")
+    _assert(result.read is not None and result.read.value == "5000", "F401 read-before-write mismatch")
+    _assert("smoke:debug_setpoint=6000:read=1" in backend.calls, f"smoke call missing: {backend.calls!r}")
     _assert("write:debug_setpoint=6000" in backend.calls, f"write call missing: {backend.calls!r}")
     steps = _step_map(result)
     _assert(steps["build"].attempted is False, f"build should be skipped when AXF exists: {steps['build']!r}")
+    _assert(steps["smoke"].succeeded and "5000" in steps["smoke"].detail, f"smoke step mismatch: {steps['smoke']!r}")
     _assert(steps["connect"].succeeded and "attempts=2" in steps["connect"].detail, f"connect polling mismatch: {steps['connect']!r}")
     rows = dict(result.diagnostic_rows())
     _assert(rows.get("自动调试") == "成功", f"diagnostics mismatch: {rows!r}")
+    _assert(rows.get("自动写入前回读") == "5000", f"read diagnostic mismatch: {rows!r}")
     _assert(rows.get("自动写入变量") == "debug_setpoint", f"write diagnostic mismatch: {rows!r}")
 
     reuse_backend = _FakeBackend(axf_exists=True, connect_after=1)
@@ -229,6 +289,7 @@ def main() -> int:
     )
     _assert(not mismatch_result.succeeded, "device mismatch should block auto-debug")
     _assert(_step_map(mismatch_result)["device_guard"].succeeded is False, "device guard step should fail")
+    _assert("smoke:debug_setpoint=6000:read=1" not in mismatch_backend.calls, f"mismatch must not smoke: {mismatch_backend.calls!r}")
     _assert("write:debug_setpoint=6000" not in mismatch_backend.calls, f"mismatch must not write: {mismatch_backend.calls!r}")
 
     allowed_backend = _FakeBackend(axf_exists=True, connect_after=1)
@@ -246,7 +307,34 @@ def main() -> int:
         monotonic=clock.monotonic,
     )
     _assert(allowed_result.succeeded, allowed_result.summary())
+    _assert("smoke:debug_setpoint=6000:read=1" in allowed_backend.calls, f"allowed mismatch should smoke: {allowed_backend.calls!r}")
     _assert("write:debug_setpoint=6000" in allowed_backend.calls, f"allowed mismatch should continue: {allowed_backend.calls!r}")
+
+    strict_backend = _FakeBackend(axf_exists=True, connect_after=1, command_write=True)
+    strict_result = run_keil_auto_debug_transaction(
+        strict_backend,
+        request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(not strict_result.succeeded, "strict smoke should reject command-only write success")
+    _assert(_step_map(strict_result)["smoke"].succeeded is False, "strict smoke step should fail")
+
+    loose_request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        poll_interval=0.1,
+        prefer_existing_session=False,
+        strict_write_smoke=False,
+    )
+    loose_backend = _FakeBackend(axf_exists=True, connect_after=1, command_write=True)
+    loose_result = run_keil_auto_debug_transaction(
+        loose_backend,
+        loose_request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(loose_result.succeeded, loose_result.summary())
 
     build_backend = _FakeBackend(axf_exists=False, connect_after=1)
     build_result = run_keil_auto_debug_transaction(

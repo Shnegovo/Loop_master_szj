@@ -48,6 +48,15 @@ class KeilLiveVariableWriteRequest:
 
 
 @dataclass(frozen=True)
+class KeilLiveVariableReadRequest:
+    expression: str
+    axf_path: Path | None = None
+    address: int | None = None
+    type_name: str = ""
+    connection_name: str = "LoopMaster"
+
+
+@dataclass(frozen=True)
 class KeilResolvedVariable:
     expression: str
     symbol: str
@@ -119,6 +128,67 @@ class KeilLiveVariableWriteResult:
 
 
 @dataclass(frozen=True)
+class KeilLiveVariableReadResult:
+    attempted: bool
+    read: bool
+    expression: str
+    method: str
+    resolved: KeilResolvedVariable | None = None
+    raw: bytes = b""
+    value: str = ""
+    diagnostics: tuple[tuple[str, str], ...] = ()
+    error: str = ""
+
+    def summary(self) -> str:
+        if self.read:
+            target = self.expression
+            if self.resolved is not None:
+                target += f" @ 0x{self.resolved.address:08X}"
+            return f"Keil 读变量成功：{target} = {self.value} ({self.method})"
+        return f"Keil 读变量失败：{self.expression} ({self.error or self.method or '--'})"
+
+    def to_record(self) -> dict[str, object]:
+        resolved = None
+        if self.resolved is not None:
+            resolved = {
+                "expression": self.resolved.expression,
+                "symbol": self.resolved.symbol,
+                "address": f"0x{self.resolved.address:08X}",
+                "size": self.resolved.size,
+                "type_name": self.resolved.type_name,
+                "source": self.resolved.source,
+                "ram_checked": self.resolved.ram_checked,
+            }
+        return {
+            "attempted": self.attempted,
+            "read": self.read,
+            "expression": self.expression,
+            "method": self.method,
+            "resolved": resolved,
+            "raw": self.raw.hex(),
+            "value": self.value,
+            "diagnostics": [{"key": key, "value": value} for key, value in self.diagnostics],
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class KeilLiveVariableSmokeResult:
+    read: KeilLiveVariableReadResult | None
+    write: KeilLiveVariableWriteResult
+
+    @property
+    def succeeded(self) -> bool:
+        return _strict_memory_write_passed(self.write)
+
+    def summary(self) -> str:
+        if self.succeeded:
+            before = f"；写前 {self.read.value}" if self.read is not None and self.read.value else ""
+            return self.write.summary() + before
+        return self.write.summary()
+
+
+@dataclass(frozen=True)
 class _ValueFormat:
     size: int
     signed: bool
@@ -146,6 +216,106 @@ class _SymbolCache:
 
 
 _CACHE: dict[Path, _SymbolCache] = {}
+
+
+def run_keil_live_variable_smoke(
+    session: KeilMemorySession,
+    request: KeilLiveVariableWriteRequest,
+    *,
+    read_before_write: bool = True,
+) -> KeilLiveVariableSmokeResult:
+    read_result = None
+    if read_before_write:
+        read_result = read_keil_live_variable(
+            session,
+            KeilLiveVariableReadRequest(
+                expression=request.expression,
+                axf_path=request.axf_path,
+                address=request.address,
+                type_name=request.type_name,
+                connection_name=request.connection_name,
+            ),
+        )
+        if not read_result.read:
+            write_result = KeilLiveVariableWriteResult(
+                attempted=False,
+                written=False,
+                expression=read_result.expression,
+                value_text=request.value_text,
+                method="memory",
+                resolved=read_result.resolved,
+                diagnostics=read_result.diagnostics,
+                error=f"写前读取失败：{read_result.error}",
+            )
+            return KeilLiveVariableSmokeResult(read=read_result, write=write_result)
+    strict_request = KeilLiveVariableWriteRequest(
+        expression=request.expression,
+        value_text=request.value_text,
+        axf_path=request.axf_path,
+        address=request.address,
+        type_name=request.type_name,
+        prefer_memory=True,
+        allow_command_fallback=False,
+        connection_name=request.connection_name,
+    )
+    write_result = write_keil_live_variable(session, strict_request)
+    if not _strict_memory_write_passed(write_result) and not write_result.error:
+        write_result = KeilLiveVariableWriteResult(
+            attempted=write_result.attempted,
+            written=False,
+            expression=write_result.expression,
+            value_text=write_result.value_text,
+            method=write_result.method,
+            resolved=write_result.resolved,
+            old_raw=write_result.old_raw,
+            new_raw=write_result.new_raw,
+            readback_raw=write_result.readback_raw,
+            old_value=write_result.old_value,
+            readback_value=write_result.readback_value,
+            command=write_result.command,
+            attempts=write_result.attempts,
+            diagnostics=write_result.diagnostics,
+            error="严格 smoke 要求内存写入、RAM 符号和独立回读一致",
+        )
+    return KeilLiveVariableSmokeResult(read=read_result, write=write_result)
+
+
+def read_keil_live_variable(
+    session: KeilMemorySession,
+    request: KeilLiveVariableReadRequest,
+) -> KeilLiveVariableReadResult:
+    expression = _clean_expression(request.expression)
+    write_like_request = KeilLiveVariableWriteRequest(
+        expression=expression,
+        value_text="0",
+        axf_path=request.axf_path,
+        address=request.address,
+        type_name=request.type_name,
+        prefer_memory=True,
+        allow_command_fallback=False,
+        connection_name=request.connection_name,
+    )
+    try:
+        resolved, value_format, diagnostics = resolve_keil_live_variable(write_like_request)
+        raw = session.read_memory(resolved.address, resolved.size)
+        return KeilLiveVariableReadResult(
+            attempted=True,
+            read=True,
+            expression=expression,
+            method="memory",
+            resolved=resolved,
+            raw=raw,
+            value=format_keil_scalar_value(raw, value_format),
+            diagnostics=diagnostics,
+        )
+    except Exception as exc:
+        return KeilLiveVariableReadResult(
+            attempted=True,
+            read=False,
+            expression=expression,
+            method="memory",
+            error=str(exc),
+        )
 
 
 def write_keil_live_variable(
@@ -294,6 +464,45 @@ def write_keil_live_variable_existing(
         extended_stack=True,
     ) as session:
         return write_keil_live_variable(session, request)
+
+
+def read_keil_live_variable_existing(
+    request: KeilLiveVariableReadRequest,
+    *,
+    keil_root: str | Path | None,
+    port: int,
+    require_debug: bool = True,
+) -> KeilLiveVariableReadResult:
+    with KeilUvscLiveSession.connect_existing(
+        root=keil_root,
+        port=int(port),
+        connection_name=request.connection_name,
+        require_debug=require_debug,
+        extended_stack=True,
+    ) as session:
+        return read_keil_live_variable(session, request)
+
+
+def run_keil_live_variable_smoke_existing(
+    request: KeilLiveVariableWriteRequest,
+    *,
+    keil_root: str | Path | None,
+    port: int,
+    require_debug: bool = True,
+    read_before_write: bool = True,
+) -> KeilLiveVariableSmokeResult:
+    with KeilUvscLiveSession.connect_existing(
+        root=keil_root,
+        port=int(port),
+        connection_name=request.connection_name,
+        require_debug=require_debug,
+        extended_stack=True,
+    ) as session:
+        return run_keil_live_variable_smoke(
+            session,
+            request,
+            read_before_write=read_before_write,
+        )
 
 
 def resolve_keil_live_variable(
@@ -499,6 +708,18 @@ def _clean_expression(expression: str) -> str:
     if "=" in text or ";" in text:
         raise ValueError("变量名不能包含 = 或 ;")
     return text
+
+
+def _strict_memory_write_passed(write: KeilLiveVariableWriteResult | None) -> bool:
+    if write is None or not write.written:
+        return False
+    if write.method != "memory":
+        return False
+    if write.resolved is None or not write.resolved.ram_checked:
+        return False
+    if not write.old_raw or not write.new_raw or not write.readback_raw:
+        return False
+    return bool(write.readback_raw == write.new_raw)
 
 
 def _find_variable(variables: list[Variable], name: str) -> Variable | None:

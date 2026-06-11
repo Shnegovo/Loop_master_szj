@@ -3149,7 +3149,14 @@ class MainWindow(QMainWindow):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 自动调试", "当前调试后端不是 Keil / UVSOCK。")
             return
-        required = ("debug_profile", "build_project", "launch_uvsock", "read_only_session_snapshot", "write_live_variable")
+        required = (
+            "debug_profile",
+            "build_project",
+            "launch_uvsock",
+            "read_only_session_snapshot",
+            "read_live_variable",
+            "write_live_variable",
+        )
         missing = [name for name in required if not hasattr(self._debug_backend, name)]
         if missing:
             self._show_warning("Keil 自动调试", f"当前 Keil 后端缺少执行器：{', '.join(missing)}。")
@@ -3173,7 +3180,7 @@ class MainWindow(QMainWindow):
             f"AXF：{profile.axf_path or '--'}\n"
             f"变量：{expression}\n"
             f"写入值：{value_text or '--'}\n\n"
-            "将按顺序执行：构建缺失 AXF -> 启动 Keil/UVSOCK -> 等待连接 -> 写入并回读变量。\n"
+            "将按顺序执行：构建缺失 AXF -> 启动或复用 Keil/UVSOCK -> 等待连接 -> 写前读取 -> 写入并回读变量。\n"
             "这会启动外部 Keil 进程，并可能改变真实 MCU 调试会话中的 RAM 变量。"
         )
         if not ask_pcl_confirmation(
@@ -6775,4 +6782,3 @@ def run_scope(elf_path: str = None, pack_path: str = None, target: str = None):
             except Exception:
                 pass
     sys.exit(exit_code)
-

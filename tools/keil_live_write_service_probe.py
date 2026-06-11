@@ -12,7 +12,9 @@ if str(ROOT) not in sys.path:
 
 import src.core.keil.live_write as live_write  # noqa: E402
 from src.core.keil.live_write import (  # noqa: E402
+    KeilLiveVariableReadRequest,
     KeilLiveVariableWriteRequest,
+    read_keil_live_variable,
     write_keil_live_variable,
 )
 from src.core.models import BaseType, MemberInfo, StructType, Symbol, Variable  # noqa: E402
@@ -91,6 +93,14 @@ def main() -> int:
 
         session = FakeSession()
         session.memory[8:12] = (5000).to_bytes(4, "little", signed=True)
+        read_result = read_keil_live_variable(
+            session,
+            KeilLiveVariableReadRequest("debug_setpoint", axf_path=axf),
+        )
+        _assert(read_result.read, read_result.summary())
+        _assert(read_result.value == "5000", f"read value mismatch: {read_result.value}")
+        _assert(read_result.raw == (5000).to_bytes(4, "little", signed=True), "read raw mismatch")
+
         result = write_keil_live_variable(
             session,
             KeilLiveVariableWriteRequest("debug_setpoint", "6000", axf_path=axf),

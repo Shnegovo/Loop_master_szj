@@ -43,6 +43,12 @@ def main() -> int:
     parser.add_argument("--no-build", action="store_true", help="Fail if AXF is missing instead of building.")
     parser.add_argument("--no-launch", action="store_true", help="Connect to an already running uVision instance.")
     parser.add_argument("--no-write", action="store_true", help="Stop after UVSOCK connection/status readback.")
+    parser.add_argument("--no-read-before-write", action="store_true", help="Skip the baseline RAM read before writing.")
+    parser.add_argument(
+        "--no-strict-write-smoke",
+        action="store_true",
+        help="Allow command-write fallback success; default requires AXF/RAM/readback memory write.",
+    )
     parser.add_argument("--expected-device", default="STM32F401", help="Require the Keil project device to match before --execute.")
     parser.add_argument("--allow-device-mismatch", action="store_true", help="Allow --execute even if project device does not match --expected-device.")
     parser.add_argument("--execute", action="store_true", help="Actually start Keil/connect/write the target.")
@@ -84,6 +90,8 @@ def main() -> int:
         wait_seconds=float(args.wait_seconds),
         poll_interval=float(args.poll_interval),
         write_smoke=not args.no_write,
+        read_before_write=not args.no_read_before_write,
+        strict_write_smoke=not args.no_strict_write_smoke,
         expression=expression,
         value_text=write_value,
         expected_device=str(args.expected_device or ""),
@@ -110,6 +118,8 @@ def main() -> int:
             "build_command": profile.build_plan.display_command,
             "launch_command": profile.launch_plan.display_command,
             "write": None if args.no_write else {"expression": expression, "value": write_value},
+            "read_before_write": request.read_before_write,
+            "strict_write_smoke": request.strict_write_smoke,
             "diagnostics": [{"key": key, "value": value} for key, value in profile.diagnostic_rows()],
             "next": "Add --execute to start Keil/UVSOCK and modify the target RAM variable.",
         }
@@ -137,6 +147,8 @@ def main() -> int:
     }
     if result.write is not None:
         record["write"] = result.write.to_record()
+    if result.read is not None:
+        record["read"] = result.read.to_record()
     _print_record(record, json_mode=args.json)
     if not result.succeeded:
         print(result.summary())

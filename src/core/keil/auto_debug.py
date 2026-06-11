@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from src.core.debug_backend import DebugBackendSessionSnapshot
-from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
+from src.core.keil.live_write import (
+    KeilLiveVariableReadRequest,
+    KeilLiveVariableReadResult,
+    KeilLiveVariableSmokeResult,
+    KeilLiveVariableWriteRequest,
+    KeilLiveVariableWriteResult,
+)
 from src.core.keil.presets import keil_live_write_seed, keil_variable_preset_profile
 from src.core.keil.profile import KeilBuildResult, KeilDebugProfile
 from src.core.keil.uvsock import UvscLaunchResult
@@ -48,6 +54,7 @@ class KeilAutoDebugBackend(Protocol):
         previous_status=None,
         attempt_connection: bool = True,
         query_status: bool = True,
+        include_breakpoints: bool = True,
     ) -> DebugBackendSessionSnapshot:
         ...
 
@@ -57,6 +64,23 @@ class KeilAutoDebugBackend(Protocol):
         *,
         require_debug: bool = True,
     ) -> KeilLiveVariableWriteResult:
+        ...
+
+    def read_live_variable(
+        self,
+        request: KeilLiveVariableReadRequest,
+        *,
+        require_debug: bool = True,
+    ) -> KeilLiveVariableReadResult:
+        ...
+
+    def run_live_variable_smoke(
+        self,
+        request: KeilLiveVariableWriteRequest,
+        *,
+        require_debug: bool = True,
+        read_before_write: bool = True,
+    ) -> KeilLiveVariableSmokeResult:
         ...
 
 
@@ -72,6 +96,8 @@ class KeilAutoDebugRequest:
     wait_seconds: float = 20.0
     poll_interval: float = 0.75
     write_smoke: bool = True
+    read_before_write: bool = True
+    strict_write_smoke: bool = True
     expression: str = ""
     value_text: str = ""
     prefer_memory: bool = True
@@ -98,6 +124,7 @@ class KeilAutoDebugResult:
     build: KeilBuildResult | None = None
     launch: UvscLaunchResult | None = None
     snapshot: DebugBackendSessionSnapshot | None = None
+    read: KeilLiveVariableReadResult | None = None
     write: KeilLiveVariableWriteResult | None = None
     steps: tuple[KeilAutoDebugStep, ...] = ()
     error: str = ""
@@ -107,7 +134,7 @@ class KeilAutoDebugResult:
         if self.error:
             return False
         if self.request.write_smoke:
-            return bool(self.write and self.write.written)
+            return _write_smoke_passed(self.request, self.write)
         return bool(self.snapshot and self.snapshot.connection_established)
 
     def summary(self) -> str:
@@ -138,6 +165,13 @@ class KeilAutoDebugResult:
             rows.append((f"步骤 {step.title}", "成功" if step.succeeded else "失败" if step.attempted else "跳过"))
             if step.detail:
                 rows.append((f"{step.title}详情", step.detail))
+        if self.read is not None:
+            rows.append(("自动写入前变量", self.read.expression))
+            rows.append(("自动写入前结果", "成功" if self.read.read else "失败"))
+            if self.read.value:
+                rows.append(("自动写入前回读", self.read.value))
+            if self.read.error:
+                rows.append(("自动写入前错误", self.read.error))
         if self.write is not None:
             rows.append(("自动写入变量", self.write.expression))
             rows.append(("自动写入结果", "成功" if self.write.written else "失败"))
@@ -157,6 +191,7 @@ class _AutoDebugState:
     build: KeilBuildResult | None = None
     launch: UvscLaunchResult | None = None
     snapshot: DebugBackendSessionSnapshot | None = None
+    read: KeilLiveVariableReadResult | None = None
     write: KeilLiveVariableWriteResult | None = None
     error: str = ""
 
@@ -290,20 +325,58 @@ def run_keil_auto_debug_transaction(
             value_text=value_text,
             axf_path=state.profile.axf_path if state.profile and state.profile.axf_exists else None,
             prefer_memory=bool(request.prefer_memory and state.profile and state.profile.axf_exists),
-            allow_command_fallback=request.allow_command_fallback,
+            allow_command_fallback=bool(request.allow_command_fallback and not request.strict_write_smoke),
             connection_name=request.connection_name,
         )
-        state.write = _timed_step(
-            state,
-            "write",
-            "写入回读",
-            monotonic,
-            lambda: backend.write_live_variable(write_request, require_debug=True),
-            lambda write: write.written,
-            lambda write: write.summary(),
-            skipped=False,
-        )
-        if state.write is None or not state.write.written:
+        if request.strict_write_smoke and hasattr(backend, "run_live_variable_smoke"):
+            smoke_result = _timed_step(
+                state,
+                "smoke",
+                "写前读取和写入回读",
+                monotonic,
+                lambda: backend.run_live_variable_smoke(
+                    write_request,
+                    require_debug=True,
+                    read_before_write=request.read_before_write,
+                ),
+                lambda smoke: _write_smoke_passed(request, smoke.write),
+                lambda smoke: smoke.summary(),
+                skipped=False,
+            )
+            if smoke_result is not None:
+                state.read = smoke_result.read
+                state.write = smoke_result.write
+        else:
+            read_request = KeilLiveVariableReadRequest(
+                expression=expression,
+                axf_path=state.profile.axf_path if state.profile and state.profile.axf_exists else None,
+                connection_name=f"{request.connection_name}Read",
+            )
+            if request.read_before_write:
+                state.read = _timed_step(
+                    state,
+                    "read",
+                    "写前读取",
+                    monotonic,
+                    lambda: backend.read_live_variable(read_request, require_debug=True),
+                    lambda read: read.read,
+                    lambda read: read.summary(),
+                    skipped=False,
+                )
+                if state.read is None or not state.read.read:
+                    state.error = _step_error(state.steps, "写前读取失败")
+                    return _result(request, state)
+            state.write = _timed_step(
+                state,
+                "write",
+                "写入回读",
+                monotonic,
+                lambda: backend.write_live_variable(write_request, require_debug=True),
+                lambda write: _write_smoke_passed(request, write),
+                lambda write: write.summary(),
+                skipped=False,
+            )
+        if not _write_smoke_passed(request, state.write):
             state.error = _step_error(state.steps, "写入回读失败")
 
     return _result(request, state)
@@ -497,6 +570,23 @@ def _write_seed(request: KeilAutoDebugRequest, profile: KeilDebugProfile | None)
     return expression, request.value_text or value_text
 
 
+def _write_smoke_passed(
+    request: KeilAutoDebugRequest,
+    write: KeilLiveVariableWriteResult | None,
+) -> bool:
+    if write is None or not write.written:
+        return False
+    if not request.write_smoke or not request.strict_write_smoke:
+        return True
+    if write.method != "memory":
+        return False
+    if write.resolved is None or not write.resolved.ram_checked:
+        return False
+    if not write.old_raw or not write.new_raw or not write.readback_raw:
+        return False
+    return bool(write.readback_raw == write.new_raw)
+
+
 def _device_guard_passed(request: KeilAutoDebugRequest, state: _AutoDebugState) -> bool:
     expected = _normalize_device_text(request.expected_device)
     if not expected:
@@ -594,6 +684,7 @@ def _result(request: KeilAutoDebugRequest, state: _AutoDebugState) -> KeilAutoDe
         build=state.build,
         launch=state.launch,
         snapshot=state.snapshot,
+        read=state.read,
         write=state.write,
         steps=tuple(state.steps),
         error=state.error,

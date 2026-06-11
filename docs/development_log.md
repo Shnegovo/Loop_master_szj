@@ -4688,3 +4688,114 @@ probe project, write a RAM variable, and independently read it back.
   window text so `BL` can produce real remote breakpoint ids.
 - Continue the modern debugger UI pass: source current line, breakpoint gutter
   feedback, compact debug side panel, and later OpenOCD/pyOCD/GDB adapters.
+
+## Milestone 52 Update - Strict Keil Live Variable Smoke
+
+### Goal
+
+Make the real Keil live-write proof harder to fake: a successful auto-debug
+write must prove the variable can be resolved through the AXF, read from RAM
+before the write, written through the memory path, and independently read back.
+
+### Completed
+
+- Added a first-class Keil live variable read path.
+  - `KeilLiveVariableReadRequest` / `KeilLiveVariableReadResult`.
+  - `read_keil_live_variable()` for existing `KeilMemorySession` objects.
+  - `read_keil_live_variable_existing()` for UVSOCK connections.
+- Added a single-session strict smoke path.
+  - `run_keil_live_variable_smoke()` performs read-before-write and
+    write/readback through one `KeilUvscLiveSession`.
+  - `run_keil_live_variable_smoke_existing()` avoids the two-connection pattern
+    that previously triggered `UVSC_GEN_SET_OPTIONS` internal errors on this
+    Keil setup.
+  - Strict success requires method `memory`, a RAM-checked resolved symbol,
+    non-empty old/new/readback raw bytes, and `readback_raw == new_raw`.
+- Updated auto-debug orchestration.
+  - `KeilAutoDebugRequest.read_before_write=True` by default.
+  - `KeilAutoDebugRequest.strict_write_smoke=True` by default.
+  - Strict mode disables command fallback as a success path.
+  - Auto-debug stores and reports the baseline read result in diagnostics.
+- Updated UI copy for the Keil auto-debug confirmation so the user sees the
+  real sequence: build missing AXF, start or reuse Keil/UVSOCK, connect,
+  read before write, then write and read back.
+- Added explicit CLI downgrade switches for investigation only:
+  - `--no-read-before-write`
+  - `--no-strict-write-smoke`
+- Tightened probe coverage.
+  - The transaction probe now covers the real `run_live_variable_smoke()`
+    branch instead of only the legacy read/write fallback.
+  - The backend adapter probe now verifies `read_live_variable()` and
+    `run_live_variable_smoke()` pass through root/port/debug/read-before-write
+    arguments.
+  - UI probe fakes now return memory-like results so strict mode is exercised.
+- Re-checked the user-provided balance-car project as a reference only.
+  - Target `Target 1`, device `STM32F103C8`, ARMCC/StdPeriph F103 project.
+  - Current AXF is missing and the project is not suitable for the connected
+    F401 board.
+  - Useful future profile fields: project/target/device/core, AXF, adapter,
+    flash/RAM ranges, source groups, key source files, PID instances, watch
+    variables, and runtime suitability.
+
+### Verified
+
+- `python -m py_compile src\core\keil\live_write.py src\core\keil\backend.py src\core\keil\auto_debug.py src\core\keil\__init__.py src\ui\gui.py tools\keil_auto_debug_transaction_probe.py tools\keil_auto_debug_smoke.py tools\keil_live_write_service_probe.py tools\keil_backend_live_write_probe.py tools\ui_debug_workbench_probe.py tools\keil_balance_reference_probe.py`
+  - PASS.
+- `python tools\keil_live_write_service_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --json`
+  - PASS; dry-run records `read_before_write=true` and
+    `strict_write_smoke=true`.
+- `python tools\keil_auto_debug_smoke.py --json --no-read-before-write --no-strict-write-smoke`
+  - PASS; dry-run downgrade switches are visible in JSON.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-strict-smoke-final2 --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-strict-smoke-final2\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-strict-smoke-final2\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-strict-smoke-final2\03_debug_workbench_narrow.png`
+- `python tools\keil_balance_reference_probe.py --json`
+  - PASS; confirms F103 balance-car reference metadata and PID/scope presets.
+- `python tools\keil_variable_presets_probe.py`
+  - PASS.
+- `python tools\keil_debug_profile_probe.py`
+  - PASS.
+- `python tools\keil_debug_options_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on the connected ST-Link/F401 setup.
+  - Reused existing UVSOCK session in paused state.
+  - Resolved `debug_setpoint` from DWARF to `0x20000008`.
+  - Read before write returned `6000` because the prior proof had already set
+    the variable.
+  - Wrote through the memory method and read back `6000`.
+  - Process exit code was `0`.
+
+### Notes
+
+- This milestone closes the "command-only success" hole: Keil accepting a
+  debug command is not enough for strict auto-debug success.
+- The current F401 proof is now real variable access rather than only a
+  workflow scaffold.
+- The balance-car project should enter the next Keil profile/workspace layer as
+  an F103 reference and PID preset source, not as something to run on the
+  attached F401 board.
+- Architecture review confirms the next multi-toolchain step should extract
+  three small execution-facing protocols beside the existing read-only backend:
+  run control, breakpoint sync, and variable access. Keil build/launch remains
+  a Keil workflow, not a cross-backend core API.
+
+### Next Target
+
+- Add a debugger profile/workspace schema that can store both:
+  - the F401 live probe project used for real smoke tests,
+  - the F103 balance-car reference project with PID/watch metadata.
+- Start extracting a generic variable-access execution interface so Keil,
+  OpenOCD, pyOCD and GDB can share UI actions without hard-coded Keil method
+  names.
+- Keep pushing real features before more scaffolding: next visible feature
+  should let the UI read a selected variable baseline and present the strict
+  write result as a human-readable transaction.

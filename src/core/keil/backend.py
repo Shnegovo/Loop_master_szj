@@ -19,8 +19,13 @@ from src.core.keil.breakpoint_list import (
     parse_keil_breakpoint_list,
 )
 from src.core.keil.live_write import (
+    KeilLiveVariableReadRequest,
+    KeilLiveVariableReadResult,
+    KeilLiveVariableSmokeResult,
     KeilLiveVariableWriteRequest,
     KeilLiveVariableWriteResult,
+    read_keil_live_variable_existing,
+    run_keil_live_variable_smoke_existing,
     write_keil_live_variable_existing,
 )
 from src.core.keil.profile import make_keil_debug_profile
@@ -188,6 +193,34 @@ class KeilUvSockBackendAdapter:
             keil_root=self.config.root,
             port=self.config.port,
             require_debug=require_debug,
+        )
+
+    def read_live_variable(
+        self,
+        request: KeilLiveVariableReadRequest,
+        *,
+        require_debug: bool = True,
+    ) -> KeilLiveVariableReadResult:
+        return read_keil_live_variable_existing(
+            request,
+            keil_root=self.config.root,
+            port=self.config.port,
+            require_debug=require_debug,
+        )
+
+    def run_live_variable_smoke(
+        self,
+        request: KeilLiveVariableWriteRequest,
+        *,
+        require_debug: bool = True,
+        read_before_write: bool = True,
+    ) -> KeilLiveVariableSmokeResult:
+        return run_keil_live_variable_smoke_existing(
+            request,
+            keil_root=self.config.root,
+            port=self.config.port,
+            require_debug=require_debug,
+            read_before_write=read_before_write,
         )
 
     def debug_profile(

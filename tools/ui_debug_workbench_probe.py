@@ -34,7 +34,7 @@ from src.core.keil.commands import (  # noqa: E402
     build_keil_debug_transactions,
     transaction_by_key,
 )
-from src.core.keil.live_write import KeilLiveVariableWriteResult  # noqa: E402
+from src.core.keil.live_write import KeilLiveVariableReadResult, KeilLiveVariableWriteResult, KeilResolvedVariable  # noqa: E402
 from src.core.keil.profile import KeilBuildResult, make_keil_debug_profile  # noqa: E402
 from src.core.keil.uvsock import UvscLaunchResult  # noqa: E402
 from src.ui.gui import MainWindow  # noqa: E402
@@ -309,6 +309,18 @@ def _focused_transaction(transactions):
     return transactions[0] if transactions else None
 
 
+def _fake_keil_resolved(expression: str) -> KeilResolvedVariable:
+    return KeilResolvedVariable(
+        expression=expression,
+        symbol=expression,
+        address=0x20000008,
+        size=4,
+        type_name="int",
+        source="ui-probe",
+        ram_checked=True,
+    )
+
+
 class _FakeReadOnlyBackend:
     def __init__(self, project_path: Path) -> None:
         self.project_path = project_path
@@ -368,13 +380,30 @@ class _FakeReadOnlyBackend:
 
     def write_live_variable(self, request, *, require_debug: bool = True):
         self.write_calls += 1
+        new_raw = int(request.value_text, 0).to_bytes(4, "little", signed=True)
         return KeilLiveVariableWriteResult(
             attempted=True,
             written=True,
             expression=request.expression,
             value_text=request.value_text,
-            method="fake",
+            method="memory",
+            resolved=_fake_keil_resolved(request.expression),
+            old_raw=(5000).to_bytes(4, "little", signed=True),
+            new_raw=new_raw,
+            readback_raw=new_raw,
+            old_value="5000",
             readback_value=request.value_text,
+        )
+
+    def read_live_variable(self, request, *, require_debug: bool = True):
+        return KeilLiveVariableReadResult(
+            attempted=True,
+            read=True,
+            expression=request.expression,
+            method="memory",
+            resolved=_fake_keil_resolved(request.expression),
+            raw=(5000).to_bytes(4, "little", signed=True),
+            value="5000",
         )
 
     def read_only_session_snapshot(
@@ -385,6 +414,7 @@ class _FakeReadOnlyBackend:
         previous_status=None,
         attempt_connection: bool = True,
         query_status: bool = True,
+        include_breakpoints: bool = True,
     ):
         self.calls += 1
         status = make_debug_status(
@@ -799,15 +829,21 @@ Raw dump of debug contents of section .debug_line:
                     restore_confirm()
                 if fake_backend.build_calls != 1:
                     issues.append(f"auto debug should request one fake build: {fake_backend.build_calls}")
-                if fake_backend.launch_calls != 1:
-                    issues.append(f"auto debug should request one fake launch: {fake_backend.launch_calls}")
+                if fake_backend.launch_calls != 0:
+                    issues.append(f"auto debug should reuse fake connection instead of launching: {fake_backend.launch_calls}")
                 if fake_backend.write_calls != 2:
                     issues.append(f"auto debug should request a second fake write: {fake_backend.write_calls}")
                 auto_result = getattr(window, "_debug_keil_auto_debug_result", None)
                 if auto_result is None or not auto_result.succeeded:
                     issues.append(f"auto debug result missing or failed: {auto_result!r}")
+                elif auto_result.read is None or not auto_result.read.read or auto_result.read.value != "5000":
+                    issues.append(f"auto debug read-before-write result mismatch: {auto_result.read!r}")
                 auto_diag = _diagnostics(tab)
-                if auto_diag.get("自动调试") != "成功" or auto_diag.get("自动写入结果") != "成功":
+                if (
+                    auto_diag.get("自动调试") != "成功"
+                    or auto_diag.get("自动写入前结果") != "成功"
+                    or auto_diag.get("自动写入结果") != "成功"
+                ):
                     issues.append(f"auto debug diagnostics mismatch: {auto_diag!r}")
         tab.search_edit.setText("speed")
         if not tab.search_next_button.isEnabled():
