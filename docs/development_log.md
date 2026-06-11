@@ -6620,3 +6620,61 @@ keys, safety boundaries, and UI-visible diagnostics.
 - Start reading `D:\ti` after the Keil breakpoint path is stable enough, to
   build an MSPM0G3507 profile and decide whether TI should route through a
   vendor tool, GDB bridge, OpenOCD-like path, or pyOCD-compatible path.
+
+## Milestone 76 - Keil Breakpoint Sync Plan Strip
+
+### Goal
+
+Make Keil breakpoint synchronization understandable before the user presses the
+real sync button. The workbench already had local breakpoint editing, remote
+snapshot evidence, and guarded sync execution; this stage adds a compact visual
+summary of the planned diff.
+
+### Completed
+
+- Added a `同步计划` strip above the local breakpoint table.
+- The strip shows:
+  - sync mode: `完整差分` or `推送本地`,
+  - planned operations: add/remove/enable/disable/condition counts,
+  - verification state: verified/unverified/pending plus limited operations.
+- The strip is driven by the same `sync_breakpoints` transaction summary used by
+  the confirmation dialog and audit tooltip, so it does not invent a separate
+  breakpoint model.
+- Tuned the wording from `无效` to `受限` for UI display because current Keil
+  condition-breakpoint operations are deliberately blocked until command
+  semantics are fully verified.
+- Extended the UI probe to capture a dedicated local screenshot of the strip:
+  - `tools\ui-debug-workbench-breakpoint-sync-strip\04_debug_breakpoint_sync_strip.png`
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-sync-strip --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-breakpoint-sync-strip\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breakpoint-sync-strip\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-breakpoint-sync-strip\03_debug_workbench_narrow.png`
+    - `tools\ui-debug-workbench-breakpoint-sync-strip\04_debug_breakpoint_sync_strip.png`
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- Visual check of the local strip screenshot confirmed the compact chip layout
+  remains readable and does not add another large panel.
+- This stage is still UI/transaction evidence only; it does not alter how Keil
+  UVSOCK commands are sent.
+
+### Next Target
+
+- Continue Keil breakpoint basics by tightening the real sync operation around:
+  - condition-breakpoint limitations,
+  - remote breakpoint readback evidence after sync,
+  - clearer recovery when Keil accepts a command but `BL` cannot map it back to
+    source.

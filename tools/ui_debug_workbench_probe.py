@@ -546,6 +546,14 @@ def _save(window: MainWindow, output_dir: Path, name: str) -> Path:
     return path
 
 
+def _save_widget(widget: QWidget, output_dir: Path, name: str) -> Path:
+    QApplication.processEvents()
+    path = output_dir / f"{name}.png"
+    if not widget.grab().save(str(path)):
+        raise RuntimeError(f"failed to save widget screenshot: {path}")
+    return path
+
+
 def _diagnostics(tab) -> dict[str, str]:
     return {
         tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
@@ -1107,6 +1115,28 @@ Raw dump of debug contents of section .debug_line:
             ),
             "sync breakpoint plan tooltip",
         )
+        sync_mode_text = getattr(tab, "breakpoint_sync_mode_label", None).text() if hasattr(tab, "breakpoint_sync_mode_label") else ""
+        sync_ops_text = getattr(tab, "breakpoint_sync_ops_label", None).text() if hasattr(tab, "breakpoint_sync_ops_label") else ""
+        sync_verify_text = getattr(tab, "breakpoint_sync_verify_label", None).text() if hasattr(tab, "breakpoint_sync_verify_label") else ""
+        if "完整差分" not in sync_mode_text:
+            issues.append(f"breakpoint sync mode strip mismatch: {sync_mode_text!r}")
+        for phrase in ("+1", "-1", "启1", "停1", "条1"):
+            if phrase not in sync_ops_text:
+                issues.append(f"breakpoint sync ops strip missing {phrase}: {sync_ops_text!r}")
+        for phrase in ("已1", "未1", "待3"):
+            if phrase not in sync_verify_text:
+                issues.append(f"breakpoint sync verify strip missing {phrase}: {sync_verify_text!r}")
+        sync_strip_tooltip = getattr(tab, "breakpoint_sync_mode_label", None).toolTip() if hasattr(tab, "breakpoint_sync_mode_label") else ""
+        if "keil-ui-remote-breakpoint-snapshot-demo" not in sync_strip_tooltip or "完整差分同步" not in sync_strip_tooltip:
+            issues.append(f"breakpoint sync strip tooltip mismatch: {sync_strip_tooltip!r}")
+        if hasattr(tab, "breakpoint_sync_mode_label"):
+            screenshots.append(
+                _save_widget(
+                    tab.breakpoint_sync_mode_label.parentWidget(),
+                    output_dir,
+                    "04_debug_breakpoint_sync_strip",
+                )
+            )
         if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():
             issues.append(f"marker label should summarize breakpoint states: {tab.marker_label.text()!r}")
         if "PC 未验证" not in tab.marker_label.text():

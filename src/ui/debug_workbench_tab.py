@@ -640,6 +640,7 @@ class DebugWorkbenchTab(QWidget):
     ) -> None:
         self._command_transactions = tuple(transactions)
         self._refresh_command_plan_preview()
+        self._refresh_breakpoint_sync_preview()
 
     def set_command_history_entries(
         self,
@@ -990,6 +991,7 @@ class DebugWorkbenchTab(QWidget):
         bp_title = QLabel("本地断点")
         bp_title.setObjectName("debugSectionTitle")
         layout.addWidget(bp_title)
+        layout.addWidget(self._build_breakpoint_sync_strip())
 
         self.breakpoint_table = QTableWidget()
         self.breakpoint_table.setObjectName("debugBreakpointTable")
@@ -1084,6 +1086,28 @@ class DebugWorkbenchTab(QWidget):
         self.scope_source_combo.currentIndexChanged.connect(self._on_scope_acquisition_combo_changed)
         polish_combo_popup(self.scope_source_combo)
         row.addWidget(self.scope_source_combo)
+        return strip
+
+    def _build_breakpoint_sync_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setObjectName("debugBreakpointSyncStrip")
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(6)
+        title = QLabel("同步计划")
+        title.setObjectName("debugBreakpointSyncTitle")
+        row.addWidget(title)
+        self.breakpoint_sync_mode_label = QLabel("同步 等待")
+        self.breakpoint_sync_mode_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.breakpoint_sync_mode_label)
+        self.breakpoint_sync_ops_label = QLabel("操作 --")
+        self.breakpoint_sync_ops_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.breakpoint_sync_ops_label)
+        self.breakpoint_sync_verify_label = QLabel("验证 --")
+        self.breakpoint_sync_verify_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.breakpoint_sync_verify_label)
+        row.addStretch(1)
+        self._refresh_breakpoint_sync_preview()
         return strip
 
     def _build_live_loop_strip(self) -> QFrame:
@@ -1934,6 +1958,74 @@ class DebugWorkbenchTab(QWidget):
         self._repolish(self.plan_state_label, self.plan_risk_label)
         self._refresh_command_history_preview()
 
+    def _refresh_breakpoint_sync_preview(self) -> None:
+        if not hasattr(self, "breakpoint_sync_mode_label"):
+            return
+        transaction = self._command_transaction_by_key("sync_breakpoints")
+        summary = getattr(transaction, "breakpoint_diff_summary", None) if transaction is not None else None
+        if summary is None:
+            local_count = len(self._breakpoints.all())
+            mode_text = "同步 等待交易"
+            ops_text = f"本地 {local_count}"
+            verify_text = "验证 --"
+            tooltip = "等待调试后端生成断点同步交易"
+            mode_state = "idle"
+            ops_state = "idle"
+            verify_state = "idle"
+        else:
+            mode = "完整差分" if summary.snapshot_complete else "推送本地"
+            if summary.snapshot_stale and summary.reason:
+                mode += " · 快照待更新"
+            mode_text = f"同步 {mode}"
+            if summary.operation_count:
+                ops_text = (
+                    f"+{summary.add_count} -{summary.remove_count} "
+                    f"启{summary.enable_count} 停{summary.disable_count} 条{summary.update_condition_count}"
+                )
+            else:
+                ops_text = f"无变化 {summary.noop_count}"
+            verify_text = (
+                f"验证 已{summary.verified_count} 未{summary.unverified_count} "
+                f"待{summary.pending_verify_count}"
+            )
+            if summary.invalid_count:
+                verify_text += f" 受限{summary.invalid_count}"
+            tooltip = "\n".join(
+                (
+                    f"快照: {summary.snapshot_id}",
+                    f"模式: {'完整差分同步' if summary.snapshot_complete else '推送本地断点，不删除远端'}",
+                    (
+                        "操作: "
+                        f"新增 {summary.add_count} / 删除 {summary.remove_count} / "
+                        f"启用 {summary.enable_count} / 停用 {summary.disable_count} / "
+                        f"条件 {summary.update_condition_count} / 无变化 {summary.noop_count}"
+                    ),
+                    (
+                        "验证: "
+                        f"已验证 {summary.verified_count} / 未验证 {summary.unverified_count} / "
+                        f"待验证 {summary.pending_verify_count} / 无效或受限 {summary.invalid_count}"
+                    ),
+                    f"说明: {summary.reason or '断点计划已生成'}",
+                )
+            )
+            mode_state = "warn" if not summary.snapshot_complete else "ready"
+            ops_state = "active" if summary.operation_count else "idle"
+            verify_state = "warn" if summary.invalid_count or summary.unverified_count or summary.pending_verify_count else "ready"
+        updates = (
+            (self.breakpoint_sync_mode_label, mode_text, mode_state),
+            (self.breakpoint_sync_ops_label, ops_text, ops_state),
+            (self.breakpoint_sync_verify_label, verify_text, verify_state),
+        )
+        for label, text, state in updates:
+            label.setText(text)
+            label.setToolTip(tooltip)
+            label.setProperty("state", state)
+        self._repolish(
+            self.breakpoint_sync_mode_label,
+            self.breakpoint_sync_ops_label,
+            self.breakpoint_sync_verify_label,
+        )
+
     def _refresh_command_history_preview(self) -> None:
         if not hasattr(self, "plan_history_label"):
             return
@@ -2114,6 +2206,7 @@ class DebugWorkbenchTab(QWidget):
         status = self._session.status
         self.summary_label.setText(f"{project} · {source_count} · {breakpoints} · {status.label}")
         self._refresh_breakpoint_table()
+        self._refresh_breakpoint_sync_preview()
         self.summaryChanged.emit()
 
     def _apply_debug_status(self, status: DebugWorkbenchStatus) -> None:
@@ -2425,6 +2518,40 @@ class DebugWorkbenchTab(QWidget):
                 background: #f8fbff;
                 border: 1px solid #d2deea;
                 border-radius: 7px;
+            }
+            QFrame#debugBreakpointSyncStrip {
+                background: #f8fbff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
+            QLabel#debugBreakpointSyncTitle {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 650;
+            }
+            QLabel#debugBreakpointSyncChip {
+                color: #334155;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 6px;
+                background: #ffffff;
+                border: 1px solid #dce6f0;
+                border-radius: 5px;
+            }
+            QLabel#debugBreakpointSyncChip[state="ready"] {
+                color: #166534;
+                background: #f0fdf4;
+                border-color: #bbf7d0;
+            }
+            QLabel#debugBreakpointSyncChip[state="active"] {
+                color: #1d4ed8;
+                background: #eff6ff;
+                border-color: #bfdbfe;
+            }
+            QLabel#debugBreakpointSyncChip[state="warn"] {
+                color: #b45309;
+                background: #fffbeb;
+                border-color: #fde68a;
             }
             QLabel#debugBreakpointEditorLabel {
                 color: #475569;
