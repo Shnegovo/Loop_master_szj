@@ -170,6 +170,9 @@ class KeilBreakpointSyncResult:
         if plan:
             executable_count = sum(1 for item in plan if item.executable)
             rows.append(("断点命令计划", f"{executable_count}/{len(plan)} 可发送"))
+        command_samples = _command_samples(self.commands)
+        if command_samples:
+            rows.append(("断点命令样例", "；".join(command_samples)))
         address_resolved = sum(1 for item in self.commands if item.operation.address is not None)
         address_unresolved = sum(
             1 for item in self.commands
@@ -669,6 +672,23 @@ def _address_samples(commands: tuple[KeilBreakpointCommandResult, ...]) -> tuple
             continue
         suffix = "" if operation.address_exact else "~"
         samples.append(f"{Path(operation.path).name}:{operation.line}->{suffix}0x{int(operation.address):08X}")
+        if len(samples) >= 3:
+            break
+    return tuple(samples)
+
+
+def _command_samples(commands: tuple[KeilBreakpointCommandResult, ...]) -> tuple[str, ...]:
+    samples: list[str] = []
+    for item in commands:
+        if not item.command or item.operation.action == KeilBreakpointSyncAction.NOOP:
+            continue
+        if item.attempted and item.succeeded:
+            prefix = "成功"
+        elif item.attempted:
+            prefix = "失败"
+        else:
+            prefix = "受限"
+        samples.append(f"{prefix} {item.command}")
         if len(samples) >= 3:
             break
     return tuple(samples)

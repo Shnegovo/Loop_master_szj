@@ -95,6 +95,7 @@ def main() -> int:
         _assert(rows.get("断点受限") == "1 未发送", f"limited diagnostics mismatch: {rows!r}")
         _assert("条件断点" in rows.get("断点受限原因", ""), f"limited reason missing: {rows!r}")
         _assert(rows.get("断点命令计划") == "4/5 可发送", f"command plan diagnostics mismatch: {rows!r}")
+        _assert("BD 2" in rows.get("断点命令样例", "") and "BE 3" in rows.get("断点命令样例", ""), f"command sample diagnostics mismatch: {rows!r}")
         record = result.to_record()
         _assert(len(record["command_plan"]) == 5, f"command plan record missing: {record!r}")
         _assert(record["command_plan"][0]["command"] == "BD 2", f"command plan record order mismatch: {record['command_plan']!r}")

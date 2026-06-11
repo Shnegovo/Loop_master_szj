@@ -7781,3 +7781,46 @@ are actually sendable and how many are limited.
   - consider showing the last live `BS/BK` command plan in diagnostics/history,
   - then move to OpenOCD/pyOCD/TI adapter skeletons after Keil line breakpoints,
     run/halt, and variable write are all coherent.
+
+## Milestone 94 - Breakpoint Sync Command Evidence Diagnostics
+
+### Goal
+
+After a breakpoint sync runs, diagnostics should show not only counts but also
+representative commands. This makes it easier to confirm whether the last action
+actually sent `BS`, `BK`, `BE`, or `BD`.
+
+### Completed
+
+- Added `断点命令样例` to `KeilBreakpointSyncResult.diagnostic_rows()`.
+- The row includes up to three representative results, prefixed as:
+  - `成功 <command>`,
+  - `失败 <command>`,
+  - `受限 <command>`.
+- Extended core and UI probes:
+  - core sync probe asserts `BD 2` and `BE 3` appear in command evidence,
+  - UI sync probe asserts `BS` appears in the diagnostics after a fake sync.
+
+### Verified
+
+- `python -m py_compile src\core\keil\breakpoint_sync.py tools\keil_breakpoint_sync_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+
+### Notes
+
+- This is a diagnostics/evidence improvement only. It does not change command
+  execution order, UVSOCK behavior, or hardware state.
+
+### Next Target
+
+- Continue Keil basics with source-line address evidence:
+  - make address-resolved ordinary line breakpoints more visible before/after
+    sync,
+  - keep conditional breakpoints explicitly limited until proven on hardware,
+  - then start OpenOCD/pyOCD/TI adapter contract skeletons.
