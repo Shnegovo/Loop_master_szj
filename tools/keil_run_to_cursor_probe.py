@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ from src.core.keil.run_to_cursor import (  # noqa: E402
     KeilRunToCursorRequest,
     run_keil_to_cursor_transaction,
 )
+from src.core.keil.source_line_address import resolve_source_line_address  # noqa: E402
 from src.core.keil.uvsock import KeilUvscLiveSession, UvscRuntimeControlResult  # noqa: E402
 
 
@@ -26,10 +28,19 @@ DEFAULT_TARGET = "STM32F401CCU6 Variable Probe"
 
 
 class FakeRunToCursorSession:
-    def __init__(self, address: int) -> None:
+    def __init__(
+        self,
+        address: int,
+        *,
+        pc_address: int | None = None,
+        hit_on_run: bool = True,
+        initial_breakpoints: dict[str, int] | None = None,
+    ) -> None:
         self.address = int(address)
-        self.breakpoints: dict[str, int] = {}
-        self.next_id = 0
+        self.pc_address = int(pc_address if pc_address is not None else address)
+        self.hit_on_run = bool(hit_on_run)
+        self.breakpoints: dict[str, int] = dict(initial_breakpoints or {})
+        self.next_id = _next_remote_id(self.breakpoints)
         self.running = False
         self.log_path: Path | None = None
         self.commands: list[str] = []
@@ -52,7 +63,10 @@ class FakeRunToCursorSession:
             return command
         if text == "EVAL PC":
             if self.log_path is not None:
-                self.log_path.write_text(f"EVAL PC\n0x{self.address:08X} {self.address}\nLOG OFF\n", encoding="utf-8")
+                self.log_path.write_text(
+                    f"EVAL PC\n0x{self.pc_address:08X} {self.pc_address}\nLOG OFF\n",
+                    encoding="utf-8",
+                )
             return command
         if text.startswith("BS "):
             address = int(text.split(None, 1)[1], 0)
@@ -67,8 +81,10 @@ class FakeRunToCursorSession:
 
     def target_running(self) -> bool | None:
         if self.running:
-            self.running = False
-            return False
+            if self.hit_on_run:
+                self.running = False
+                return False
+            return True
         return False
 
     def run_target(self) -> UvscRuntimeControlResult:
@@ -104,6 +120,16 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _next_remote_id(breakpoints: dict[str, int]) -> int:
+    numbers: list[int] = []
+    for key in breakpoints:
+        try:
+            numbers.append(int(key, 0))
+        except ValueError:
+            continue
+    return (max(numbers) + 1) if numbers else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Probe Keil run-to-cursor transaction.")
     parser.add_argument("--live", action="store_true", help="Run against an existing Keil UVSOCK debug session.")
@@ -132,16 +158,51 @@ def main() -> int:
         reset_before_run=True,
     )
 
-    fake = FakeRunToCursorSession(0x08000164)
+    target = resolve_source_line_address(axf, source, int(args.line), source_roots=(DEFAULT_SOURCE_ROOT,), allow_nearest=False)
+    _assert(target.resolved and target.address is not None, f"target line did not resolve: {target!r}")
+    target_address = int(target.address)
+    mismatch = resolve_source_line_address(axf, source, int(args.line) + 1, source_roots=(DEFAULT_SOURCE_ROOT,), allow_nearest=False)
+    _assert(mismatch.resolved and mismatch.address is not None, f"mismatch line did not resolve: {mismatch!r}")
+
+    fake = FakeRunToCursorSession(target_address)
     fake_result = run_keil_to_cursor_transaction(fake, request)
     _assert(fake_result.succeeded, fake_result.summary())
     _assert(fake_result.temp_remote_id == "0", f"fake temp breakpoint id mismatch: {fake_result.to_record()!r}")
     _assert(fake_result.cleanup_succeeded, "fake temporary breakpoint cleanup did not succeed")
     _assert(not fake.breakpoints, f"fake temporary breakpoint leaked: {fake.breakpoints!r}")
 
+    existing = FakeRunToCursorSession(target_address, initial_breakpoints={"7": target_address})
+    existing_result = run_keil_to_cursor_transaction(existing, request)
+    _assert(existing_result.succeeded, existing_result.summary())
+    _assert(existing_result.used_existing_breakpoint, f"existing breakpoint should be reused: {existing_result.to_record()!r}")
+    _assert(existing_result.temp_remote_id == "", f"existing breakpoint should not become temp: {existing_result.to_record()!r}")
+    _assert(existing.breakpoints == {"7": target_address}, f"existing breakpoint should remain: {existing.breakpoints!r}")
+    _assert(not any(command.startswith("BK ") for command in existing.commands), f"existing breakpoint must not be removed: {existing.commands!r}")
+
+    timeout_request = replace(request, timeout_s=0.2)
+    timeout = FakeRunToCursorSession(target_address, hit_on_run=False)
+    timeout_result = run_keil_to_cursor_transaction(timeout, timeout_request)
+    _assert(not timeout_result.succeeded, "timeout scenario should fail")
+    _assert("超时" in timeout_result.error, f"timeout error mismatch: {timeout_result.to_record()!r}")
+    _assert(timeout_result.cleanup_succeeded, "timeout scenario should clean the temporary breakpoint")
+    _assert(not timeout.breakpoints, f"timeout temporary breakpoint leaked: {timeout.breakpoints!r}")
+
+    mismatch_session = FakeRunToCursorSession(target_address, pc_address=int(mismatch.address))
+    mismatch_result = run_keil_to_cursor_transaction(mismatch_session, request)
+    _assert(not mismatch_result.succeeded, "PC mismatch scenario should fail")
+    _assert("不是目标" in mismatch_result.error, f"PC mismatch error mismatch: {mismatch_result.to_record()!r}")
+    _assert(mismatch_result.cleanup_succeeded, "PC mismatch scenario should clean the temporary breakpoint")
+    _assert(not mismatch_session.breakpoints, f"PC mismatch temporary breakpoint leaked: {mismatch_session.breakpoints!r}")
+
     record = {
         "fake": fake_result.to_record(),
         "fake_commands": fake.commands,
+        "existing": existing_result.to_record(),
+        "existing_commands": existing.commands,
+        "timeout": timeout_result.to_record(),
+        "timeout_commands": timeout.commands,
+        "pc_mismatch": mismatch_result.to_record(),
+        "pc_mismatch_commands": mismatch_session.commands,
     }
 
     if args.live:

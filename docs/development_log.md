@@ -5775,3 +5775,58 @@ gone.
   tied to the current editor line.
 - Then return to the acquisition-source model boundary so debugger polling and
   lightweight/serial scope can share the waveform UI safely.
+
+## Milestone 63 - Run-to-Cursor Edge Guards
+
+### Goal
+
+Before exposing run-to-cursor in the UI, prove the transaction behaves safely
+outside the happy path: it must not delete a user breakpoint, and it must clean
+up temporary breakpoints after timeout or PC/source verification failure.
+
+### Completed
+
+- Extended `tools/keil_run_to_cursor_probe.py` with fake edge scenarios.
+  - Normal temporary breakpoint path still verifies `BS -> Run -> PC -> BK`.
+  - Existing user breakpoint at the target address is reused.
+  - Timeout path fails the transaction, halts the target, then removes the temp
+    breakpoint.
+  - PC mismatch path fails the transaction and removes the temp breakpoint.
+- Added fake session controls for:
+  - pre-existing remote breakpoints,
+  - no-hit timeout simulation,
+  - mismatched PC address simulation.
+
+### Verified
+
+- `python -m py_compile tools\keil_run_to_cursor_probe.py src\core\keil\run_to_cursor.py`
+  - PASS.
+- `python tools\keil_run_to_cursor_probe.py --json`
+  - PASS.
+  - Existing-breakpoint scenario:
+    - `used_existing_breakpoint=true`.
+    - No `BK` command is sent.
+    - Remote breakpoint id `7` remains.
+  - Timeout scenario:
+    - Transaction fails with `等待临时断点命中超时`.
+    - `halt_after_timeout_summary=UVSOCK 暂停成功，目标已暂停`.
+    - `cleanup_command=BK 0`.
+    - Final breakpoint snapshot is empty.
+  - PC mismatch scenario:
+    - Transaction fails because PC maps to `main.c:63` instead of `main.c:62`.
+    - `cleanup_command=BK 0`.
+    - Final breakpoint snapshot is empty.
+
+### Notes
+
+- This stage still does not add a visible UI button. The backend transaction now
+  has the minimum cleanup guard coverage needed before UI exposure.
+- Live hardware coverage remains from Milestone 62; this stage is fake-edge
+  coverage to make failure behavior deterministic.
+
+### Next Target
+
+- Expose `运行到光标` in the Debug Workbench as a high-risk explicit Keil action
+  tied to the current editor line.
+- The UI path must surface target source, resolved address, temporary
+  breakpoint id, hit PC and cleanup result in diagnostics/history.
