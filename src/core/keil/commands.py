@@ -928,7 +928,10 @@ def _breakpoint_summary_digest(
 ) -> str:
     payload = {
         "local": [(str(item.path), item.line, item.enabled, item.condition, item.verified, item.message) for item in local_breakpoints],
-        "remote": [(str(item.path), item.line, item.enabled, item.condition) for item in remote_breakpoints],
+        "remote": [
+            (str(item.path), item.line, getattr(item, "address", None), item.enabled, item.condition)
+            for item in remote_breakpoints
+        ],
         "ops": [(op.action.value, str(op.path), op.line, op.valid, op.reason, op.address, op.address_exact) for op in operations],
         "complete": snapshot_complete,
         "error": snapshot_error,
@@ -1107,6 +1110,7 @@ def _remote_breakpoint(item: object) -> KeilRemoteBreakpoint:
     return KeilRemoteBreakpoint(
         path=path_value,
         line=int(getattr(item, "line", 0) or 0),
+        address=getattr(item, "address", None),
         enabled=getattr(item, "enabled", None),
         condition=None if getattr(item, "condition", None) is None else str(getattr(item, "condition", "") or ""),
         remote_id=str(getattr(item, "remote_id", "") or ""),

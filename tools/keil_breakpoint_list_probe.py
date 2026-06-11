@@ -27,6 +27,11 @@ Breakpoints
 
 INCOMPLETE_SAMPLE = COMPLETE_SAMPLE + "5     enabled   main_without_path\n"
 
+ADDRESS_ONLY_SAMPLE = """BL
+ 0: (E 0x08000164) '0x08000164', CNT=1, enabled
+LOG OFF
+"""
+
 
 class FakeSession:
     def __init__(self, text: str) -> None:
@@ -36,6 +41,26 @@ class FakeSession:
     def try_execute_command_text(self, command: str, *, echo: bool = False):
         self.commands.append(command)
         return self.text, ""
+
+
+class FakeLogSession:
+    def __init__(self, log_text: str) -> None:
+        self.log_text = log_text
+        self.commands: list[str] = []
+        self.log_path: Path | None = None
+
+    def try_execute_command_text(self, command: str, *, echo: bool = False):
+        self.commands.append(f"try:{command}")
+        return "BL", ""
+
+    def execute_command(self, command: str, *, echo: bool = False):
+        self.commands.append(command)
+        if command.startswith("LOG >"):
+            self.log_path = Path(command.split(">", 1)[1].strip().strip('"'))
+            return command
+        if command == "BL" and self.log_path is not None:
+            self.log_path.write_text(self.log_text, encoding="utf-8")
+        return command
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -69,7 +94,20 @@ def main() -> int:
         captured_at="2026-06-11T00:00:00+00:00",
     )
     _assert(not incomplete_result.snapshot.complete, "unresolved breakpoint lines should make snapshot incomplete")
-    _assert("未解析" in incomplete_result.snapshot.error, f"incomplete error mismatch: {incomplete_result.snapshot.error!r}")
+    _assert("未映射" in incomplete_result.snapshot.error, f"incomplete error mismatch: {incomplete_result.snapshot.error!r}")
+
+    address_result = parse_keil_breakpoint_list(
+        ADDRESS_ONLY_SAMPLE,
+        project_path=Path("D:/demo/demo.uvprojx"),
+        target_name="DebugDemo",
+        captured_at="2026-06-11T00:00:00+00:00",
+        command="LOG+BL",
+    )
+    _assert(not address_result.snapshot.complete, "address-only breakpoint should keep snapshot source-incomplete")
+    _assert(len(address_result.snapshot.breakpoints) == 1, f"address breakpoint missing: {address_result.snapshot!r}")
+    address_bp = address_result.snapshot.breakpoints[0]
+    _assert(address_bp.address == 0x08000164, f"address breakpoint mismatch: {address_bp!r}")
+    _assert(address_bp.path is None and address_bp.line == 0, f"address-only source mismatch: {address_bp!r}")
 
     incomplete = incomplete_keil_breakpoint_snapshot(
         project_path=Path("D:/demo/demo.uvprojx"),
@@ -88,6 +126,17 @@ def main() -> int:
     )
     _assert(fake_session.commands == ["BL"], f"backend command mismatch: {fake_session.commands!r}")
     _assert(backend_snapshot.complete and len(backend_snapshot.breakpoints) == 4, f"backend snapshot mismatch: {backend_snapshot!r}")
+
+    log_session = FakeLogSession(ADDRESS_ONLY_SAMPLE)
+    log_snapshot = adapter._breakpoint_snapshot_from_session(
+        log_session,
+        project_path=Path("D:/demo/demo.uvprojx"),
+        target_name="DebugDemo",
+        captured_at="2026-06-11T00:00:00+00:00",
+    )
+    _assert(log_session.commands[:2] == ["try:BL", "LOG > " + str(log_session.log_path)], f"log fallback command mismatch: {log_session.commands!r}")
+    _assert(not log_snapshot.complete and len(log_snapshot.breakpoints) == 1, f"log snapshot mismatch: {log_snapshot!r}")
+    _assert(log_snapshot.breakpoints[0].address == 0x08000164, f"log address mismatch: {log_snapshot.breakpoints!r}")
 
     empty_session = SimpleNamespace(try_execute_command_text=lambda command, echo=False: ("", "no text"))
     failed_snapshot = adapter._breakpoint_snapshot_from_session(

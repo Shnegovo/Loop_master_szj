@@ -82,10 +82,12 @@ class KeilBreakpointSyncResult:
             and item.operation.address is None
         )
         if self.request.axf_path is not None:
+            address_samples = _address_samples(self.commands)
             rows.extend(
                 [
                     ("断点 AXF", str(self.request.axf_path)),
                     ("断点地址解析", f"{address_resolved} 已解析 / {address_unresolved} 未解析"),
+                    ("断点地址样例", "；".join(address_samples) if address_samples else "--"),
                 ]
             )
         if self.remote_snapshot is not None:
@@ -329,15 +331,20 @@ def remote_snapshot_from_operations(
                 RemoteBreakpoint(
                     path=operation.path,
                     line=operation.line,
+                    address=operation.address,
                     enabled=True if enabled is None else bool(enabled),
                     condition=operation.local_condition or operation.remote_condition,
                     remote_id=operation.remote_id,
-                    raw_location=f"{operation.path}:{operation.line}",
+                    raw_location=(
+                        f"0x{operation.address:08X}"
+                        if operation.address is not None
+                        else f"{operation.path}:{operation.line}"
+                    ),
                 )
             )
     return KeilBreakpointRemoteSnapshot(
         schema_version=1,
-        snapshot_id=f"keil-sync-{abs(hash(tuple((str(bp.path), bp.line, bp.enabled, bp.condition) for bp in breakpoints))):x}",
+        snapshot_id=f"keil-sync-{abs(hash(tuple((str(bp.path), bp.line, bp.address, bp.enabled, bp.condition) for bp in breakpoints))):x}",
         project_path=request.project_path,
         target_name=request.target_name,
         captured_at="",
@@ -419,6 +426,7 @@ def _snapshot_record(snapshot: KeilBreakpointRemoteSnapshot | None) -> dict[str,
             {
                 "path": str(item.path),
                 "line": item.line,
+                "address": f"0x{item.address:08X}" if item.address is not None else "",
                 "enabled": item.enabled,
                 "condition": item.condition,
             }
@@ -432,3 +440,16 @@ def _first_error(commands: tuple[KeilBreakpointCommandResult, ...]) -> str:
         if command.error:
             return command.error
     return ""
+
+
+def _address_samples(commands: tuple[KeilBreakpointCommandResult, ...]) -> tuple[str, ...]:
+    samples: list[str] = []
+    for item in commands:
+        operation = item.operation
+        if operation.address is None:
+            continue
+        suffix = "" if operation.address_exact else "~"
+        samples.append(f"{Path(operation.path).name}:{operation.line}->{suffix}0x{int(operation.address):08X}")
+        if len(samples) >= 3:
+            break
+    return tuple(samples)

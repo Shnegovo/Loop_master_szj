@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -566,12 +568,23 @@ class KeilUvSockBackendAdapter:
             else:
                 error = ""
         if text:
-            return parse_keil_breakpoint_list(
+            result = parse_keil_breakpoint_list(
                 text,
                 project_path=project_path,
                 target_name=target_name,
                 captured_at=captured_at or now_iso(),
                 command=command,
+            )
+            if _breakpoint_text_is_meaningful(text, result):
+                return result.snapshot
+        log_text, log_error = _capture_breakpoint_list_log(session, command)
+        if log_text:
+            return parse_keil_breakpoint_list(
+                log_text,
+                project_path=project_path,
+                target_name=target_name,
+                captured_at=captured_at or now_iso(),
+                command="LOG+BL",
             ).snapshot
         if fallback is not None:
             return fallback
@@ -579,7 +592,7 @@ class KeilUvSockBackendAdapter:
             project_path=project_path,
             target_name=target_name,
             captured_at=captured_at or now_iso(),
-            error=error or "Keil 远端断点命令未返回可解析文本",
+            error=error or log_error or "Keil 远端断点命令未返回可解析文本",
         )
 
 
@@ -635,6 +648,37 @@ def _breakpoint_snapshot_text(snapshot: KeilBreakpointRemoteSnapshot | None) -> 
     if snapshot.complete:
         return f"已枚举 {len(snapshot.breakpoints)} 个"
     return snapshot.error or "待 Keil 枚举"
+
+
+def _breakpoint_text_is_meaningful(text: str, result) -> bool:
+    if result.snapshot.breakpoints:
+        return True
+    lowered = str(text or "").lower()
+    if "no breakpoint" in lowered or "no breakpoints" in lowered:
+        return True
+    if result.snapshot.error:
+        return True
+    return False
+
+
+def _capture_breakpoint_list_log(session, command: str) -> tuple[str, str]:
+    log_path = Path(tempfile.gettempdir()) / f"loopmaster_keil_bl_{uuid.uuid4().hex}.log"
+    try:
+        try:
+            log_path.unlink()
+        except OSError:
+            pass
+        session.execute_command(f"LOG > {log_path}", echo=True)
+        session.execute_command(command, echo=True)
+        session.execute_command("LOG OFF", echo=True)
+        return log_path.read_text(encoding="utf-8", errors="replace"), ""
+    except Exception as exc:
+        return "", str(exc)
+    finally:
+        try:
+            log_path.unlink()
+        except OSError:
+            pass
 
 
 def _reason_text(reason: str) -> str:

@@ -3357,6 +3357,7 @@ class MainWindow(QMainWindow):
             f"禁用：{counts.get('disable', 0)}  条件更新：{counts.get('update_condition', 0)}  无变化：{counts.get('noop', 0)}\n"
             f"无效：{invalid}\n\n"
         )
+        detail += self._keil_breakpoint_address_confirmation_text(request)
         if not request.remote_snapshot_complete:
             detail += "当前 Keil 远端断点枚举还未完成，本次不会删除远端断点，只把本地断点提交到 Keil。\n"
         if active == 0:
@@ -3371,6 +3372,30 @@ class MainWindow(QMainWindow):
             cancel_text="取消",
             kind="warning",
         )
+
+    @staticmethod
+    def _keil_breakpoint_address_confirmation_text(request: KeilBreakpointSyncRequest) -> str:
+        if request.axf_path is None:
+            return ""
+        address_ops = [
+            operation for operation in request.operations
+            if operation.action in {KeilBreakpointSyncAction.ADD, KeilBreakpointSyncAction.UPDATE_CONDITION}
+        ]
+        resolved = [operation for operation in address_ops if operation.address is not None]
+        unresolved = [operation for operation in address_ops if operation.address is None]
+        samples = [
+            f"{Path(operation.path).name}:{operation.line} -> 0x{int(operation.address):08X}"
+            for operation in resolved[:3]
+        ]
+        text = (
+            f"AXF：{request.axf_path}\n"
+            f"地址解析：{len(resolved)} 已解析 / {len(unresolved)} 未解析\n"
+        )
+        if samples:
+            text += f"地址样例：{'；'.join(samples)}\n"
+        if unresolved:
+            text += "存在未解析源码行，将回退到 Keil 源码行表达式。\n"
+        return text + "\n"
 
     @staticmethod
     def _keil_breakpoint_operation_counts(request: KeilBreakpointSyncRequest) -> dict[str, int]:
@@ -3397,10 +3422,13 @@ class MainWindow(QMainWindow):
         tab = self._tab_debug_workbench
         failed_by_key: dict[tuple[str, int], str] = {}
         succeeded_by_key: set[tuple[str, int]] = set()
+        succeeded_address_by_key: dict[tuple[str, int], int] = {}
         for command in result.commands:
             key = self._keil_breakpoint_sync_key(command.operation.path, command.operation.line)
             if command.succeeded:
                 succeeded_by_key.add(key)
+                if command.operation.address is not None:
+                    succeeded_address_by_key[key] = int(command.operation.address)
                 continue
             failed_by_key[key] = command.error or command.operation.reason or "Keil 未接受该断点命令"
         remote_complete = bool(getattr(result.remote_snapshot, "complete", False))
@@ -3408,6 +3436,12 @@ class MainWindow(QMainWindow):
             self._keil_breakpoint_sync_key(item.path, item.line)
             for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
             if remote_complete and getattr(item, "path", None) is not None and getattr(item, "line", 0)
+        }
+        remote_addresses = {
+            int(address)
+            for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
+            for address in (getattr(item, "address", None),)
+            if address is not None and (getattr(item, "path", None) is None or not getattr(item, "line", 0))
         }
         for breakpoint in tab.local_breakpoints():
             key = self._keil_breakpoint_sync_key(breakpoint.path, breakpoint.line)
@@ -3424,6 +3458,13 @@ class MainWindow(QMainWindow):
                     path=breakpoint.path,
                     verified=True,
                     message="Keil 已回读该断点",
+                )
+            elif result.succeeded and succeeded_address_by_key.get(key) in remote_addresses:
+                tab.set_breakpoint_verification(
+                    breakpoint.line,
+                    path=breakpoint.path,
+                    verified=True,
+                    message="Keil 已按地址回读该断点",
                 )
             elif result.succeeded and key in succeeded_by_key:
                 tab.set_breakpoint_verification(

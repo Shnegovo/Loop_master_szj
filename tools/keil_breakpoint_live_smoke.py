@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--line", type=int, default=62)
     parser.add_argument("--set-breakpoint", action="store_true", help="Actually execute BS at --source/--line.")
     parser.add_argument("--verify-hit", action="store_true", help="Run the target after setting the breakpoint and poll for a stop.")
+    parser.add_argument("--capture-bl-log", action="store_true", help="Try Keil LOG capture around BL to inspect command-window output.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -129,6 +130,38 @@ def main() -> int:
             if record["after_text_available"]
             else "UVSC_DBG_EXEC_CMD echoed BL only; remote breakpoint enumeration needs another capture path"
         )
+        if args.capture_bl_log:
+            log_path = ROOT / "tools" / "keil_breakpoint_live_bl.log"
+            try:
+                log_path.unlink()
+            except OSError:
+                pass
+            session.execute_command(f"LOG > {log_path}", echo=True)
+            session.execute_command(keil_breakpoint_list_command(), echo=True)
+            session.execute_command("LOG OFF", echo=True)
+            time.sleep(0.25)
+            try:
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                log_text = ""
+                record["bl_log_error"] = str(exc)
+            log_parse = parse_keil_breakpoint_list(
+                log_text,
+                project_path=project,
+                target_name=args.target,
+                command="LOG+BL",
+            )
+            record["bl_log_path"] = str(log_path)
+            record["bl_log_raw"] = log_text
+            record["bl_log_complete"] = log_parse.complete
+            record["bl_log_count"] = len(log_parse.snapshot.breakpoints)
+            record["bl_log_error"] = log_parse.snapshot.error or record.get("bl_log_error", "")
+            if log_parse.snapshot.breakpoints:
+                record["conclusion"] = (
+                    "LOG+BL captured remote breakpoint text; source mapping is complete"
+                    if log_parse.complete
+                    else "LOG+BL captured address-only remote breakpoint text; source mapping remains incomplete"
+                )
 
     if args.json:
         print(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True))

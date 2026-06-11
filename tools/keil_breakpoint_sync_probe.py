@@ -152,6 +152,7 @@ def main() -> int:
             f401_result = execute_keil_breakpoint_sync(FakeSession(), f401_request)
             rows = dict(f401_result.diagnostic_rows())
             _assert("已解析" in rows.get("断点地址解析", ""), f"address diagnostics missing: {rows!r}")
+            _assert("0x0800" in rows.get("断点地址样例", ""), f"address sample missing: {rows!r}")
 
     print("PASS Keil breakpoint sync probe")
     return 0

@@ -15,6 +15,7 @@ T = TypeVar("T")
 class RemoteBreakpoint:
     path: Path | None = None
     line: int = 0
+    address: int | None = None
     enabled: bool | None = None
     condition: str | None = ""
     remote_id: str = ""
@@ -26,6 +27,7 @@ class RemoteBreakpoint:
         return {
             "path": str(self.path) if self.path is not None else "",
             "line": self.line,
+            "address": self.address,
             "enabled": self.enabled,
             "condition": self.condition,
             "remote_id": self.remote_id,
@@ -42,6 +44,7 @@ class RemoteBreakpoint:
         return cls(
             path=_path_or_none(_get(record, "path", None)),
             line=_int_or_default(_get(record, "line", 0), 0),
+            address=_int_or_none(_get(record, "address", None)),
             enabled=_bool_or_none(_get(record, "enabled", None)),
             condition=None if condition is None else str(condition),
             remote_id=str(_get(record, "remote_id", "") or ""),

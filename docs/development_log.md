@@ -5191,3 +5191,103 @@ UVSOCK only echoes `BL`.
     paused/running state.
 - After Keil breakpoints are stable, start TI MSPM0G3507 offline adapter work
   from `D:\ti` without claiming live debug support until hardware is available.
+
+## Milestone 57 Update - Keil Breakpoint Address Readback
+
+### Goal
+
+Close the next Keil breakpoint gap: after LoopMaster sends a real address
+breakpoint and the F401 target hits it, the backend should bring back truthful
+remote evidence instead of reporting only "command accepted".
+
+### Completed
+
+- Added backend-neutral address evidence to `RemoteBreakpoint`.
+  - Remote breakpoint snapshots now serialize/deserialize `address`.
+  - This is intentionally generic for Keil, OpenOCD/GDB, pyOCD, and later TI
+    adapters.
+- Extended Keil `BL` parsing for address-only breakpoints.
+  - Keil can return lines like:
+    `0: (E 0x08000164) '0x08000164', CNT=1, enabled`.
+  - The parser now preserves that as a remote breakpoint with
+    `address=0x08000164`.
+  - The snapshot remains source-incomplete because Keil did not provide a file
+    and line number.
+- Added a backend `LOG+BL` fallback.
+  - Direct UVSOCK `BL` still usually echoes only `BL`.
+  - The backend now opens a temporary Keil command log, executes `BL`, reads the
+    log file, parses it, and deletes the temporary file.
+  - Direct `BL` errors still take priority over later log-capture errors.
+- Improved UI breakpoint evidence.
+  - The Keil breakpoint confirmation now shows AXF path, resolved/unresolved
+    address counts, and address samples.
+  - If the remote snapshot contains an address-only breakpoint that matches the
+    address LoopMaster just sent, the local breakpoint is marked:
+    `Keil 已按地址回读该断点`.
+  - If only command success exists and no remote evidence exists, it remains
+    unverified.
+- Updated smoke tooling.
+  - `tools/keil_breakpoint_live_smoke.py` gained `--capture-bl-log`.
+  - The smoke conclusion now distinguishes direct `BL` echo from `LOG+BL`
+    address readback.
+
+### Verified
+
+- `python -m py_compile src\core\debug_snapshots.py src\core\keil\breakpoint_list.py src\core\keil\backend.py src\core\keil\commands.py src\core\keil\breakpoint_sync.py src\ui\gui.py tools\keil_breakpoint_list_probe.py tools\keil_breakpoint_sync_probe.py tools\ui_keil_breakpoint_sync_probe.py tools\keil_breakpoint_live_smoke.py`
+  - PASS.
+- `python tools\keil_breakpoint_list_probe.py`
+  - PASS; covers address-only `LOG+BL` parsing and backend log fallback.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS; verifies address diagnostic samples.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_live_smoke.py --keil-root D:\Keil --line 62 --set-breakpoint --verify-hit --capture-bl-log --json`
+  - PASS on connected ST-Link/F401.
+  - Sent `BS 0x08000164`.
+  - `hit_detected=true`.
+  - `LOG+BL` returned one address-only remote breakpoint at `0x08000164`.
+- Backend read-only snapshot against the live Keil session:
+  - PASS.
+  - `connection_established=true`.
+  - `target_running=false`.
+  - `remote_count=1`.
+  - remote address list included `0x08000164`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-address --width 1440 --height 900`
+  - PASS; screenshot review showed no obvious overlap in the workbench source
+    and breakpoint evidence area.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- Keil breakpoint basics are now materially further than command preview:
+  LoopMaster can resolve a source line to AXF address, send `BS 0x...`, run the
+  target, observe the breakpoint hit, and read back the remote address through
+  `LOG+BL`.
+- The remaining gap is source/ID fidelity:
+  - Keil's log output currently gives the breakpoint index and address, not a
+    source path and line.
+  - Full safe remove/enable/disable needs stable ID handling and address/source
+    matching rules before LoopMaster should perform aggressive remote cleanup.
+- No big-version packaging was done for this milestone.
+- Test-created `UV4.exe` and temporary `tools\keil_breakpoint_live_bl.log` were
+  cleaned up after verification.
+
+### Next Target
+
+- Finish Keil breakpoint management:
+  - parse and preserve Keil breakpoint IDs from `LOG+BL`,
+  - match address-only remote breakpoints back to local AXF source lines,
+  - add safe remove/enable/disable workflows using verified IDs,
+  - add a UI flow for "clear LoopMaster-managed breakpoints" with confirmation.
+- Then move to Keil PC/source-location readback and stepping.
+- TI MSPM0G3507 remains queued after Keil basics, starting from offline
+  project/ELF/source mapping under `D:\ti` until live TI hardware exists.

@@ -60,11 +60,13 @@ def parse_keil_breakpoint_list(
             continue
         if parsed.path is None or parsed.line <= 0:
             unresolved.append(line)
+            if parsed.address is not None:
+                breakpoints.append(parsed)
             continue
         breakpoints.append(parsed)
     error = ""
     if unresolved:
-        error = f"Keil BreakList 有 {len(unresolved)} 行未解析出源码位置"
+        error = f"Keil BreakList 有 {len(unresolved)} 行未映射到源码位置"
     snapshot = RemoteBreakpointSnapshot(
         schema_version=1,
         snapshot_id=_snapshot_id(project_path, target_name, breakpoints, text),
@@ -115,6 +117,7 @@ def keil_breakpoint_list_command() -> str:
 
 _ID_PREFIX_RE = re.compile(r"^(?:#\s*)?(?P<id>\d+|0x[0-9a-fA-F]+)[\)\].:\s-]+(?P<rest>.+)$")
 _LINE_TOKEN_RE = re.compile(r"(?:(?:line|ln|行)\s*[:=]?\s*)?(?P<line>\d+)\b", re.IGNORECASE)
+_ADDRESS_RE = re.compile(r"\b0x(?P<address>[0-9a-fA-F]+)\b")
 _PATH_LINE_PATTERNS = (
     re.compile(r"(?P<path>[A-Za-z]:[\\/][^:|()]+?)[\s:(),]+(?P<line>\d+)(?=$|\s|[),])"),
     re.compile(r"(?P<path>\\\\[^:|()]+?)[\s:(),]+(?P<line>\d+)(?=$|\s|[),])"),
@@ -133,16 +136,29 @@ def _parse_breakpoint_line(line: str) -> RemoteBreakpoint | None:
     enabled = _enabled_state(rest)
     condition = _condition(rest)
     path, line_number = _path_and_line(rest)
-    raw_location = f"{path}:{line_number}" if path is not None and line_number else rest
+    address = _address(rest)
+    if path is not None and line_number:
+        raw_location = f"{path}:{line_number}"
+        verified = True
+        message = ""
+    elif address is not None:
+        raw_location = f"0x{address:08X}"
+        verified = True
+        message = "Keil 已回读地址断点，尚未映射源码位置"
+    else:
+        raw_location = rest
+        verified = False
+        message = "Keil 断点列表缺少源码路径或行号"
     return RemoteBreakpoint(
         path=path,
         line=line_number,
+        address=address,
         enabled=enabled,
         condition=condition,
         remote_id=remote_id,
         raw_location=raw_location,
-        verified=bool(path is not None and line_number > 0),
-        message="" if path is not None and line_number > 0 else "Keil 断点列表缺少源码路径或行号",
+        verified=verified,
+        message=message,
     )
 
 
@@ -160,6 +176,16 @@ def _path_and_line(text: str) -> tuple[Path | None, int]:
             return path, int(line_match.group("line"))
         return path, 0
     return None, 0
+
+
+def _address(text: str) -> int | None:
+    match = _ADDRESS_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group("address"), 16)
+    except ValueError:
+        return None
 
 
 def _enabled_state(text: str) -> bool | None:
@@ -198,7 +224,7 @@ def _clean_path(value: str) -> str:
 
 def _is_header_or_noise(line: str) -> bool:
     lowered = line.lower()
-    if lowered in {"breaklist", "breakpoints", "no breakpoints", "no breakpoint"}:
+    if lowered in {"bl", "breaklist", "breakpoints", "no breakpoints", "no breakpoint", "log off"}:
         return True
     if lowered.startswith(("breakpoints", "break list", "id ", "num ", "---")):
         return True
