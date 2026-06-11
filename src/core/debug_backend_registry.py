@@ -27,7 +27,11 @@ from src.core.debug_backend import (
     backend_snapshot_id,
     now_iso,
 )
-from src.core.debug_toolchains import DebugToolchainDescriptor, debug_toolchain_descriptor
+from src.core.debug_toolchains import (
+    DebugToolchainDescriptor,
+    debug_toolchain_command_plan,
+    debug_toolchain_descriptor,
+)
 
 
 DebugBackendFactory = Callable[[], DebugBackendAdapter]
@@ -157,6 +161,13 @@ class UnavailableDebugBackend:
         ) + tuple(
             DebugBackendDiagnostic(key, value)
             for key, value in (self.toolchain.diagnostic_rows() if self.toolchain is not None else ())
+        ) + tuple(
+            DebugBackendDiagnostic(key, value)
+            for key, value in (
+                debug_toolchain_command_plan(self.kind.value).diagnostic_rows()
+                if self.toolchain is not None
+                else ()
+            )
         )
         payload = {
             "backend": self.kind.value,

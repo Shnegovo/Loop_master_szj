@@ -7824,3 +7824,75 @@ actually sent `BS`, `BK`, `BE`, or `BD`.
     sync,
   - keep conditional breakpoints explicitly limited until proven on hardware,
   - then start OpenOCD/pyOCD/TI adapter contract skeletons.
+
+## Milestone 95 - Multi-Toolchain Command Plan Skeleton
+
+### Goal
+
+Start the multi-debugger architecture without pretending OpenOCD, pyOCD, or TI
+hardware paths are live. Each toolchain should have a backend-neutral command
+plan contract and explicit safety gates.
+
+### Completed
+
+- Added `DebugToolchainCommandPlan` in `src\core\debug_toolchains.py`.
+- Added `debug_toolchain_command_plan(key)` for:
+  - `keil`,
+  - `openocd_gdb`,
+  - `pyocd`,
+  - `ti_mspm0`,
+  - `offline`.
+- Each plan records:
+  - preview commands,
+  - safety gates,
+  - whether it may start a process,
+  - whether it may connect a probe,
+  - whether it may write target state.
+- Placeholder backends now include command-plan diagnostics:
+  - `工具链命令计划`,
+  - `预览命令`,
+  - `执行门`,
+  - `命令安全条件`.
+- OpenOCD/pyOCD/TI remain no-hardware/no-process placeholders:
+  - no subprocess launch,
+  - no probe enumeration,
+  - no target write,
+  - no fake live capability.
+- TI plan explicitly names the MSPM0G3507 path and local TI tools rooted at
+  `D:\ti`.
+
+### Verified
+
+- `python -m py_compile src\core\debug_toolchains.py src\core\debug_backend_registry.py tools\debug_toolchain_plan_probe.py tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-toolchain-plan --width 1440 --height 900`
+  - PASS.
+- `python tools\ti_mspm0_profile_probe.py --json`
+  - PASS.
+  - Confirmed `MSPM0G3507`, `TICLANG`, `TIXDS110_Connection.xml`, FLASH/SRAM
+    ranges, and local TI tools.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- Screenshot checked manually:
+  - `tools\ui-debug-workbench-toolchain-plan\01_debug_workbench_project.png`
+
+### Notes
+
+- This is intentionally only a contract skeleton. It gives the app a common
+  place to show what OpenOCD/pyOCD/TI will do later, while preserving hard
+  no-hardware safety gates.
+- Keil remains the only live backend at this point.
+
+### Next Target
+
+- Continue multi-toolchain groundwork:
+  - add OpenOCD/GDB profile discovery without starting OpenOCD,
+  - add pyOCD environment discovery without enumerating probes by default,
+  - keep TI focused on MSPM0G3507 and validate command/profile shape before any
+    hardware run.
