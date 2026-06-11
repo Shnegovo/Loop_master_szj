@@ -57,6 +57,12 @@ from src.core.debug_transactions import (
     debug_transaction_by_key,
 )
 from src.core.keil.commands import build_keil_debug_transactions, transaction_by_key
+from src.core.keil.breakpoint_sync import (
+    KeilBreakpointSyncAction,
+    KeilBreakpointSyncRequest,
+    KeilBreakpointSyncResult,
+    build_keil_breakpoint_sync_request_from_state,
+)
 from src.core.keil.auto_debug import (
     KeilAutoDebugRequest,
     KeilAutoDebugResult,
@@ -479,6 +485,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics: tuple[tuple[str, str], ...] = ()
         self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
+        self._debug_last_breakpoint_sync_result: KeilBreakpointSyncResult | None = None
         self._debug_keil_profile: KeilDebugProfile | None = None
         self._debug_keil_build_result: KeilBuildResult | None = None
         self._debug_keil_launch_result = None
@@ -2149,6 +2156,9 @@ class MainWindow(QMainWindow):
         if action_key in {"halt", "run"}:
             self._control_keil_runtime_from_workbench(action_key)
             return
+        if action_key == "sync_breakpoints":
+            self._sync_keil_breakpoints_from_workbench()
+            return
         if action_key == "write_variables":
             self._write_keil_live_variable_from_workbench()
             return
@@ -2180,6 +2190,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics = ()
         self._debug_last_live_write_result = None
+        self._debug_last_breakpoint_sync_result = None
         self._debug_keil_profile = None
         self._debug_keil_build_result = None
         self._debug_keil_launch_result = None
@@ -3217,6 +3228,190 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(summary)
         self._refresh_hero()
 
+    def _sync_keil_breakpoints_from_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 断点同步", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "sync_breakpoints"):
+            self._show_warning("Keil 断点同步", "当前 Keil 后端尚未提供断点同步执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if status.state not in {
+            DebugRuntimeState.KEIL_ATTACHED,
+            DebugRuntimeState.PAUSED,
+            DebugRuntimeState.RUNNING,
+        }:
+            self._show_warning("Keil 断点同步", "请先连接 Keil 调试会话。")
+            return
+        local_breakpoints = tab.local_breakpoints()
+        if not local_breakpoints:
+            self._show_warning("Keil 断点同步", "请先在源码视图里添加本地断点。")
+            return
+
+        remote_snapshot = getattr(self, "_debug_remote_breakpoint_snapshot", None)
+        remote_complete = bool(remote_snapshot is not None and getattr(remote_snapshot, "complete", False))
+        remote_breakpoints = getattr(remote_snapshot, "breakpoints", ()) if remote_complete else ()
+        transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
+        request = build_keil_breakpoint_sync_request_from_state(
+            project_path=status.project_path,
+            target_name=status.target_name,
+            local_breakpoints=local_breakpoints,
+            remote_breakpoints=remote_breakpoints,
+            source_paths=tab.local_source_paths(),
+            transaction_id=getattr(transaction, "transaction_id", ""),
+            connection_name="LoopMasterBreakpointSync",
+            remote_snapshot_complete=remote_complete,
+        )
+        if not self._confirm_keil_breakpoint_sync(request, status):
+            return
+
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("正在通过 Keil 同步断点...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = self._debug_backend.sync_breakpoints(request)
+        except Exception as exc:
+            result = KeilBreakpointSyncResult(
+                request=request,
+                commands=(),
+                remote_snapshot=None,
+                error=str(exc),
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_last_breakpoint_sync_result = result
+        if result.remote_snapshot is not None:
+            self._debug_remote_breakpoint_snapshot = result.remote_snapshot
+            if isinstance(self._debug_backend_snapshot_record, dict):
+                self._debug_backend_snapshot_record["remote_breakpoint_snapshot"] = result.remote_snapshot.to_record()
+                self._debug_backend_snapshot_record["remote_breakpoint_snapshot_id"] = result.remote_snapshot.snapshot_id
+        self._mark_keil_breakpoint_sync_result(result)
+        self._append_keil_breakpoint_sync_audit(result, transaction)
+        if transaction is not None:
+            self._debug_command_history.record(
+                transaction,
+                event="executed" if result.succeeded else "failed",
+                source="ui_breakpoint_sync",
+            )
+            tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        summary = result.summary()
+        if result.succeeded:
+            self._show_info("Keil 断点同步完成", summary)
+        else:
+            self._show_warning("Keil 断点同步失败", summary)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(summary)
+        self._refresh_hero()
+
+    def _confirm_keil_breakpoint_sync(self, request: KeilBreakpointSyncRequest, status) -> bool:
+        counts = self._keil_breakpoint_operation_counts(request)
+        invalid = counts.get("invalid", 0)
+        active = counts.get("active", 0)
+        mode = "完整差分同步" if request.remote_snapshot_complete else "推送本地断点"
+        detail = (
+            f"工程：{status.project_path or '--'}\n"
+            f"Target：{status.target_name or '--'}\n"
+            f"模式：{mode}\n"
+            f"新增：{counts.get('add', 0)}  删除：{counts.get('remove', 0)}  启用：{counts.get('enable', 0)}\n"
+            f"禁用：{counts.get('disable', 0)}  条件更新：{counts.get('update_condition', 0)}  无变化：{counts.get('noop', 0)}\n"
+            f"无效：{invalid}\n\n"
+        )
+        if not request.remote_snapshot_complete:
+            detail += "当前 Keil 远端断点枚举还未完成，本次不会删除远端断点，只把本地断点提交到 Keil。\n"
+        if active == 0:
+            detail += "本地和远端断点没有需要修改的差异，将只刷新本地验证状态。"
+        else:
+            detail += "这会通过 UVSOCK 修改真实 Keil 调试会话里的断点。"
+        return ask_pcl_confirmation(
+            self,
+            "确认 Keil 断点同步",
+            detail,
+            confirm_text="同步",
+            cancel_text="取消",
+            kind="warning",
+        )
+
+    @staticmethod
+    def _keil_breakpoint_operation_counts(request: KeilBreakpointSyncRequest) -> dict[str, int]:
+        counts = {
+            "add": 0,
+            "remove": 0,
+            "enable": 0,
+            "disable": 0,
+            "update_condition": 0,
+            "noop": 0,
+            "invalid": 0,
+            "active": 0,
+        }
+        for operation in request.operations:
+            key = operation.action.value
+            counts[key] = counts.get(key, 0) + 1
+            if not operation.valid:
+                counts["invalid"] += 1
+            if operation.action != KeilBreakpointSyncAction.NOOP:
+                counts["active"] += 1
+        return counts
+
+    def _mark_keil_breakpoint_sync_result(self, result: KeilBreakpointSyncResult) -> None:
+        tab = self._tab_debug_workbench
+        failed_by_key: dict[tuple[str, int], str] = {}
+        succeeded_by_key: set[tuple[str, int]] = set()
+        for command in result.commands:
+            key = self._keil_breakpoint_sync_key(command.operation.path, command.operation.line)
+            if command.succeeded:
+                succeeded_by_key.add(key)
+                continue
+            failed_by_key[key] = command.error or command.operation.reason or "Keil 未接受该断点命令"
+        remote_keys = {
+            self._keil_breakpoint_sync_key(item.path, item.line)
+            for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
+            if getattr(item, "path", None) is not None and getattr(item, "line", 0)
+        }
+        for breakpoint in tab.local_breakpoints():
+            key = self._keil_breakpoint_sync_key(breakpoint.path, breakpoint.line)
+            if key in failed_by_key:
+                tab.set_breakpoint_verification(
+                    breakpoint.line,
+                    path=breakpoint.path,
+                    verified=False,
+                    message=failed_by_key[key],
+                )
+            elif result.succeeded and (key in remote_keys or key in succeeded_by_key):
+                tab.set_breakpoint_verification(
+                    breakpoint.line,
+                    path=breakpoint.path,
+                    verified=True,
+                    message="Keil 已同步",
+                )
+
+    @staticmethod
+    def _keil_breakpoint_sync_key(path: str | Path | None, line: int) -> tuple[str, int]:
+        try:
+            path_text = str(Path(path).expanduser().resolve()).lower() if path is not None else ""
+        except OSError:
+            path_text = str(path or "").lower()
+        return path_text, int(line or 0)
+
+    def _append_keil_breakpoint_sync_audit(self, result: KeilBreakpointSyncResult, transaction=None) -> None:
+        record = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "action": "keil_breakpoint_sync",
+            "transaction": transaction.audit_record(event="executed" if result.succeeded else "failed") if transaction is not None else None,
+            "result": result.to_record(),
+        }
+        try:
+            with open(self._variable_write_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=str))
+                f.write("\n")
+        except Exception as exc:
+            logger.warning("Keil 断点同步审计日志保存失败：%s", exc)
+
     def _write_keil_live_variable_from_preset(self, expression: str, value_text: str) -> None:
         self._write_keil_live_variable_from_workbench(default_expression=expression, default_value=value_text)
 
@@ -3622,6 +3817,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics = ()
         self._debug_last_live_write_result = None
+        self._debug_last_breakpoint_sync_result = None
         self._debug_keil_profile = None
         self._debug_keil_build_result = None
         self._debug_keil_launch_result = None
@@ -3764,6 +3960,12 @@ class MainWindow(QMainWindow):
             rows.append(("写入错误", result.error))
         return tuple(rows)
 
+    def _keil_breakpoint_sync_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_last_breakpoint_sync_result", None)
+        if result is None:
+            return ()
+        return result.diagnostic_rows()
+
     def _keil_auto_debug_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_auto_debug_result", None)
         if result is None:
@@ -3896,6 +4098,7 @@ class MainWindow(QMainWindow):
             + self._keil_build_diagnostics()
             + self._keil_launch_diagnostics()
             + self._keil_auto_debug_diagnostics()
+            + self._keil_breakpoint_sync_diagnostics()
             + self._keil_live_write_diagnostics()
         )
         rows = diagnostic_rows + (

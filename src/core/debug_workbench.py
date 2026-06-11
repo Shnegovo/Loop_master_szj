@@ -670,7 +670,7 @@ def status_from_uvsock_connection(
         capabilities=default_debug_capabilities(
             state,
             runtime_control=True,
-            breakpoint_sync=False,
+            breakpoint_sync=True,
             variable_write=False,
         ),
     )

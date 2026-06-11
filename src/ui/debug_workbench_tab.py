@@ -688,6 +688,7 @@ class DebugWorkbenchTab(QWidget):
             ("disconnect", "断开"),
             ("halt", "暂停"),
             ("run", "运行"),
+            ("sync_breakpoints", "同步断点"),
             ("write_variables", "写变量"),
         ):
             button = QPushButton(title)
@@ -1850,6 +1851,13 @@ class DebugWorkbenchTab(QWidget):
                 and status.backend.value == "keil"
                 and status.state.value in {"keil_attached", "paused", "running"}
             )
+            explicit_keil_breakpoint_sync = (
+                key == "sync_breakpoints"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value in {"keil_attached", "paused", "running"}
+                and bool(self._breakpoints.all())
+            )
             explicit_keil_profile_action = (
                 key in {"build_project", "launch_uvsock", "auto_debug"}
                 and self._backend_controls_ready
@@ -1868,13 +1876,21 @@ class DebugWorkbenchTab(QWidget):
                 and status.state.value == "paused"
             )
             enabled = bool(
-                (action.enabled or explicit_keil_write or explicit_keil_profile_action or explicit_keil_runtime_action)
+                (
+                    action.enabled
+                    or explicit_keil_write
+                    or explicit_keil_breakpoint_sync
+                    or explicit_keil_profile_action
+                    or explicit_keil_runtime_action
+                )
                 and self._backend_controls_ready
             )
             button.setEnabled(enabled)
             if enabled:
                 if explicit_keil_runtime_action:
                     button.setToolTip("显式通过 Keil/UVSOCK 改变目标运行状态，执行前会再次确认")
+                elif explicit_keil_breakpoint_sync and not action.enabled:
+                    button.setToolTip("显式通过 Keil/UVSOCK 同步本地断点，执行前会再次确认")
                 elif explicit_keil_profile_action:
                     button.setToolTip("使用当前 Keil 工程/Target 的调试档案执行显式动作")
                 elif explicit_keil_write and not action.enabled:

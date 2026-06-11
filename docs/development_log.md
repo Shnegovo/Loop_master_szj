@@ -4386,3 +4386,102 @@ project/target/root/port saved once by the UI can drive repeatable smoke runs.
 - Add a guarded UI dry-run/smoke preview around the saved profile.
 - Start real Keil breakpoint sync execution and remote verification.
 - Keep all hardware-changing actions behind explicit confirmation.
+
+## Milestone 49 Update - Guarded Keil Breakpoint Sync UI Execution
+
+### Goal
+
+Move the Debug Workbench breakpoint path from dry-run preview toward a real
+Keil action: users can add local source breakpoints, press `同步断点`, confirm
+the diff, and send guarded Keil Debug Commands through UVSOCK.
+
+### Completed
+
+- Added `src/core/keil/breakpoint_sync.py`.
+  - Builds breakpoint sync requests from current UI state.
+  - Executes commands through a UVSOCK command session.
+  - Records command results, diagnostics, remote snapshot hints, and audit data.
+- Wired Keil breakpoint sync into the real backend adapter.
+  - `KeilUvSockBackendAdapter.sync_breakpoints(...)` connects to an existing
+    debug session and sends command-window breakpoint commands.
+  - Connected Keil snapshots now expose explicit breakpoint sync capability.
+- Wired the Debug Workbench UI.
+  - Added the `同步断点` action button.
+  - Main window now handles `sync_breakpoints`.
+  - The confirmation dialog shows add/remove/enable/disable/condition/noop
+    counts and whether the mode is full diff or push-local.
+  - The breakpoint table is marked verified/failed after execution.
+  - Diagnostics now include `断点同步`, `断点命令`, `断点同步模式`, snapshot id, and
+    error rows.
+  - Audit lines are appended to the existing JSONL audit file.
+- Made the first real command mode safer.
+  - `BreakSet \path\file.c\line` is emitted for ordinary local breakpoint adds.
+  - Removing, enabling, disabling, and condition updates require a Keil remote
+    breakpoint id; without that id the operation is rejected instead of guessed.
+  - When remote breakpoint enumeration is incomplete, the UI uses push-local
+    mode and does not delete remote breakpoints.
+- Fixed `tools/keil_auto_debug_smoke.py` dry-run output so passing a project
+  without `--target` reports the selected Keil project default target instead
+  of the F401 fixture target.
+- Smoke dry-run now uses the current Keil variable preset as the default write
+  seed when `--expression`/`--write-value` are omitted.
+  - F401 fixture stays on `debug_setpoint=6000`.
+  - Balance-car project defaults to `SpeedLevel=5`.
+
+### Verified
+
+- `python -m py_compile src/core/debug_workbench.py src/core/keil/__init__.py src/core/keil/backend.py src/core/keil/breakpoint_sync.py src/core/keil/commands.py src/ui/debug_workbench_tab.py src/ui/gui.py tools/debug_backend_adapter_probe.py tools/keil_auto_debug_smoke.py tools/keil_breakpoint_sync_probe.py tools/ui_debug_workbench_probe.py tools/ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools/keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools/ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-breakpoint-sync --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-breakpoint-sync\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breakpoint-sync\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-breakpoint-sync\03_debug_workbench_narrow.png`
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_command_transaction_probe.py`
+  - PASS.
+- `python tools/debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_smoke.py --json`
+  - PASS.
+- `python tools/keil_auto_debug_smoke_profile_probe.py`
+  - PASS.
+- `python tools/keil_watch_read_probe.py`
+  - PASS.
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+- Balance-car reference project dry-run:
+  - project:
+    `D:\学习资料\平衡车\平衡车入门教程资料\程序源码\平衡车程序\00-平衡车测试程序\平衡车测试程序-V1.0\Project.uvprojx`
+  - PASS; Keil profile resolves `Target 1`, STM32F103C8, ST-Link/SWD, build and
+    launch commands.
+  - PASS; default dry-run write seed resolves `SpeedLevel=5`.
+  - Preset profile resolves `balance_car_f103` with PID/scope presets such as
+    `Angle`, `AveSpeed`, `PWML`, `PWMR`, `AnglePID.*`, `SpeedPID.*`.
+
+### Notes
+
+- This milestone intentionally supports real local breakpoint add commands
+  first. Full remote breakpoint diff still needs Keil breakpoint enumeration or
+  a reliable `BreakList` parser so deletes/enable/disable/condition updates can
+  use actual Keil breakpoint ids.
+- `BreakSet` command generation is based on Keil Debug Command source-line
+  expressions. It still needs live uVision verification before enabling more
+  complex condition/update workflows.
+- Hardware-changing operations remain behind explicit confirmation.
+
+### Next Target
+
+- Verify `BreakSet` live against the user's Keil/ST-Link/F401 setup and record
+  the exact Keil command-window response.
+- Add Keil breakpoint listing/parsing so remote ids become available and full
+  delete/enable/disable sync can be safely unlocked.
+- Begin the debugger source experience pass: PC line readback, gutter current
+  line, source breakpoint hit feedback, and a more VSCode-like debug side panel.

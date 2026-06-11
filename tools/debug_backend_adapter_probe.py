@@ -190,7 +190,7 @@ def main() -> int:
         _assert(caps.can_read_variables, "read-only snapshot should allow read capability")
         _assert(not caps.can_write_variables, "read-only snapshot must not allow writes")
         _assert(not caps.can_halt and not caps.can_run and not caps.can_step, "read-only snapshot must not allow run control")
-        _assert(not caps.can_sync_breakpoints, "read-only snapshot must not allow breakpoint sync")
+        _assert(caps.can_sync_breakpoints, "connected snapshot should expose explicit breakpoint sync capability")
         contract = snapshot.to_session_contract()
         _assert(contract.state == DebugSessionState.RUNNING, "running contract state mismatch")
         _assert(contract.connection_established, "contract should preserve connection state")
@@ -198,6 +198,7 @@ def main() -> int:
         command_map = {command.key: command for command in command_matrix_for_session(contract)}
         _assert(not command_map["halt"].execution_enabled, "contract halt must stay execution-disabled")
         _assert(not command_map["write_variables"].execution_enabled, "contract write must stay execution-disabled")
+        _assert(not command_map["sync_breakpoints"].execution_enabled, "contract breakpoint sync must stay execution-disabled")
         record = snapshot.to_record()
         _assert(record["connection_established"], "record should preserve connection state")
         json.dumps(record, ensure_ascii=False, sort_keys=True)

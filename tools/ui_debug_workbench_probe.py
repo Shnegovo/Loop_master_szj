@@ -781,8 +781,8 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"preset write result mismatch: {last_write!r}")
             sync_transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
             sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
-            if "waiting_remote_snapshot=true" not in sync_text and "等待远端断点快照" not in sync_text:
-                issues.append(f"read-only attach should keep remote breakpoint snapshot incomplete: {sync_text!r}")
+            if "mode=push_local_only" not in sync_text and "只推送本地断点" not in sync_text:
+                issues.append(f"read-only attach should use push-local breakpoint sync mode: {sync_text!r}")
             if sync_transaction is None or sync_transaction.backend_snapshot_id != "debug-backend-ui-fake":
                 issues.append(f"read-only attach sync transaction should retain backend snapshot id: {sync_transaction!r}")
             elif "debug-backend-ui-fake" not in tab.plan_guard_label.toolTip() or "后端快照" not in tab.plan_guard_label.toolTip():

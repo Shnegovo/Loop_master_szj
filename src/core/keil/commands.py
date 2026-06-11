@@ -76,6 +76,7 @@ class KeilBreakpointSyncOperation:
     remote_condition: str = ""
     valid: bool = True
     reason: str = ""
+    remote_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -500,8 +501,11 @@ def diff_keil_breakpoints(
     *,
     source_paths: Iterable[str | Path] = (),
 ) -> tuple[KeilBreakpointSyncOperation, ...]:
-    local = {_breakpoint_key(item): _breakpoint_intent(item) for item in local_breakpoints}
-    remote = {_breakpoint_key(item): _breakpoint_intent(item) for item in remote_breakpoints}
+    local_breakpoint_items = tuple(local_breakpoints)
+    remote_breakpoint_items = tuple(remote_breakpoints)
+    local = {_breakpoint_key(item): _breakpoint_intent(item) for item in local_breakpoint_items}
+    remote = {_breakpoint_key(item): _breakpoint_intent(item) for item in remote_breakpoint_items}
+    remote_ids = {_breakpoint_key(item): getattr(_remote_breakpoint(item), "remote_id", "") for item in remote_breakpoint_items}
     source_keys = {_normalise_path(path) for path in source_paths}
     operations: list[KeilBreakpointSyncOperation] = []
     for key in sorted(set(local) | set(remote)):
@@ -511,6 +515,7 @@ def diff_keil_breakpoints(
         if item is None:
             continue
         valid, reason = _breakpoint_validity(item, source_keys)
+        remote_id = str(remote_ids.get(key, "") or "")
         if local_item is not None and remote_item is None:
             action = KeilBreakpointSyncAction.ADD
         elif local_item is None and remote_item is not None:
@@ -521,6 +526,23 @@ def diff_keil_breakpoints(
             action = KeilBreakpointSyncAction.UPDATE_CONDITION
         else:
             action = KeilBreakpointSyncAction.NOOP
+        if action in {
+            KeilBreakpointSyncAction.REMOVE,
+            KeilBreakpointSyncAction.ENABLE,
+            KeilBreakpointSyncAction.DISABLE,
+            KeilBreakpointSyncAction.UPDATE_CONDITION,
+        } and not remote_id:
+            valid = False
+            reason = "Keil 远端断点缺少编号，不能安全删除、启停或改条件"
+        if action == KeilBreakpointSyncAction.ADD and local_item is not None and local_item.condition:
+            valid = False
+            reason = "Keil 源码行条件断点命令尚未验证，暂不自动同步条件"
+        if action == KeilBreakpointSyncAction.ADD and local_item is not None and not local_item.enabled:
+            valid = False
+            reason = "Keil 新增后立即禁用需要远端编号回读，暂不自动同步禁用的新断点"
+        if action == KeilBreakpointSyncAction.UPDATE_CONDITION:
+            valid = False
+            reason = "Keil 条件断点更新需要编号回读和重建，暂不自动同步条件"
         operations.append(
             KeilBreakpointSyncOperation(
                 action=action,
@@ -532,6 +554,7 @@ def diff_keil_breakpoints(
                 remote_condition=remote_item.condition if remote_item is not None else "",
                 valid=valid,
                 reason=reason,
+                remote_id=remote_id,
             )
         )
     return tuple(operations)
@@ -776,8 +799,6 @@ def _command_preview(
     if kind == KeilCommandKind.SYNC_BREAKPOINTS:
         counts = _breakpoint_operation_counts(breakpoint_ops)
         summary = breakpoint_diff_summary or build_keil_breakpoint_diff_summary(breakpoints, (), breakpoint_ops)
-        if not summary.snapshot_complete:
-            return ("breakpoint_diff(waiting_remote_snapshot=true)", "waiting for remote breakpoint snapshot")
         count_text = ", ".join(
             f"{key}={counts[key]}"
             for key in ("add", "remove", "enable", "disable", "update_condition", "noop")
@@ -786,7 +807,8 @@ def _command_preview(
             f", verified={summary.verified_count}, unverified={summary.unverified_count}, "
             f"pending_verify={summary.pending_verify_count}"
         )
-        commands = [f"diff_breakpoints({count_text}{verify_text})"]
+        mode_text = "full_diff" if summary.snapshot_complete else "push_local_only"
+        commands = [f"diff_breakpoints({count_text}{verify_text}, mode={mode_text})"]
         for op in breakpoint_ops[:8]:
             if op.action == KeilBreakpointSyncAction.NOOP:
                 continue
@@ -839,10 +861,21 @@ def _breakpoint_guards(
     invalid = breakpoint_diff_summary.invalid_count
     active_ops = breakpoint_diff_summary.operation_count
     if not breakpoint_diff_summary.snapshot_complete:
+        invalid = breakpoint_diff_summary.invalid_count
         return (
-            _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.WAIT, "等待远端断点快照"),
-            _guard("breakpoint_diff", "断点差异", KeilCommandGuardState.WAIT, "等待远端断点快照"),
-            _guard("breakpoint_locations", "断点位置", KeilCommandGuardState.WAIT, "等待远端断点快照"),
+            _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.PASS, f"{len(breakpoints)} 个本地断点待推送"),
+            _guard(
+                "breakpoint_diff",
+                "断点差异",
+                KeilCommandGuardState.PASS,
+                "远端断点枚举未完成，将只推送本地断点，不删除远端断点",
+            ),
+            _guard(
+                "breakpoint_locations",
+                "断点位置",
+                KeilCommandGuardState.BLOCKED if invalid else KeilCommandGuardState.PASS,
+                f"{invalid} 个断点位置无效或不在工程源码中" if invalid else "路径/行号具备基础格式",
+            ),
         )
     return (
         _guard("breakpoint_batch", "断点批次", KeilCommandGuardState.PASS, f"{len(breakpoints)} 个本地断点待 dry-run"),
@@ -918,20 +951,22 @@ def _breakpoint_snapshot_digest(
 
 
 def _breakpoint_operation_command(operation: KeilBreakpointSyncOperation) -> str:
-    line = f"{operation.path}:{operation.line}"
+    line = _keil_source_line_expression(operation.path, operation.line)
     if operation.action == KeilBreakpointSyncAction.ADD:
-        suffix = f", condition={operation.local_condition!r}" if operation.local_condition else ""
-        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint add {line}{suffix}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BreakSet {line}")'
     if operation.action == KeilBreakpointSyncAction.REMOVE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint remove {line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BreakKill {operation.remote_id or line}")'
     if operation.action == KeilBreakpointSyncAction.ENABLE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint enable {line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BreakEnable {operation.remote_id or line}")'
     if operation.action == KeilBreakpointSyncAction.DISABLE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint disable {line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BreakDisable {operation.remote_id or line}")'
     if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
-        suffix = f" condition={operation.local_condition!r}" if operation.local_condition else ""
-        return f'UVSC_DBG_EXEC_CMD(handle, "breakpoint update {line}{suffix}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BreakSet {line}")'
     return f'# noop {line}'
+
+
+def _keil_source_line_expression(path: str | Path, line: int) -> str:
+    return f"\\{Path(path)}\\{int(line)}"
 
 
 def _write_guards(variable_writes: tuple[KeilVariableWriteIntent, ...]) -> tuple[KeilCommandGuard, ...]:

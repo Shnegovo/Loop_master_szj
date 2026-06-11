@@ -44,6 +44,12 @@ from src.core.keil.uvsock import (
     check_uvsock_preflight,
 )
 from src.core.keil.watch import KeilUvSockWatchBackend, KeilWatchVariable
+from src.core.keil.breakpoint_sync import (
+    KeilBreakpointSyncRequest,
+    KeilBreakpointSyncResult,
+    execute_keil_breakpoint_sync,
+    remote_snapshot_from_operations,
+)
 
 
 @dataclass(frozen=True)
@@ -255,6 +261,24 @@ class KeilUvSockBackendAdapter:
             return backend.read_expressions(expressions)
         finally:
             backend.disconnect()
+
+    def sync_breakpoints(self, request: KeilBreakpointSyncRequest) -> KeilBreakpointSyncResult:
+        try:
+            with KeilUvscLiveSession.connect_existing(
+                root=self.config.root,
+                port=self.config.port,
+                connection_name=request.connection_name or "LoopMasterBreakpointSync",
+                require_debug=True,
+            ) as session:
+                snapshot = remote_snapshot_from_operations(request, complete=True)
+                return execute_keil_breakpoint_sync(session, request, remote_snapshot=snapshot)
+        except Exception as exc:
+            return KeilBreakpointSyncResult(
+                request=request,
+                commands=(),
+                remote_snapshot=None,
+                error=str(exc),
+            )
 
     def _runtime_control(
         self,
@@ -519,6 +543,6 @@ def _status_from_read_only_connection(
             can_halt=False,
             can_run=False,
             can_step=False,
-            can_sync_breakpoints=False,
+            can_sync_breakpoints=True,
         ),
     )

@@ -19,6 +19,7 @@ from src.core.keil.auto_debug import KeilAutoDebugRequest, run_keil_auto_debug_t
 from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter  # noqa: E402
 from src.core.keil.profile import make_keil_debug_profile  # noqa: E402
 from src.core.keil.profile_store import load_keil_profile_store  # noqa: E402
+from src.core.keil.presets import keil_live_write_seed, keil_variable_preset_profile  # noqa: E402
 
 
 DEFAULT_PROJECT = ROOT / "firmware" / "keil_f401_variable_probe" / "F401VariableProbe.uvprojx"
@@ -34,8 +35,8 @@ def main() -> int:
     parser.add_argument("--use-profile", action="store_true", help="Use the default saved Keil debug profile.")
     parser.add_argument("--profile-store", default=str(ROOT / "loopmaster_keil_profiles.json"))
     parser.add_argument("--profile", default="", help="Saved profile name/key/project substring. Defaults to the store default.")
-    parser.add_argument("--expression", default="debug_setpoint")
-    parser.add_argument("--write-value", default="5000")
+    parser.add_argument("--expression", default="")
+    parser.add_argument("--write-value", default="")
     parser.add_argument("--wait-seconds", type=float, default=25.0)
     parser.add_argument("--poll-interval", type=float, default=0.5)
     parser.add_argument("--build-timeout", type=float, default=180.0)
@@ -66,6 +67,13 @@ def main() -> int:
         target_name=target,
         port=port,
     )
+    target = profile.target_name or target
+    preset_profile = keil_variable_preset_profile(project, target)
+    expression, write_value = keil_live_write_seed(preset_profile)
+    if args.expression:
+        expression = args.expression
+    if args.write_value:
+        write_value = args.write_value
     request = KeilAutoDebugRequest(
         project_path=project,
         target_name=target,
@@ -74,8 +82,8 @@ def main() -> int:
         wait_seconds=float(args.wait_seconds),
         poll_interval=float(args.poll_interval),
         write_smoke=not args.no_write,
-        expression=args.expression,
-        value_text=args.write_value,
+        expression=expression,
+        value_text=write_value,
         build_timeout=float(args.build_timeout),
         connection_name="LoopMasterAutoSmoke",
     )
@@ -95,7 +103,7 @@ def main() -> int:
             "axf_exists": profile.axf_exists,
             "build_command": profile.build_plan.display_command,
             "launch_command": profile.launch_plan.display_command,
-            "write": None if args.no_write else {"expression": args.expression, "value": args.write_value},
+            "write": None if args.no_write else {"expression": expression, "value": write_value},
             "diagnostics": [{"key": key, "value": value} for key, value in profile.diagnostic_rows()],
             "next": "Add --execute to start Keil/UVSOCK and modify the target RAM variable.",
         }
