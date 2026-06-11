@@ -508,6 +508,7 @@ class MainWindow(QMainWindow):
         self._debug_last_live_read_result: KeilLiveVariableReadResult | None = None
         self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
         self._debug_last_breakpoint_sync_result: KeilBreakpointSyncResult | None = None
+        self._debug_last_runtime_control_result = None
         self._debug_last_run_to_cursor_result: KeilRunToCursorResult | None = None
         self._debug_keil_profile: KeilDebugProfile | None = None
         self._debug_keil_build_result: KeilBuildResult | None = None
@@ -3105,6 +3106,7 @@ class MainWindow(QMainWindow):
             tab.set_debug_controls_ready(True)
 
         if result is None:
+            self._debug_last_runtime_control_result = None
             diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + ((f"Keil {label}", f"失败：{error}"),)
             self._debug_backend_diagnostics = diagnostics
             self._refresh_debug_workbench_diagnostics()
@@ -3113,6 +3115,7 @@ class MainWindow(QMainWindow):
                 self._sb_label.setText(error)
             return
 
+        self._debug_last_runtime_control_result = result
         snapshot = getattr(result, "snapshot", None)
         if snapshot is not None:
             status = snapshot.status
@@ -4237,7 +4240,14 @@ class MainWindow(QMainWindow):
             DebugRuntimeState.ERROR: "错误",
         }
         value = labels.get(status.state, status.label or "--")
-        return "会话", value, status.detail or status.label or "等待调试会话"
+        detail = status.detail or status.label or "等待调试会话"
+        runtime_result = getattr(self, "_debug_last_runtime_control_result", None)
+        if runtime_result is not None:
+            runtime_label = self._runtime_action_label(getattr(runtime_result, "action", ""))
+            runtime_state = "成功" if getattr(runtime_result, "succeeded", False) else "失败"
+            value = f"{value} · {runtime_label}"
+            detail = f"最后运行控制：{runtime_label}{runtime_state}；{runtime_result.summary()}"
+        return "会话", value, detail
 
     def _live_loop_pc_item(self) -> tuple[str, str, str]:
         pc = getattr(self._tab_debug_workbench, "_pc_evidence", None)
@@ -4484,6 +4494,7 @@ class MainWindow(QMainWindow):
         self._debug_last_live_read_result = None
         self._debug_last_live_write_result = None
         self._debug_last_breakpoint_sync_result = None
+        self._debug_last_runtime_control_result = None
         self._debug_last_run_to_cursor_result = None
         self._debug_keil_profile = None
         self._debug_keil_build_result = None
@@ -4691,6 +4702,7 @@ class MainWindow(QMainWindow):
             ("运行控制", label),
             ("运行控制结果", "成功" if getattr(result, "succeeded", False) else "失败"),
             ("运行控制状态", target_text),
+            ("运行控制摘要", result.summary() if hasattr(result, "summary") else "--"),
         ]
         if uvsc is not None and getattr(uvsc, "status_name", ""):
             rows.append(("运行控制 UVSC", uvsc.status_name))
@@ -4698,6 +4710,16 @@ class MainWindow(QMainWindow):
         if error:
             rows.append(("运行控制错误", str(error)))
         return tuple(rows)
+
+    @staticmethod
+    def _runtime_action_label(action: str) -> str:
+        return {
+            "halt": "暂停",
+            "run": "运行",
+            "reset": "复位",
+            "step": "单步",
+            "step_over": "跨过",
+        }.get(str(action or ""), str(action or "--"))
 
     def _sync_debug_command_preview(self):
         if not hasattr(self, "_tab_debug_workbench"):

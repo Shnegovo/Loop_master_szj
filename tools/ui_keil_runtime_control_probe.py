@@ -317,6 +317,7 @@ def main() -> int:
             rows = _diagnostics(tab)
             _assert(tab.debug_status.state == DebugRuntimeState.PAUSED, f"halt should pause target: {tab.debug_status!r}")
             _assert(rows.get("运行控制") == "暂停", f"halt runtime diagnostic mismatch: {rows!r}")
+            _assert(rows.get("运行控制摘要", "").startswith("UVSOCK 暂停成功"), f"halt summary mismatch: {rows!r}")
             _assert(rows.get("PC 证据") == "已回读", f"halt PC evidence mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "halt-remote", f"halt remote snapshot mismatch: {rows!r}")
             _assert("PC 已回读" in tab.marker_label.text(), f"halt marker missing PC evidence: {tab.marker_label.text()!r}")
@@ -327,7 +328,7 @@ def main() -> int:
                 f"halt breakpoint evidence message mismatch: {verified_breakpoints!r}",
             )
             live_loop = _live_loop_text(tab)
-            _assert("会话 已暂停" in live_loop, f"halt live-loop session mismatch: {live_loop!r}")
+            _assert("会话 已暂停" in live_loop and "暂停" in live_loop, f"halt live-loop session mismatch: {live_loop!r}")
             _assert("PC 已回读" in live_loop, f"halt live-loop PC mismatch: {live_loop!r}")
             _assert("断点 1/1" in live_loop, f"halt live-loop breakpoint mismatch: {live_loop!r}")
 
@@ -336,11 +337,12 @@ def main() -> int:
             rows = _diagnostics(tab)
             _assert(tab.debug_status.state == DebugRuntimeState.RUNNING, f"run should mark target running: {tab.debug_status!r}")
             _assert(rows.get("运行控制") == "运行", f"run runtime diagnostic mismatch: {rows!r}")
+            _assert(rows.get("运行控制摘要", "").startswith("UVSOCK 运行成功"), f"run summary mismatch: {rows!r}")
             _assert(rows.get("PC 证据") == "未验证", f"run PC evidence should be unverified: {rows!r}")
             _assert(rows.get("PC 说明") == "目标运行中，PC 位置暂不稳定", f"run PC detail mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "run-remote", f"run remote snapshot mismatch: {rows!r}")
             live_loop = _live_loop_text(tab)
-            _assert("会话 运行中" in live_loop, f"run live-loop session mismatch: {live_loop!r}")
+            _assert("会话 运行中" in live_loop and "运行" in live_loop, f"run live-loop session mismatch: {live_loop!r}")
             _assert("PC 未验证" in live_loop, f"run live-loop PC mismatch: {live_loop!r}")
 
             window._on_debug_workbench_action("reset")
@@ -348,6 +350,7 @@ def main() -> int:
             rows = _diagnostics(tab)
             _assert(tab.debug_status.state == DebugRuntimeState.PAUSED, f"reset should pause target: {tab.debug_status!r}")
             _assert(rows.get("运行控制") == "复位", f"reset runtime diagnostic mismatch: {rows!r}")
+            _assert(rows.get("运行控制摘要", "").startswith("UVSOCK 复位成功"), f"reset summary mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "reset-remote", f"reset remote snapshot mismatch: {rows!r}")
 
             window._on_debug_workbench_action("step")
@@ -355,6 +358,7 @@ def main() -> int:
             rows = _diagnostics(tab)
             _assert(tab.debug_status.state == DebugRuntimeState.PAUSED, f"step should leave target paused: {tab.debug_status!r}")
             _assert(rows.get("运行控制") == "单步", f"step runtime diagnostic mismatch: {rows!r}")
+            _assert(rows.get("运行控制摘要", "").startswith("UVSOCK 单步成功"), f"step summary mismatch: {rows!r}")
             _assert(rows.get("PC 证据") == "已回读", f"step PC evidence mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "step-remote", f"step remote snapshot mismatch: {rows!r}")
         finally:

@@ -7077,3 +7077,59 @@ existing safe snapshot path.
     diagnostics,
   - make PC evidence and target state transitions easier to verify from the UI,
   - then wire debugger-backed watch/scope into the shared acquisition selector.
+
+## Milestone 83 - Keil Runtime Control Evidence
+
+### Goal
+
+Make Halt/Run runtime actions leave clear, inspectable UI evidence instead of
+only changing the target state label.
+
+### Completed
+
+- Added `_debug_last_runtime_control_result` to the main window state.
+- Runtime actions now publish their latest result after execution:
+  - live-loop `会话` chip includes the latest action label, such as `暂停` or
+    `运行`,
+  - diagnostics include action, result, target running state, UVSC status, and a
+    human summary.
+- Kept the existing PC evidence path:
+  - Halt can surface a verified PC marker when the backend snapshot contains PC
+    evidence,
+  - Run moves target state back to running and clears verified PC evidence unless
+    the backend provides one.
+- Added `tools\ui_keil_runtime_control_probe.py`:
+  - fake backend runs Halt then Run,
+  - asserts confirmation dialogs are requested,
+  - asserts backend calls happen in order,
+  - asserts diagnostics and live-loop chip show the latest action,
+  - asserts Halt publishes verified PC evidence.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-runtime-evidence --width 1440 --height 900`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This is still UI/evidence work around the existing real Keil runtime control
+  executor. It does not change the UVSOCK Halt/Run commands themselves.
+
+### Next Target
+
+- Continue toward the shared acquisition/source architecture:
+  - make debugger-backed watch/scope source selection more explicit,
+  - keep original light-intrusive SWD and serial waveform modes selectable,
+  - prepare OpenOCD/pyOCD/TI adapters to feed the same variable/scope interface.
