@@ -26,17 +26,93 @@ class AcquisitionSourceState(str, Enum):
     PLANNED = "planned"
 
 
+class AcquisitionSourceMode(str, Enum):
+    LIGHT_INTRUSIVE = "light_intrusive"
+    DEBUGGER_BACKED = "debugger_backed"
+    SERIAL_STREAM = "serial_stream"
+
+    @property
+    def label(self) -> str:
+        labels = {
+            AcquisitionSourceMode.LIGHT_INTRUSIVE: "非/轻侵入式",
+            AcquisitionSourceMode.DEBUGGER_BACKED: "调试器链路",
+            AcquisitionSourceMode.SERIAL_STREAM: "主动上报流",
+        }
+        return labels[self]
+
+
+@dataclass(frozen=True)
+class AcquisitionSourceCapabilities:
+    waveform_read: bool
+    variable_read: bool
+    variable_write: bool
+    breakpoint_control: bool = False
+    runtime_control: bool = False
+    source_visual: bool = False
+    owns_debug_session: bool = False
+    serial_txrx: bool = False
+
+    @property
+    def waveform_label(self) -> str:
+        return "可进入示波" if self.waveform_read else "不直接示波"
+
+    @property
+    def variable_read_label(self) -> str:
+        return "可读变量" if self.variable_read else "不按变量名读取"
+
+    @property
+    def variable_write_label(self) -> str:
+        return "可显式写入" if self.variable_write else "只读/接收"
+
+    @property
+    def debug_label(self) -> str:
+        features: list[str] = []
+        if self.breakpoint_control:
+            features.append("断点")
+        if self.runtime_control:
+            features.append("Halt/Run/单步")
+        if self.source_visual:
+            features.append("源码可视化")
+        return " / ".join(features) if features else "不接管调试"
+
+    @property
+    def session_label(self) -> str:
+        return "会接管调试链" if self.owns_debug_session else "不接管调试链"
+
+    @property
+    def summary_label(self) -> str:
+        parts = [self.waveform_label]
+        if self.variable_read:
+            parts.append("变量读取")
+        if self.variable_write:
+            parts.append("变量写入")
+        if self.breakpoint_control or self.runtime_control:
+            parts.append("断点/运行控制")
+        if self.serial_txrx:
+            parts.append("串口收发")
+        return "、".join(parts)
+
+    def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("示波能力", self.waveform_label),
+            ("变量读取", self.variable_read_label),
+            ("变量写入", self.variable_write_label),
+            ("调试能力", self.debug_label),
+            ("调试接管", self.session_label),
+        )
+
+
 @dataclass(frozen=True)
 class AcquisitionSourceDescriptor:
     key: str
     label: str
     short_label: str
     state: AcquisitionSourceState
+    mode: AcquisitionSourceMode
+    capabilities: AcquisitionSourceCapabilities
     domain: str
     transport: str
     intrusive_level: str
-    read_capable: bool
-    write_capable: bool
     implemented: bool
     selectable: bool
     recommended_hz: int | None = None
@@ -71,13 +147,23 @@ class AcquisitionSourceDescriptor:
         return f"最高 {self.max_hz} Hz"
 
     @property
+    def read_capable(self) -> bool:
+        return self.capabilities.waveform_read or self.capabilities.variable_read
+
+    @property
+    def write_capable(self) -> bool:
+        return self.capabilities.variable_write
+
+    @property
     def write_label(self) -> str:
-        return "可显式写入" if self.write_capable else "只读采集"
+        return self.capabilities.variable_write_label
 
     @property
     def detail(self) -> str:
         parts = [
             self.use_case,
+            f"模式：{self.mode.label}",
+            f"能力：{self.capabilities.summary_label}",
             f"侵入性：{self.intrusive_level}",
             f"速率：{self.rate_label}",
             f"写入：{self.write_label}",
@@ -96,12 +182,13 @@ class AcquisitionSourceDescriptor:
         return (
             ("示波采集源", self.label),
             ("采集源状态", self.status_label),
+            ("采集模式", self.mode.label),
             ("采集链路", self.transport),
             ("采集侵入性", self.intrusive_level),
             ("采集建议频率", self.rate_label),
             ("采集写入边界", self.write_label),
             ("采集用途", self.use_case or "--"),
-        )
+        ) + self.capabilities.diagnostic_rows()
 
 
 def build_acquisition_source_catalog(
@@ -118,11 +205,15 @@ def build_acquisition_source_catalog(
             label="SWD 内存",
             short_label="SWD",
             state=_state_for(SCOPE_SOURCE_SWD, active, selectable=True),
+            mode=AcquisitionSourceMode.LIGHT_INTRUSIVE,
+            capabilities=AcquisitionSourceCapabilities(
+                waveform_read=True,
+                variable_read=True,
+                variable_write=True,
+            ),
             domain="LoopMaster",
             transport="CMSIS-DAP / SWD",
             intrusive_level="非/轻侵入式轮询",
-            read_capable=True,
-            write_capable=True,
             implemented=True,
             selectable=True,
             recommended_hz=200,
@@ -136,11 +227,19 @@ def build_acquisition_source_catalog(
             label="Keil Watch",
             short_label="Keil Watch",
             state=_state_for(SCOPE_SOURCE_KEIL_WATCH, active, selectable=keil_watch_ready),
+            mode=AcquisitionSourceMode.DEBUGGER_BACKED,
+            capabilities=AcquisitionSourceCapabilities(
+                waveform_read=True,
+                variable_read=True,
+                variable_write=True,
+                breakpoint_control=True,
+                runtime_control=True,
+                source_visual=True,
+                owns_debug_session=True,
+            ),
             domain="Debug",
             transport="Keil UVSOCK Watch",
             intrusive_level="调试器表达式读取",
-            read_capable=True,
-            write_capable=True,
             implemented=True,
             selectable=keil_watch_ready,
             recommended_hz=10,
@@ -154,11 +253,16 @@ def build_acquisition_source_catalog(
             label="串口波形",
             short_label="串口",
             state=AcquisitionSourceState.ROUTE_ONLY,
+            mode=AcquisitionSourceMode.SERIAL_STREAM,
+            capabilities=AcquisitionSourceCapabilities(
+                waveform_read=True,
+                variable_read=False,
+                variable_write=False,
+                serial_txrx=True,
+            ),
             domain="Serial",
             transport="UART / VOFA-style stream",
             intrusive_level="固件主动上报",
-            read_capable=True,
-            write_capable=False,
             implemented=True,
             selectable=serial_ready,
             recommended_hz=100,
@@ -176,11 +280,19 @@ def build_acquisition_source_catalog(
                     label="OpenOCD/GDB",
                     short_label="OpenOCD",
                     state=AcquisitionSourceState.PLANNED,
+                    mode=AcquisitionSourceMode.DEBUGGER_BACKED,
+                    capabilities=AcquisitionSourceCapabilities(
+                        waveform_read=True,
+                        variable_read=True,
+                        variable_write=True,
+                        breakpoint_control=True,
+                        runtime_control=True,
+                        source_visual=True,
+                        owns_debug_session=True,
+                    ),
                     domain="Debug",
                     transport="OpenOCD + GDB/MI",
                     intrusive_level="调试器读取",
-                    read_capable=True,
-                    write_capable=True,
                     implemented=False,
                     selectable=False,
                     recommended_hz=5,
@@ -194,11 +306,19 @@ def build_acquisition_source_catalog(
                     label="pyOCD",
                     short_label="pyOCD",
                     state=AcquisitionSourceState.PLANNED,
+                    mode=AcquisitionSourceMode.DEBUGGER_BACKED,
+                    capabilities=AcquisitionSourceCapabilities(
+                        waveform_read=True,
+                        variable_read=True,
+                        variable_write=True,
+                        breakpoint_control=True,
+                        runtime_control=True,
+                        source_visual=True,
+                        owns_debug_session=True,
+                    ),
                     domain="Debug",
                     transport="pyOCD session",
                     intrusive_level="调试器读取",
-                    read_capable=True,
-                    write_capable=True,
                     implemented=False,
                     selectable=False,
                     recommended_hz=5,
@@ -212,11 +332,19 @@ def build_acquisition_source_catalog(
                     label="TI MSPM0G3507",
                     short_label="TI M0G3507",
                     state=AcquisitionSourceState.PLANNED,
+                    mode=AcquisitionSourceMode.DEBUGGER_BACKED,
+                    capabilities=AcquisitionSourceCapabilities(
+                        waveform_read=True,
+                        variable_read=True,
+                        variable_write=True,
+                        breakpoint_control=True,
+                        runtime_control=True,
+                        source_visual=True,
+                        owns_debug_session=True,
+                    ),
                     domain="Debug",
                     transport="TI 工具链 / 后续 OCD 适配",
                     intrusive_level="调试器读取",
-                    read_capable=True,
-                    write_capable=True,
                     implemented=False,
                     selectable=False,
                     recommended_hz=5,
@@ -265,6 +393,25 @@ def active_acquisition_source(
         if source.key == active:
             return source
     return build_acquisition_source_catalog(SCOPE_SOURCE_SWD)[0]
+
+
+def acquisition_source_key_for_debug_backend(backend_key: str | None) -> str | None:
+    mapping = {
+        "keil": SCOPE_SOURCE_KEIL_WATCH,
+        "openocd_gdb": SCOPE_SOURCE_OPENOCD_GDB,
+        "pyocd": SCOPE_SOURCE_PYOCD,
+        "ti_mspm0": SCOPE_SOURCE_TI_MSPM0,
+    }
+    return mapping.get(str(backend_key or "").strip())
+
+
+def debugger_backed_source_keys() -> tuple[str, ...]:
+    return (
+        SCOPE_SOURCE_KEIL_WATCH,
+        SCOPE_SOURCE_OPENOCD_GDB,
+        SCOPE_SOURCE_PYOCD,
+        SCOPE_SOURCE_TI_MSPM0,
+    )
 
 
 def normalize_acquisition_source_key(key: str | None) -> str:

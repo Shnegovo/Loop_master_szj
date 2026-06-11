@@ -180,6 +180,9 @@ def main() -> int:
             if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
         }
         _assert(diagnostics.get("示波采集源") == "Keil Watch", f"diagnostics should show Keil Watch source: {diagnostics!r}")
+        _assert(diagnostics.get("采集模式") == "调试器链路", f"Keil Watch mode diagnostics mismatch: {diagnostics!r}")
+        _assert(diagnostics.get("调试接管") == "会接管调试链", f"Keil Watch takeover diagnostics mismatch: {diagnostics!r}")
+        _assert("断点" in diagnostics.get("调试能力", ""), f"Keil Watch debug capability diagnostics mismatch: {diagnostics!r}")
         _assert("Angle" in window._monitored, f"Angle not monitored: {window._monitored!r}")
         _assert("Angle" in window._keil_watch_registry, "Angle missing from Keil watch registry")
         _assert(window._value_table.rowCount() >= 1, "value table should show watch variable")

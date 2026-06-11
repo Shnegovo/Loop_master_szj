@@ -7133,3 +7133,81 @@ only changing the target state label.
   - make debugger-backed watch/scope source selection more explicit,
   - keep original light-intrusive SWD and serial waveform modes selectable,
   - prepare OpenOCD/pyOCD/TI adapters to feed the same variable/scope interface.
+
+## Milestone 84 - Acquisition Source Capability Boundary
+
+### Goal
+
+Lock in the user's refined requirement that debug and waveform modes remain
+selectable and explicit: original non/light-intrusive SWD scope, serial
+VOFA-style waveform, Keil Watch, and future OpenOCD/pyOCD/TI debugger-backed
+sources must all feed the same scope concept without pretending they have the
+same risk, speed, or control surface.
+
+### Completed
+
+- Extended `src\core\acquisition_sources.py` from simple source labels into a
+  capability contract:
+  - source mode: `非/轻侵入式`, `调试器链路`, or `主动上报流`,
+  - waveform read support,
+  - variable read/write support,
+  - breakpoint/runtime/source-visualization support,
+  - whether the source owns or takes over the debug session.
+- Kept the important product boundary:
+  - `SWD 内存` remains the default light acquisition source and does not take
+    over the debug chain,
+  - `串口波形` remains a route to the serial assistant waveform page and does
+    not change the main SWD/Keil source,
+  - `Keil Watch` is marked as debugger-backed, low-rate waveform capable, and
+    tied to breakpoint/runtime/source visualization capability,
+  - OpenOCD/GDB, pyOCD, and TI MSPM0G3507 are visible as planned
+    debugger-backed acquisition sources but remain disabled until real adapters
+    are implemented.
+- Added debugger-backend-to-acquisition-source mapping helpers so future
+  adapters can advertise their waveform/variable source without hard-coding UI
+  branches.
+- Debug Workbench diagnostics now include the acquisition mode and capability
+  rows, making screenshots and probes show when a source will or will not take
+  over the debug chain.
+- Updated `docs\debug_workbench_plan.md` with the stricter rule that source
+  selection and debugger selection are related but not the same switch.
+
+### Verified
+
+- `python -m py_compile src\core\acquisition_sources.py src\ui\gui.py src\ui\debug_workbench_tab.py tools\acquisition_sources_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\debug_toolchains_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python -m py_compile src\core\acquisition_sources.py tools\acquisition_sources_probe.py tools\ui_debug_workbench_probe.py tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-acquisition-capabilities-final --width 1440 --height 900`
+  - PASS.
+  - Screenshots checked manually:
+    - `tools\ui-debug-workbench-acquisition-capabilities-final\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-acquisition-capabilities-final\04_debug_breakpoint_sync_strip.png`
+    - `tools\ui-debug-workbench-acquisition-capabilities-final\05_debug_remote_breakpoint_mirror.png`
+
+### Notes
+
+- This stage is architecture and UI evidence work. It does not start Keil,
+  OpenOCD, pyOCD, TI tools, or hardware probes.
+- The Keil Watch probe still confirms that adding a preset to waveform switches
+  the active source to `Keil Watch`, clamps the low-rate backend, and disconnects
+  cleanly on close.
+
+### Next Target
+
+- Continue Keil basics with real breakpoint usability:
+  - keep remote breakpoint refresh/sync evidence visible,
+  - expose the safest user-facing breakpoint actions around the current source
+    view,
+  - then start wiring debugger-backed variable/watch samples into a shared
+    acquisition session interface instead of only source descriptors.
