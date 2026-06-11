@@ -15,6 +15,7 @@ from src.core.keil.breakpoint_sync import (  # noqa: E402
     build_keil_breakpoint_sync_request_from_state,
     execute_keil_breakpoint_sync,
     keil_breakpoint_command,
+    plan_keil_breakpoint_commands,
     remote_snapshot_from_operations,
 )
 from src.core.keil.commands import KeilBreakpointIntent, KeilBreakpointSyncAction  # noqa: E402
@@ -73,6 +74,12 @@ def main() -> int:
         _assert(any(operation.action == KeilBreakpointSyncAction.ADD for operation in invalid), "conditional add should be guarded")
         command_text = "\n".join(keil_breakpoint_command(operation) for operation in request.operations)
         _assert("BS " in command_text and "BK 4" in command_text, f"command text mismatch: {command_text}")
+        plan = plan_keil_breakpoint_commands(request)
+        _assert([item.order for item in plan] == [1, 2, 3, 4, 5], f"plan order mismatch: {plan!r}")
+        _assert(sum(1 for item in plan if item.executable) == 4, f"plan executable count mismatch: {plan!r}")
+        _assert(plan[0].command == "BD 2" and plan[1].command == "BE 3", f"enable/disable order mismatch: {plan!r}")
+        _assert(plan[-1].status_label == "受限" and "条件断点" in plan[-1].reason, f"limited plan mismatch: {plan[-1]!r}")
+        _assert(plan[-1].to_record()["executable"] is False, f"plan record mismatch: {plan[-1].to_record()!r}")
 
         snapshot = remote_snapshot_from_operations(request, complete=True)
         session = FakeSession()
@@ -87,6 +94,10 @@ def main() -> int:
         _assert(rows.get("断点同步") == "部分完成", f"partial diagnostics mismatch: {rows!r}")
         _assert(rows.get("断点受限") == "1 未发送", f"limited diagnostics mismatch: {rows!r}")
         _assert("条件断点" in rows.get("断点受限原因", ""), f"limited reason missing: {rows!r}")
+        _assert(rows.get("断点命令计划") == "4/5 可发送", f"command plan diagnostics mismatch: {rows!r}")
+        record = result.to_record()
+        _assert(len(record["command_plan"]) == 5, f"command plan record missing: {record!r}")
+        _assert(record["command_plan"][0]["command"] == "BD 2", f"command plan record order mismatch: {record['command_plan']!r}")
         _assert(result.remote_snapshot is not None and result.remote_snapshot.complete, "snapshot should be complete")
         _assert(any(command.startswith("BS ") for command in session.commands), f"commands missing BS: {session.commands!r}")
 

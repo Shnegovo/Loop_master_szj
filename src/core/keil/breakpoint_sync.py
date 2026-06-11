@@ -41,6 +41,41 @@ class KeilBreakpointCommandResult:
 
 
 @dataclass(frozen=True)
+class KeilBreakpointCommandPlanItem:
+    operation: KeilBreakpointSyncOperation
+    command: str
+    executable: bool
+    will_change_target: bool
+    reason: str = ""
+    order: int = 0
+
+    @property
+    def status_label(self) -> str:
+        if self.executable:
+            return "将发送"
+        if self.operation.action == KeilBreakpointSyncAction.NOOP:
+            return "无变化"
+        return "受限"
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "order": self.order,
+            "action": self.operation.action.value,
+            "path": str(self.operation.path),
+            "line": self.operation.line,
+            "remote_id": self.operation.remote_id,
+            "command": self.command,
+            "address": f"0x{self.operation.address:08X}" if self.operation.address is not None else "",
+            "address_source": self.operation.address_source,
+            "address_exact": self.operation.address_exact,
+            "executable": self.executable,
+            "will_change_target": self.will_change_target,
+            "status": self.status_label,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
 class KeilBreakpointSyncResult:
     request: KeilBreakpointSyncRequest
     commands: tuple[KeilBreakpointCommandResult, ...]
@@ -131,6 +166,10 @@ class KeilBreakpointSyncResult:
             reason = _join_limited_reasons(self.limited_reasons)
             if reason:
                 rows.append(("断点受限原因", reason))
+        plan = plan_keil_breakpoint_commands(self.request)
+        if plan:
+            executable_count = sum(1 for item in plan if item.executable)
+            rows.append(("断点命令计划", f"{executable_count}/{len(plan)} 可发送"))
         address_resolved = sum(1 for item in self.commands if item.operation.address is not None)
         address_unresolved = sum(
             1 for item in self.commands
@@ -194,6 +233,7 @@ class KeilBreakpointSyncResult:
                 }
                 for item in self.commands
             ],
+            "command_plan": [item.to_record() for item in plan_keil_breakpoint_commands(self.request)],
             "remote_snapshot": _snapshot_record(self.remote_snapshot),
             "error": self.error,
         }
@@ -280,16 +320,17 @@ def execute_keil_breakpoint_sync(
     remote_snapshot: KeilBreakpointRemoteSnapshot | None = None,
 ) -> KeilBreakpointSyncResult:
     results: list[KeilBreakpointCommandResult] = []
-    for operation in _ordered_operations(request.operations):
-        command = keil_breakpoint_command(operation)
-        if not operation.valid:
+    for plan_item in plan_keil_breakpoint_commands(request):
+        operation = plan_item.operation
+        command = plan_item.command
+        if not plan_item.executable and operation.action != KeilBreakpointSyncAction.NOOP:
             results.append(
                 KeilBreakpointCommandResult(
                     operation=operation,
                     command=command,
                     attempted=False,
                     succeeded=False,
-                    error=operation.reason or "invalid breakpoint operation",
+                    error=plan_item.reason or operation.reason or "invalid breakpoint operation",
                 )
             )
             continue
@@ -409,6 +450,37 @@ def keil_breakpoint_command(operation: KeilBreakpointSyncOperation) -> str:
     if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
         return f"BS {location}"
     return f"# noop {location}"
+
+
+def plan_keil_breakpoint_commands(
+    request: KeilBreakpointSyncRequest,
+) -> tuple[KeilBreakpointCommandPlanItem, ...]:
+    plan: list[KeilBreakpointCommandPlanItem] = []
+    for index, operation in enumerate(_ordered_operations(request.operations), start=1):
+        executable = operation.valid and operation.action != KeilBreakpointSyncAction.NOOP
+        will_change = executable and operation.action in {
+            KeilBreakpointSyncAction.ADD,
+            KeilBreakpointSyncAction.REMOVE,
+            KeilBreakpointSyncAction.ENABLE,
+            KeilBreakpointSyncAction.DISABLE,
+            KeilBreakpointSyncAction.UPDATE_CONDITION,
+        }
+        reason = ""
+        if operation.action == KeilBreakpointSyncAction.NOOP:
+            reason = "本地和远端断点一致"
+        elif not operation.valid:
+            reason = operation.reason or "断点操作受限，未发送"
+        plan.append(
+            KeilBreakpointCommandPlanItem(
+                operation=operation,
+                command=keil_breakpoint_command(operation),
+                executable=executable,
+                will_change_target=will_change,
+                reason=reason,
+                order=index,
+            )
+        )
+    return tuple(plan)
 
 
 def _ordered_operations(

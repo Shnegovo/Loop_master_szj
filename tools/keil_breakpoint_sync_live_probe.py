@@ -222,6 +222,8 @@ def _finish(record: dict[str, object], json_output: bool, exit_code: int = 0) ->
         print(record.get("conclusion", "no conclusion"))
     if exit_code == 0:
         print("PASS Keil breakpoint sync live probe")
+    sys.stdout.flush()
+    sys.stderr.flush()
     return int(exit_code)
 
 

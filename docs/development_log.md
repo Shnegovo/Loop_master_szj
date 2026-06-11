@@ -7652,3 +7652,71 @@ between:
   - keep UI wording honest about verified vs pending breakpoint evidence,
   - then use the same backend-neutral contracts for future OpenOCD/pyOCD/TI
     adapters.
+
+## Milestone 92 - Keil Breakpoint Command Plan And Live Smoke
+
+### Goal
+
+Move Keil breakpoint support from UI preview toward a truthful executable
+debugger feature. Ordinary source-line breakpoints should have a concrete
+command plan before execution, and the F401/ST-Link path should be verified
+against a real Keil debug session.
+
+### Completed
+
+- Added `KeilBreakpointCommandPlanItem` and
+  `plan_keil_breakpoint_commands()`:
+  - one ordered plan item per breakpoint diff operation,
+  - exact Keil command preview (`BS`, `BK`, `BE`, `BD`, or noop),
+  - executable vs limited status,
+  - whether the command changes the target debug session,
+  - address evidence and unresolved/limited reason.
+- Updated `execute_keil_breakpoint_sync()` so the live executor consumes the
+  same structured plan that UI/audit code can inspect later.
+- Added command-plan records to `KeilBreakpointSyncResult.to_record()`.
+- Added `断点命令计划` diagnostics, for example `4/5 可发送`.
+- Kept conditional source-line breakpoint sync guarded for now:
+  - Keil `BreakSet` supports expression breakpoints, but target support and
+    runtime cost are not yet proven in this app path,
+  - ordinary execution breakpoints are the verified baseline.
+- Updated `tools\keil_breakpoint_sync_probe.py` to assert command ordering,
+  executable count, limited reasons, and serialized command-plan records.
+- Updated `tools\keil_breakpoint_sync_live_probe.py` to flush output before
+  exiting, reducing the chance that UVSOCK teardown hides failure records.
+
+### Verified
+
+- `python -m py_compile src\core\keil\breakpoint_sync.py tools\keil_breakpoint_sync_probe.py tools\keil_breakpoint_sync_live_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --no-write --json`
+  - PASS.
+  - Launched Keil, matched `STM32F401CCUx`, connected UVSOCK/debug state, no
+    variable write performed.
+- `$env:PYTHONUNBUFFERED="1"; python tools\keil_breakpoint_sync_live_probe.py --keil-root D:\Keil --execute --json`
+  - PASS.
+  - Resolved `firmware\keil_f401_variable_probe\main.c:62` to `0x08000164`.
+  - Sent `BS 0x08000164`, read back one remote breakpoint, cleaned it with
+    `BK 0`, and verified the final remote breakpoint list was empty.
+
+### Notes
+
+- External syntax check used Keil official BreakSet/Breakpoints documentation:
+  `BS/BreakSet` is the correct debug command family for execution or expression
+  breakpoints; the app still gates conditional sync until the exact hardware
+  behavior is proven.
+- Live smoke currently reports Keil's returned remote breakpoint id as `0` for
+  the single F401 breakpoint; cleanup with `BK 0` was verified by readback.
+
+### Next Target
+
+- Surface command-plan details in the Debug Workbench UI:
+  - show exactly which breakpoint commands will be sent,
+  - keep limited conditional/disabled-new breakpoint reasons visible,
+  - make the verified F401 ordinary breakpoint path feel like a first-class
+    debugger feature before adding OpenOCD/pyOCD/TI adapters.
