@@ -3688,17 +3688,18 @@ class MainWindow(QMainWindow):
                 continue
             failed_by_key[key] = command.error or command.operation.reason or "Keil 未接受该断点命令"
         remote_complete = bool(getattr(result.remote_snapshot, "complete", False))
-        remote_keys = {
-            self._keil_breakpoint_sync_key(item.path, item.line)
+        remote_by_key = {
+            self._keil_breakpoint_sync_key(item.path, item.line): item
             for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
             if remote_complete and getattr(item, "path", None) is not None and getattr(item, "line", 0)
         }
-        remote_addresses = {
-            int(address)
+        remote_by_address = {
+            int(address): item
             for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
             for address in (getattr(item, "address", None),)
-            if address is not None and (getattr(item, "path", None) is None or not getattr(item, "line", 0))
+            if address is not None
         }
+        completed = bool(getattr(result, "completed", result.succeeded))
         for breakpoint in tab.local_breakpoints():
             key = self._keil_breakpoint_sync_key(breakpoint.path, breakpoint.line)
             if key in failed_by_key:
@@ -3708,21 +3709,22 @@ class MainWindow(QMainWindow):
                     verified=False,
                     message=failed_by_key[key],
                 )
-            elif result.succeeded and key in remote_keys:
+            elif completed and key in remote_by_key:
                 tab.set_breakpoint_verification(
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=True,
-                    message="Keil 已回读该断点",
+                    message=self._keil_remote_breakpoint_evidence_text(remote_by_key[key], "Keil 已回读该断点"),
                 )
-            elif result.succeeded and succeeded_address_by_key.get(key) in remote_addresses:
+            elif completed and succeeded_address_by_key.get(key) in remote_by_address:
+                remote = remote_by_address[int(succeeded_address_by_key[key])]
                 tab.set_breakpoint_verification(
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=True,
-                    message="Keil 已按地址回读该断点",
+                    message=self._keil_remote_breakpoint_evidence_text(remote, "Keil 已按地址回读该断点"),
                 )
-            elif result.succeeded and key in succeeded_by_key:
+            elif completed and key in succeeded_by_key:
                 tab.set_breakpoint_verification(
                     breakpoint.line,
                     path=breakpoint.path,
@@ -3768,6 +3770,23 @@ class MainWindow(QMainWindow):
         except OSError:
             path_text = str(path or "").lower()
         return path_text, int(line or 0)
+
+    @staticmethod
+    def _keil_remote_breakpoint_evidence_text(remote, fallback: str) -> str:
+        parts = [fallback]
+        remote_id = str(getattr(remote, "remote_id", "") or "")
+        if remote_id:
+            parts.append(f"id {remote_id}")
+        address = getattr(remote, "address", None)
+        if address is not None:
+            try:
+                parts.append(f"0x{int(address):08X}")
+            except (TypeError, ValueError):
+                parts.append(str(address))
+        raw_location = str(getattr(remote, "raw_location", "") or "")
+        if raw_location and raw_location not in parts:
+            parts.append(raw_location)
+        return " · ".join(parts)
 
     def _append_keil_breakpoint_sync_audit(self, result: KeilBreakpointSyncResult, transaction=None) -> None:
         record = {

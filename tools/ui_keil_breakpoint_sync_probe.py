@@ -69,7 +69,11 @@ class FakeKeilBackend:
 
     def sync_breakpoints(self, request):
         self.requests.append(request)
-        snapshot = remote_snapshot_from_operations(request, complete=False, error="fake BL did not return breakpoint text")
+        snapshot = remote_snapshot_from_operations(
+            request,
+            complete=bool(request.remote_snapshot_complete),
+            error="" if request.remote_snapshot_complete else "fake BL did not return breakpoint text",
+        )
         return execute_keil_breakpoint_sync(self.session, request, remote_snapshot=snapshot)
 
 
@@ -255,6 +259,11 @@ def main() -> int:
         _assert("推送本地断点" not in second_confirm_calls[0]["message"], second_confirm_calls[0]["message"])
         full_request = fake_backend.requests[-1]
         _assert(full_request.remote_snapshot_complete, "expected full-diff mode with complete remote snapshot")
+        verified_rows = tab.local_breakpoints()
+        _assert(
+            any(item.line == 5 and item.verified and "id 11" in item.message for item in verified_rows),
+            f"remote id evidence missing from verified breakpoint: {verified_rows!r}",
+        )
 
         window._debug_remote_breakpoint_snapshot = complete_snapshot
         tab._remove_breakpoint(source_path, 5)

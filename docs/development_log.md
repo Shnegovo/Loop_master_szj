@@ -6833,3 +6833,58 @@ breakpoints or UV4 processes.
     remote snapshot,
   - then move toward the first OpenOCD/GDB no-process profile or TI MSPM0G3507
     research pass.
+
+## Milestone 79 - Remote Breakpoint Evidence in Local Verification
+
+### Goal
+
+Surface the evidence proven by the live F401 breakpoint sync smoke directly in
+the Debug Workbench. When Keil returns a remote breakpoint id, address, or
+mapped source location, the local breakpoint row should show that proof instead
+of a generic "already read back" message.
+
+### Completed
+
+- Updated local breakpoint verification after sync:
+  - complete remote snapshots now map by source path/line,
+  - address-only readback can still verify a local breakpoint when the command
+    resolved an address,
+  - verification messages now include remote id, address, and raw mapped
+    location when available.
+- Changed completion logic to use `result.completed`, so partial-but-safe sync
+  can still mark the breakpoints that Keil actually read back.
+- Extended `tools\ui_keil_breakpoint_sync_probe.py`:
+  - fake backend now returns a complete remote snapshot for full-diff sync,
+  - probe asserts the local breakpoint verification message contains remote id
+    evidence (`id 11`).
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-evidence --width 1440 --height 900`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- This is the UI counterpart to Milestone 78. The live path proved that Keil can
+  return `id 0` and `0x08000164`; this stage ensures those kinds of facts are
+  not hidden behind generic success text.
+
+### Next Target
+
+- Move to the next expansion slice:
+  - either start an OpenOCD/GDB no-process profile and command-preview adapter,
+  - or read `D:\ti` to build the first MSPM0G3507 debugger profile plan.
+  Keil remains the reference implementation for real variable writes,
+  breakpoint sync, run-to-cursor, and PC/runtime evidence.
