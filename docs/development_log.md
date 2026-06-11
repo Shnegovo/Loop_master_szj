@@ -5930,3 +5930,59 @@ PC evidence.
   source selector.
 - After the Keil basics are usable, start the TI MSPM0G3507 research/adaptation
   notes from `D:\ti`, even without live TI hardware.
+
+## Milestone 65 - Live F401 Run-to-Cursor Verification
+
+### Goal
+
+Prove that the newly exposed run-to-cursor path is backed by a real Keil/ST-Link
+debug chain, not only by fake UI and transaction probes.
+
+### Completed
+
+- Confirmed no `UV4`/`uVision` process was running before the live smoke.
+- Launched the F401 variable-probe Keil project through the existing auto-debug
+  smoke path.
+- Connected to the live Keil/UVSOCK debug session without writing variables.
+- Ran the live run-to-cursor transaction against:
+  - Project: `firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`
+  - Target: `STM32F401CCU6 Variable Probe`
+  - Source: `firmware\keil_f401_variable_probe\main.c`
+  - Line: `62`
+- Closed the test-created `UV4.exe` process and confirmed there was no
+  `UV4`/`uVision` process left.
+
+### Verified
+
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json --no-write`
+  - PASS.
+  - Started `UV4.exe` with PID `15788`.
+  - Connected after 3 attempts.
+  - No variable write was performed.
+- `python tools\keil_run_to_cursor_probe.py --live --keil-root D:\Keil --json`
+  - PASS.
+  - Live target address: `0x08000164`.
+  - Temporary breakpoint id: `0`.
+  - Hit PC: `0x08000164 / main.c:62`.
+  - Cleanup command: `BK 0`.
+  - Cleanup snapshot contained no leaked temporary breakpoint.
+- `Get-Process UV4,uVision`
+  - Confirmed no remaining Keil/uVision process after cleanup.
+
+### Notes
+
+- This validates the real backend transaction. The UI path has already been
+  covered by `tools\ui_keil_run_to_cursor_probe.py`; the remaining gap is a
+  true end-to-end manual/UI smoke against the real window, which is riskier and
+  should be done after the next UI feedback polish.
+- The live probe uses `reset_before_run=True` for deterministic hardware state;
+  the UI action keeps `reset_before_run=False` and requires a paused target.
+
+### Next Target
+
+- Tighten the visible breakpoint/PC feedback now that run-to-cursor is real:
+  make the current line, verified PC, pending remote breakpoints, and failed
+  breakpoint validation easier to scan.
+- Then split debugger source/mode selection from scope acquisition source so
+  original SWD scope, serial waveform, Keil Watch, OpenOCD/pyOCD, and future TI
+  MSPM0G3507 can coexist without crowding the right-side panels.
