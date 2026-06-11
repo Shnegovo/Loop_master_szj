@@ -6034,3 +6034,48 @@ window widths where the action buttons and search box could feel crowded.
   validation readability.
 - Then return to the source/acquisition selector boundary before starting the TI
   MSPM0G3507 adapter notes.
+
+## Milestone 67 - Breakpoint Verification Badges
+
+### Goal
+
+Make local breakpoint verification state visible directly in the source editor
+gutter instead of hiding it only in the breakpoint table or tooltip.
+
+### Completed
+
+- Added small gutter badges on breakpoint markers:
+  - green dot for verified backend readback,
+  - orange dot for failed/unverified backend feedback,
+  - hollow gray dot for pending verification.
+- Kept the existing breakpoint circle and conditional breakpoint diamond, so the
+  new badge adds state without replacing the familiar marker.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-badges --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-breakpoint-badges\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breakpoint-badges\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-breakpoint-badges\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+
+### Notes
+
+- Visual review confirmed the failed/unverified state is now visible in the
+  gutter, while the line number area remains readable.
+- This is still deliberately subtle; the table remains the detailed source of
+  exact verification messages.
+
+### Next Target
+
+- Build the source/acquisition selector boundary: keep debugger backend choice,
+  source manifest provider, and waveform acquisition source separate enough that
+  SWD, serial, Keil Watch, OpenOCD/pyOCD, and TI MSPM0G3507 can be added without
+  crowding the same right-side options.

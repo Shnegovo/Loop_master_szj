@@ -272,6 +272,8 @@ class SourceCodeEditor(QPlainTextEdit):
             breakpoint_decorations = [decoration for decoration in decorations if decoration.kind == "breakpoint"]
             enabled = all(decoration.enabled for decoration in breakpoint_decorations)
             conditional = any(bool(decoration.label) for decoration in breakpoint_decorations)
+            verified = any(decoration.verified for decoration in breakpoint_decorations)
+            failed_verify = any((not decoration.verified) and bool(decoration.message) for decoration in breakpoint_decorations)
             if enabled:
                 painter.setPen(QPen(QColor("#b91c1c"), 1.8))
                 painter.setBrush(QColor("#ef4444"))
@@ -289,6 +291,18 @@ class SourceCodeEditor(QPlainTextEdit):
                     QPoint(8, center_y),
                 ])
                 painter.drawPolygon(diamond)
+            if verified:
+                painter.setPen(QPen(QColor("#ffffff"), 1.0))
+                painter.setBrush(QColor("#16a34a"))
+                painter.drawEllipse(15, center_y + 2, 7, 7)
+            elif failed_verify:
+                painter.setPen(QPen(QColor("#ffffff"), 1.0))
+                painter.setBrush(QColor("#f59e0b"))
+                painter.drawEllipse(15, center_y + 2, 7, 7)
+            else:
+                painter.setPen(QPen(QColor("#94a3b8"), 1.1))
+                painter.setBrush(QColor("#ffffff"))
+                painter.drawEllipse(16, center_y + 3, 5, 5)
         if "search" in kinds:
             painter.setPen(QPen(QColor("#f59e0b"), 2))
             painter.drawLine(width - 7, top + 4, width - 7, bottom - 4)
