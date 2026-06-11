@@ -328,6 +328,7 @@ class _FakeReadOnlyBackend:
         self.profile_calls = 0
         self.build_calls = 0
         self.launch_calls = 0
+        self.read_calls = 0
         self.write_calls = 0
 
     def debug_profile(
@@ -396,6 +397,7 @@ class _FakeReadOnlyBackend:
         )
 
     def read_live_variable(self, request, *, require_debug: bool = True):
+        self.read_calls += 1
         return KeilLiveVariableReadResult(
             attempted=True,
             read=True,
@@ -806,9 +808,17 @@ Raw dump of debug contents of section .debug_line:
                     restore_text()
                 if fake_backend.write_calls != 1:
                     issues.append(f"preset write should request one fake write: {fake_backend.write_calls}")
+                if fake_backend.read_calls != 1:
+                    issues.append(f"preset write should request one fake baseline read: {fake_backend.read_calls}")
+                last_read = getattr(window, "_debug_last_live_read_result", None)
+                if last_read is None or not last_read.read or last_read.value != "5000":
+                    issues.append(f"preset write baseline read mismatch: {last_read!r}")
                 last_write = getattr(window, "_debug_last_live_write_result", None)
                 if last_write is None or not last_write.written or last_write.expression != "debug_setpoint":
                     issues.append(f"preset write result mismatch: {last_write!r}")
+                write_diag = _diagnostics(tab)
+                if write_diag.get("写前读取结果") != "成功" or write_diag.get("写前基线值") != "5000":
+                    issues.append(f"preset write baseline diagnostics mismatch: {write_diag!r}")
             sync_transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
             sync_text = " ".join(sync_transaction.command_preview + sync_transaction.blocked_reasons) if sync_transaction is not None else ""
             if "mode=push_local_only" not in sync_text and "只推送本地断点" not in sync_text:
@@ -833,15 +843,20 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"auto debug should reuse fake connection instead of launching: {fake_backend.launch_calls}")
                 if fake_backend.write_calls != 2:
                     issues.append(f"auto debug should request a second fake write: {fake_backend.write_calls}")
+                if fake_backend.read_calls != 2:
+                    issues.append(f"auto debug should request a second fake read: {fake_backend.read_calls}")
                 auto_result = getattr(window, "_debug_keil_auto_debug_result", None)
                 if auto_result is None or not auto_result.succeeded:
                     issues.append(f"auto debug result missing or failed: {auto_result!r}")
                 elif auto_result.read is None or not auto_result.read.read or auto_result.read.value != "5000":
                     issues.append(f"auto debug read-before-write result mismatch: {auto_result.read!r}")
+                elif getattr(window, "_debug_last_live_read_result", None) is not auto_result.read:
+                    issues.append("auto debug should publish its strict smoke read as the latest baseline")
                 auto_diag = _diagnostics(tab)
                 if (
                     auto_diag.get("自动调试") != "成功"
                     or auto_diag.get("自动写入前结果") != "成功"
+                    or auto_diag.get("自动写入前回读") != "5000"
                     or auto_diag.get("自动写入结果") != "成功"
                 ):
                     issues.append(f"auto debug diagnostics mismatch: {auto_diag!r}")

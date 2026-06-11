@@ -68,7 +68,12 @@ from src.core.keil.auto_debug import (
     KeilAutoDebugResult,
     run_keil_auto_debug_transaction,
 )
-from src.core.keil.live_write import KeilLiveVariableWriteRequest, KeilLiveVariableWriteResult
+from src.core.keil.live_write import (
+    KeilLiveVariableReadRequest,
+    KeilLiveVariableReadResult,
+    KeilLiveVariableWriteRequest,
+    KeilLiveVariableWriteResult,
+)
 from src.core.keil.presets import (
     KeilVariablePresetProfile,
     keil_live_write_prompt_hint,
@@ -484,6 +489,7 @@ class MainWindow(QMainWindow):
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics: tuple[tuple[str, str], ...] = ()
+        self._debug_last_live_read_result: KeilLiveVariableReadResult | None = None
         self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
         self._debug_last_breakpoint_sync_result: KeilBreakpointSyncResult | None = None
         self._debug_keil_profile: KeilDebugProfile | None = None
@@ -2189,6 +2195,7 @@ class MainWindow(QMainWindow):
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics = ()
+        self._debug_last_live_read_result = None
         self._debug_last_live_write_result = None
         self._debug_last_breakpoint_sync_result = None
         self._debug_keil_profile = None
@@ -3221,9 +3228,11 @@ class MainWindow(QMainWindow):
         self._debug_keil_launch_result = result.launch or getattr(self, "_debug_keil_launch_result", None)
         if result.snapshot is not None:
             self._apply_debug_backend_snapshot(result.snapshot)
+        if result.read is not None:
+            self._debug_last_live_read_result = result.read
         if result.write is not None:
             self._debug_last_live_write_result = result.write
-            self._append_keil_live_write_audit(result.write)
+            self._append_keil_live_write_audit(result.write, baseline_read=result.read)
         self._refresh_debug_workbench_diagnostics()
         self._sync_debug_command_preview()
         summary = result.summary()
@@ -3426,8 +3435,9 @@ class MainWindow(QMainWindow):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 写变量", "当前调试后端不是 Keil / UVSOCK。")
             return
-        if not hasattr(self._debug_backend, "write_live_variable"):
-            self._show_warning("Keil 写变量", "当前 Keil 后端尚未提供写变量执行器。")
+        missing = [name for name in ("read_live_variable", "write_live_variable") if not hasattr(self._debug_backend, name)]
+        if missing:
+            self._show_warning("Keil 写变量", f"当前 Keil 后端缺少执行器：{', '.join(missing)}。")
             return
         tab = self._tab_debug_workbench
         status = tab.debug_status
@@ -3476,7 +3486,41 @@ class MainWindow(QMainWindow):
             allow_command_fallback=True,
             connection_name="LoopMasterLiveWrite",
         )
-        if not self._confirm_keil_live_write(request, status):
+
+        read_request = KeilLiveVariableReadRequest(
+            expression=expression,
+            axf_path=axf,
+            connection_name="LoopMasterLiveWriteRead",
+        )
+        tab.set_debug_controls_ready(False)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"正在读取 {expression} 当前值...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            baseline_read = self._debug_backend.read_live_variable(read_request)
+        except Exception as exc:
+            baseline_read = KeilLiveVariableReadResult(
+                attempted=True,
+                read=False,
+                expression=expression,
+                method="backend",
+                error=str(exc),
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_last_live_read_result = baseline_read
+        self._debug_last_live_write_result = None
+        self._refresh_debug_workbench_diagnostics()
+        QApplication.processEvents()
+        if not baseline_read.read:
+            self._show_warning("Keil 写变量", f"{baseline_read.summary()}。\n已停止写入，避免盲写。")
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(baseline_read.summary())
+            return
+
+        if not self._confirm_keil_live_write(request, status, baseline_read=baseline_read):
             return
 
         tab.set_debug_controls_ready(False)
@@ -3499,7 +3543,7 @@ class MainWindow(QMainWindow):
             tab.set_debug_controls_ready(True)
 
         self._debug_last_live_write_result = result
-        self._append_keil_live_write_audit(result)
+        self._append_keil_live_write_audit(result, baseline_read=baseline_read)
         self._refresh_debug_workbench_diagnostics()
         self._sync_debug_command_preview()
         if result.written:
@@ -3600,10 +3644,18 @@ class MainWindow(QMainWindow):
         self._debug_keil_profile = profile
         return profile
 
-    def _confirm_keil_live_write(self, request: KeilLiveVariableWriteRequest, status) -> bool:
+    def _confirm_keil_live_write(
+        self,
+        request: KeilLiveVariableWriteRequest,
+        status,
+        *,
+        baseline_read: KeilLiveVariableReadResult | None = None,
+    ) -> bool:
         axf_text = str(request.axf_path) if request.axf_path else "未找到，将尝试 Keil 命令窗口赋值"
+        current_text = baseline_read.value if baseline_read is not None and baseline_read.value else "--"
         message = (
             f"变量：{request.expression}\n"
+            f"当前值：{current_text}\n"
             f"新值：{request.value_text}\n"
             f"工程：{status.project_path or '--'}\n"
             f"AXF：{axf_text}\n\n"
@@ -3620,10 +3672,16 @@ class MainWindow(QMainWindow):
             kind="warning",
         )
 
-    def _append_keil_live_write_audit(self, result: KeilLiveVariableWriteResult) -> None:
+    def _append_keil_live_write_audit(
+        self,
+        result: KeilLiveVariableWriteResult,
+        *,
+        baseline_read: KeilLiveVariableReadResult | None = None,
+    ) -> None:
         record = {
             "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "action": "keil_live_write",
+            "baseline_read": baseline_read.to_record() if baseline_read is not None else None,
             "result": result.to_record(),
         }
         try:
@@ -3823,6 +3881,7 @@ class MainWindow(QMainWindow):
         self._debug_remote_breakpoint_snapshot = None
         self._debug_backend_snapshot_record = None
         self._debug_backend_diagnostics = ()
+        self._debug_last_live_read_result = None
         self._debug_last_live_write_result = None
         self._debug_last_breakpoint_sync_result = None
         self._debug_keil_profile = None
@@ -3944,14 +4003,33 @@ class MainWindow(QMainWindow):
         return tuple(rows)
 
     def _keil_live_write_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        read = getattr(self, "_debug_last_live_read_result", None)
         result = getattr(self, "_debug_last_live_write_result", None)
-        if result is None:
+        if read is None and result is None:
             return ()
-        rows = [
-            ("Keil 写变量", "成功" if result.written else "失败"),
-            ("写入目标", result.expression),
-            ("写入方法", result.method or "--"),
-        ]
+        rows = []
+        if read is not None:
+            rows.extend(
+                [
+                    ("写前读取变量", read.expression),
+                    ("写前读取结果", "成功" if read.read else "失败"),
+                ]
+            )
+            if read.value:
+                rows.append(("写前基线值", read.value))
+            if read.resolved is not None:
+                rows.append(("写前读取地址", f"0x{read.resolved.address:08X}"))
+            if read.error:
+                rows.append(("写前读取错误", read.error))
+        if result is None:
+            return tuple(rows)
+        rows.extend(
+            [
+                ("Keil 写变量", "成功" if result.written else "失败"),
+                ("写入目标", result.expression),
+                ("写入方法", result.method or "--"),
+            ]
+        )
         if result.resolved is not None:
             rows.extend(
                 [

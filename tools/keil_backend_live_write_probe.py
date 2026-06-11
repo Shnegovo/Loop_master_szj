@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import src.core.keil.backend as backend_module  # noqa: E402
+from src.core.debug_variable_access import DebugVariableReadRequest, DebugVariableWriteRequest  # noqa: E402
 from src.core.keil.backend import KeilBackendConfig, KeilUvSockBackendAdapter  # noqa: E402
 from src.core.keil.live_write import (  # noqa: E402
     KeilLiveVariableReadRequest,
@@ -148,6 +149,27 @@ def main() -> int:
         )
         result = adapter.write_live_variable(request)
         smoke_result = adapter.run_live_variable_smoke(request, read_before_write=True)
+        generic_read = adapter.read_variable(
+            DebugVariableReadRequest(
+                expression="debug_setpoint",
+                binary_path=Path("D:/demo/demo.axf"),
+            )
+        )
+        generic_write = adapter.write_variable(
+            DebugVariableWriteRequest(
+                expression="debug_setpoint",
+                value_text="6000",
+                binary_path=Path("D:/demo/demo.axf"),
+            )
+        )
+        generic_smoke = adapter.smoke_variable_write(
+            DebugVariableWriteRequest(
+                expression="debug_setpoint",
+                value_text="6000",
+                binary_path=Path("D:/demo/demo.axf"),
+            ),
+            read_before_write=True,
+        )
     finally:
         backend_module.write_keil_live_variable_existing = original
         backend_module.read_keil_live_variable_existing = original_read
@@ -155,16 +177,20 @@ def main() -> int:
 
     _assert(read_result.read, read_result.summary())
     _assert(read_result.value == "5000", f"read value mismatch: {read_result.value}")
+    _assert(generic_read.read and generic_read.backend == "keil", generic_read.summary())
+    _assert(generic_read.resolved is not None and generic_read.resolved.address == 0x20000008, "generic read resolved mismatch")
     _assert(result.written, result.summary())
     _assert(result.method == "memory", f"method mismatch: {result.method}")
+    _assert(generic_write.written and generic_write.backend == "keil", generic_write.summary())
+    _assert(generic_smoke.succeeded and generic_smoke.read is not None, generic_smoke.summary())
     _assert(result.resolved is not None and result.resolved.address == 0x20000008, "resolved address mismatch")
-    _assert(len(calls) == 1, f"expected one write call, got {len(calls)}")
+    _assert(len(calls) == 2, f"expected two write calls, got {len(calls)}")
     call_request, root, port, require_debug = calls[0]
     _assert(call_request is request, "adapter should pass request through")
     _assert(root == Path("D:/Keil"), f"root mismatch: {root}")
     _assert(port == 4827, f"port mismatch: {port}")
     _assert(require_debug, "live write should require debug by default")
-    _assert(len(read_calls) == 1, f"expected one read call, got {len(read_calls)}")
+    _assert(len(read_calls) == 2, f"expected two read calls, got {len(read_calls)}")
     read_call_request, read_root, read_port, read_require_debug = read_calls[0]
     _assert(read_call_request is read_request, "adapter should pass read request through")
     _assert(read_root == Path("D:/Keil"), f"read root mismatch: {read_root}")
@@ -172,7 +198,7 @@ def main() -> int:
     _assert(read_require_debug, "live read should require debug by default")
     _assert(smoke_result.succeeded, smoke_result.summary())
     _assert(smoke_result.read is not None and smoke_result.read.value == "5000", "smoke should include read-before-write")
-    _assert(len(smoke_calls) == 1, f"expected one smoke call, got {len(smoke_calls)}")
+    _assert(len(smoke_calls) == 2, f"expected two smoke calls, got {len(smoke_calls)}")
     smoke_request, smoke_root, smoke_port, smoke_require_debug, smoke_read_before_write = smoke_calls[0]
     _assert(smoke_request is request, "adapter should pass smoke request through")
     _assert(smoke_root == Path("D:/Keil"), f"smoke root mismatch: {smoke_root}")

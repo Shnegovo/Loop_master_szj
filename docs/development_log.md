@@ -4799,3 +4799,100 @@ before the write, written through the memory path, and independently read back.
 - Keep pushing real features before more scaffolding: next visible feature
   should let the UI read a selected variable baseline and present the strict
   write result as a human-readable transaction.
+
+## Milestone 53 Update - Variable Baseline Read and Shared Access Contract
+
+### Goal
+
+Turn the strict Keil write proof into a more human PID-tuning workflow: before
+the user writes a variable from the UI, LoopMaster should read the current
+value, show it in the confirmation/diagnostics, and keep it in the audit log.
+At the same time, start the smallest useful shared variable-access contract so
+later OpenOCD, pyOCD and GDB adapters are not forced to copy Keil method names.
+
+### Completed
+
+- Added `src/core/debug_variable_access.py`.
+  - Shared request/result dataclasses for variable read, write and write smoke.
+  - `DebugVariableAccessAdapter` protocol with `read_variable()`,
+    `write_variable()` and `smoke_variable_write()`.
+  - Stable `to_record()` output including backend, resolved address, raw bytes
+    and diagnostics.
+- Added generic variable-access methods to `KeilUvSockBackendAdapter`.
+  - `read_variable()` maps to `read_live_variable()`.
+  - `write_variable()` maps to `write_live_variable()`.
+  - `smoke_variable_write()` maps to the strict single-session Keil smoke.
+  - Existing Keil-specific methods remain intact for compatibility.
+- Improved the visible UI write-variable flow.
+  - Normal "Keil 写变量" now requires `read_live_variable` and
+    `write_live_variable`.
+  - After the user selects/enters a variable and new value, LoopMaster performs
+    a baseline read first.
+  - If the baseline read fails, the write is stopped to avoid blind PID writes.
+  - The final confirmation now shows current value and new value.
+  - Diagnostics now include:
+    - `写前读取变量`
+    - `写前读取结果`
+    - `写前基线值`
+    - `写前读取地址`
+  - Audit records now include `baseline_read`.
+- Auto-debug strict smoke now also publishes its read result as the latest UI
+  baseline, so manual write and auto-debug diagnostics share the same surface.
+- Re-checked the F103 balance-car reference path in this stage.
+  - It remains an F103 reference/preset source, not something to execute on the
+    connected F401 board.
+  - Existing profile/preset probes continue to cover its target, device, AXF,
+    PID write presets and scope presets.
+
+### Verified
+
+- `python -m py_compile src\core\debug_variable_access.py src\core\keil\backend.py src\ui\gui.py tools\debug_variable_access_probe.py tools\keil_backend_live_write_probe.py tools\ui_debug_workbench_probe.py tools\keil_auto_debug_transaction_probe.py tools\keil_live_write_service_probe.py tools\keil_auto_debug_smoke.py`
+  - PASS.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS; covers both Keil-specific and generic variable-access method names.
+- `python tools\keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools\keil_live_write_service_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-baseline-read --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-baseline-read\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-baseline-read\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-baseline-read\03_debug_workbench_narrow.png`
+- `python tools\keil_auto_debug_smoke.py --json`
+  - PASS.
+- `python tools\keil_balance_reference_probe.py --json`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- `python tools\keil_variable_presets_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on the connected ST-Link/F401 setup.
+  - Reused the existing paused UVSOCK session.
+  - Resolved `debug_setpoint` to `0x20000008`.
+  - Baseline read returned `6000`.
+  - Memory write/readback returned `6000`.
+
+### Notes
+
+- The generic variable-access contract is intentionally thin. It is not a large
+  backend rewrite; it creates stable names for the UI and future OpenOCD/pyOCD
+  adapters while Keil keeps working through the already proven path.
+- The ordinary manual write path is now safer for PID tuning: the user sees the
+  current value immediately before committing the write, and a failed read stops
+  the write.
+- `DebugRuntimeState` and several UI action methods are still Keil-named. That
+  is the next architectural layer, not this slice.
+
+### Next Target
+
+- Move the UI write-variable action from Keil-specific method names to the new
+  generic `DebugVariableAccessAdapter` methods while keeping Keil as the first
+  implementation.
+- Add a richer debugger profile/workspace record that stores F401 live-probe
+  and F103 balance-car metadata together with runtime suitability.
+- Continue the source-debugger work: PC/current-line readback and breakpoint
+  evidence should be the next visible debugging features after variable access.

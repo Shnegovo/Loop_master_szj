@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.core.debug_variable_access import (
+    DebugResolvedVariable,
+    DebugVariableReadRequest,
+    DebugVariableReadResult,
+    DebugVariableSmokeResult,
+    DebugVariableWriteRequest,
+    DebugVariableWriteResult,
+)
 from src.core.debug_backend import (
     DebugBackendDiagnostic,
     DebugBackendSessionSnapshot,
@@ -221,6 +229,47 @@ class KeilUvSockBackendAdapter:
             port=self.config.port,
             require_debug=require_debug,
             read_before_write=read_before_write,
+        )
+
+    def read_variable(
+        self,
+        request: DebugVariableReadRequest,
+        *,
+        require_debug: bool = True,
+    ) -> DebugVariableReadResult:
+        result = self.read_live_variable(
+            _keil_read_request_from_generic(request),
+            require_debug=require_debug,
+        )
+        return _generic_read_result_from_keil(result)
+
+    def write_variable(
+        self,
+        request: DebugVariableWriteRequest,
+        *,
+        require_debug: bool = True,
+    ) -> DebugVariableWriteResult:
+        result = self.write_live_variable(
+            _keil_write_request_from_generic(request),
+            require_debug=require_debug,
+        )
+        return _generic_write_result_from_keil(result)
+
+    def smoke_variable_write(
+        self,
+        request: DebugVariableWriteRequest,
+        *,
+        require_debug: bool = True,
+        read_before_write: bool = True,
+    ) -> DebugVariableSmokeResult:
+        result = self.run_live_variable_smoke(
+            _keil_write_request_from_generic(request),
+            require_debug=require_debug,
+            read_before_write=read_before_write,
+        )
+        return DebugVariableSmokeResult(
+            read=_generic_read_result_from_keil(result.read) if result.read is not None else None,
+            write=_generic_write_result_from_keil(result.write),
         )
 
     def debug_profile(
@@ -608,6 +657,79 @@ def _target_running_text(value: bool | None) -> str:
 
 def _runtime_action_label(action: str) -> str:
     return "Keil 继续运行" if action == "run" else "Keil 暂停" if action == "halt" else f"Keil {action}"
+
+
+def _keil_read_request_from_generic(request: DebugVariableReadRequest) -> KeilLiveVariableReadRequest:
+    return KeilLiveVariableReadRequest(
+        expression=request.expression,
+        axf_path=request.binary_path,
+        address=request.address,
+        type_name=request.type_name,
+        connection_name=request.connection_name,
+    )
+
+
+def _keil_write_request_from_generic(request: DebugVariableWriteRequest) -> KeilLiveVariableWriteRequest:
+    return KeilLiveVariableWriteRequest(
+        expression=request.expression,
+        value_text=request.value_text,
+        axf_path=request.binary_path,
+        address=request.address,
+        type_name=request.type_name,
+        prefer_memory=request.prefer_memory,
+        allow_command_fallback=request.allow_command_fallback,
+        connection_name=request.connection_name,
+    )
+
+
+def _generic_resolved_from_keil(resolved) -> DebugResolvedVariable | None:
+    if resolved is None:
+        return None
+    return DebugResolvedVariable(
+        expression=resolved.expression,
+        symbol=resolved.symbol,
+        address=resolved.address,
+        size=resolved.size,
+        type_name=resolved.type_name,
+        source=resolved.source,
+        ram_checked=resolved.ram_checked,
+    )
+
+
+def _generic_read_result_from_keil(result: KeilLiveVariableReadResult) -> DebugVariableReadResult:
+    return DebugVariableReadResult(
+        attempted=result.attempted,
+        read=result.read,
+        expression=result.expression,
+        method=result.method,
+        backend="keil",
+        resolved=_generic_resolved_from_keil(result.resolved),
+        raw=result.raw,
+        value=result.value,
+        diagnostics=result.diagnostics,
+        error=result.error,
+    )
+
+
+def _generic_write_result_from_keil(result: KeilLiveVariableWriteResult) -> DebugVariableWriteResult:
+    return DebugVariableWriteResult(
+        attempted=result.attempted,
+        written=result.written,
+        expression=result.expression,
+        value_text=result.value_text,
+        method=result.method,
+        backend="keil",
+        resolved=_generic_resolved_from_keil(result.resolved),
+        old_raw=result.old_raw,
+        new_raw=result.new_raw,
+        readback_raw=result.readback_raw,
+        old_value=result.old_value,
+        readback_value=result.readback_value,
+        command=result.command,
+        attempts=result.attempts,
+        diagnostics=result.diagnostics,
+        error=result.error,
+    )
 
 
 def _placeholder_pc_location(status: DebugWorkbenchStatus) -> DebugPcLocation:
