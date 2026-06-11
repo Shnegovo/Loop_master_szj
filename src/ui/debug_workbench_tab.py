@@ -1888,6 +1888,7 @@ class DebugWorkbenchTab(QWidget):
             "keil": "Keil",
             "openocd_gdb": "OpenOCD",
             "pyocd": "pyOCD",
+            "ti_mspm0": "TI MSPM0",
             "offline": "离线",
             "none": "--",
         }

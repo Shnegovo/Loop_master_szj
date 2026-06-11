@@ -649,7 +649,7 @@ def run(output_dir: Path, width: int, height: int) -> int:
             tab.backend_combo.itemText(index)
             for index in range(tab.backend_combo.count())
         ] if hasattr(tab, "backend_combo") else []
-        for label in ("Keil / UVSOCK", "OpenOCD / GDB", "pyOCD", "离线回放"):
+        for label in ("Keil / UVSOCK", "OpenOCD / GDB", "pyOCD", "TI MSPM0G3507", "离线回放"):
             if label not in backend_labels:
                 issues.append(f"backend selector missing {label}: {backend_labels!r}")
         if hasattr(tab, "backend_combo"):
@@ -776,6 +776,37 @@ Raw dump of debug contents of section .debug_line:
                 ]
                 if unsafe_actions:
                     issues.append(f"OpenOCD placeholder enabled dangerous actions: {unsafe_actions!r}")
+                ti_index = tab.backend_combo.findData("ti_mspm0")
+                if ti_index < 0:
+                    issues.append("backend selector missing ti_mspm0 data")
+                else:
+                    tab.backend_combo.setCurrentIndex(ti_index)
+                    _pump(app, 0.15)
+                    if getattr(window, "_debug_backend_kind", None).value != "ti_mspm0":
+                        issues.append(f"TI backend selector did not switch main window: {getattr(window, '_debug_backend_kind', None)!r}")
+                    if "TI MSPM0G3507" not in tab.status_text.text():
+                        issues.append(f"TI placeholder status mismatch: {tab.status_text.text()!r}")
+                    window._discover_debug_backend_for_workbench()
+                    _pump(app, 0.15)
+                    diag = _diagnostics(tab)
+                    if diag.get("后端") != "TI MSPM0G3507" or diag.get("工具链阶段") != "计划中":
+                        issues.append(f"TI placeholder diagnostics mismatch: {diag!r}")
+                    if "MSPM0G3507" not in diag.get("适配目标", ""):
+                        issues.append(f"TI placeholder target mismatch: {diag!r}")
+                    safety = diag.get("安全边界", "")
+                    if "不连接探针" not in safety or "不写目标" not in safety:
+                        issues.append(f"TI placeholder safety boundary mismatch: {diag!r}")
+                    ti_transactions = getattr(tab, "_command_transactions", ())
+                    if not ti_transactions or getattr(ti_transactions[0], "backend", "") != "ti_mspm0":
+                        issues.append(f"TI placeholder transactions missing: {ti_transactions!r}")
+                    unsafe_actions = [
+                        key
+                        for key in ("halt", "run", "reset", "step", "step_over", "run_to_cursor", "sync_breakpoints", "write_variables")
+                        if getattr(tab, "_action_buttons", {}).get(key) is not None
+                        and getattr(tab, "_action_buttons", {})[key].isEnabled()
+                    ]
+                    if unsafe_actions:
+                        issues.append(f"TI placeholder enabled dangerous actions: {unsafe_actions!r}")
                 keil_index = tab.backend_combo.findData("keil")
                 if keil_index >= 0:
                     tab.backend_combo.setCurrentIndex(keil_index)

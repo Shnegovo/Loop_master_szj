@@ -114,6 +114,7 @@ def main() -> int:
             DebugBackendKind.KEIL,
             DebugBackendKind.OPENOCD_GDB,
             DebugBackendKind.PYOCD,
+            DebugBackendKind.TI_MSPM0,
             DebugBackendKind.OFFLINE,
         ),
         f"placeholder registry changed: {placeholders.kinds()!r}",
@@ -122,13 +123,14 @@ def main() -> int:
         DebugBackendKind.KEIL: "keil_uvsock",
         DebugBackendKind.OPENOCD_GDB: "openocd_gdb",
         DebugBackendKind.PYOCD: "pyocd",
+        DebugBackendKind.TI_MSPM0: "ti_mspm0",
         DebugBackendKind.OFFLINE: "offline",
     }
     for kind, worker_key in expected_workers.items():
         _assert_safe_lifecycle(placeholders.lifecycle(kind), worker_key=worker_key)
     lifecycle_keys = tuple(item.worker_key for item in placeholders.lifecycles())
-    _assert(lifecycle_keys == ("keil_uvsock", "openocd_gdb", "pyocd", "offline"), f"lifecycle order changed: {lifecycle_keys!r}")
-    for kind in (DebugBackendKind.OPENOCD_GDB, DebugBackendKind.PYOCD, DebugBackendKind.OFFLINE):
+    _assert(lifecycle_keys == ("keil_uvsock", "openocd_gdb", "pyocd", "ti_mspm0", "offline"), f"lifecycle order changed: {lifecycle_keys!r}")
+    for kind in (DebugBackendKind.OPENOCD_GDB, DebugBackendKind.PYOCD, DebugBackendKind.TI_MSPM0, DebugBackendKind.OFFLINE):
         backend = placeholders.create(kind)
         snapshot = backend.read_only_session_snapshot(
             project_path="D:/demo/demo.elf",
@@ -146,6 +148,7 @@ def main() -> int:
         _assert(not snapshot.status.capabilities.can_reset, f"{kind.value} placeholder must not allow reset")
         _assert(not snapshot.status.capabilities.can_write_variables, f"{kind.value} placeholder must not allow writes")
         _assert("尚未接入" in " ".join(value for _, value in snapshot.diagnostic_rows()), f"{kind.value} diagnostics mismatch")
+        _assert("工具链协议" in dict(snapshot.diagnostic_rows()), f"{kind.value} toolchain diagnostics missing")
         contract = snapshot.to_session_contract()
         _assert(contract.state == DebugSessionState.ERROR, f"{kind.value} contract state mismatch")
         _assert(contract.safety_policy.dry_run, f"{kind.value} contract must stay dry-run")

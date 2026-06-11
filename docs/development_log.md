@@ -6534,3 +6534,89 @@ forcing the user to read through the full diagnostics table:
   - sketch the shared operations OpenOCD/pyOCD/TI need to implement,
   - begin with a no-process OpenOCD/GDB adapter skeleton or TI MSPM0G3507
     metadata, depending on which unlocks the next real feature fastest.
+
+## Milestone 75 - Debug Toolchain Metadata and TI MSPM0 Boundary
+
+### Goal
+
+Make the debugger expansion path explicit without pretending every backend is
+already live. Keil stays the first real reference implementation; OpenOCD,
+pyOCD, TI MSPM0G3507, and offline replay now have shared metadata, lifecycle
+keys, safety boundaries, and UI-visible diagnostics.
+
+### Requirement Recorded
+
+- 调试及示波必须保留多种可选链路：
+  - 原 LoopMaster `非/轻侵入式` SWD 变量示波，
+  - 串口助手/VOFA-style 主动上报示波，
+  - Keil / UVSOCK 调试器主控模式，
+  - 后续 OpenOCD、pyOCD、TI MSPM0G3507 等 OCD/debugger 模式。
+- 示波不绑定死在某一个调试器上；调试器链路也可以作为低频示波/变量观察来源。
+- 每个新后端必须先声明：
+  - 是否真实接入，
+  - 支持哪些操作，
+  - 目标 MCU/协议边界，
+  - 是否允许连接探针或写目标。
+
+### Completed
+
+- Added `src/core/debug_toolchains.py`.
+  - Describes Keil / UVSOCK as the live reference backend.
+  - Describes OpenOCD / GDB and pyOCD as safe placeholders.
+  - Describes TI MSPM0G3507 as a planned priority target backed by `D:\ti`
+    material, with no probe connection or target writes until real hardware
+    support exists.
+  - Describes offline replay as a future no-hardware mode.
+- Registered `ti_mspm0` in the debug backend kind/session contract.
+- Extended backend registry placeholder diagnostics with toolchain phase,
+  protocol, target scope, executable hint, operation list, safety boundary, and
+  next action.
+- Updated Debug Workbench labels so TI MSPM0G3507 appears as a selectable
+  backend entry without enabling dangerous actions.
+- Strengthened the UI probe:
+  - backend selector must include TI MSPM0G3507,
+  - switching to TI must update the main window backend,
+  - diagnostics must report `计划中`, `MSPM0G3507`, and `不连接探针/不写目标`,
+  - halt/run/reset/step/run-to-cursor/breakpoint sync/write buttons must stay
+    disabled for the placeholder.
+
+### Verified
+
+- `python -m py_compile src\core\debug_toolchains.py src\core\debug_workbench.py src\core\debug_session_contract.py src\core\debug_backend_registry.py src\ui\debug_workbench_tab.py tools\debug_toolchains_probe.py tools\debug_backend_registry_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_toolchains_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-toolchains --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-toolchains\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-toolchains\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-toolchains\03_debug_workbench_narrow.png`
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- This milestone intentionally does not launch OpenOCD, pyOCD, TI tools, or
+  extra probe sessions. It records the expansion contract and prevents unsafe UI
+  actions from becoming clickable before a backend is real.
+- The user specifically identified TI MSPM0G3507 as important after Keil
+  breakpoints and basic debug use are complete.
+
+### Next Target
+
+- Continue with real Keil debugger basics first:
+  - make breakpoint operations more complete from the UI,
+  - keep variable write/read evidence in the same loop,
+  - then use Keil as the template for OpenOCD/GDB and TI MSPM0G3507 adapters.
+- Start reading `D:\ti` after the Keil breakpoint path is stable enough, to
+  build an MSPM0G3507 profile and decide whether TI should route through a
+  vendor tool, GDB bridge, OpenOCD-like path, or pyOCD-compatible path.

@@ -61,6 +61,7 @@ class DebugBackendKind(str, Enum):
     KEIL = "keil"
     OPENOCD_GDB = "openocd_gdb"
     PYOCD = "pyocd"
+    TI_MSPM0 = "ti_mspm0"
     OFFLINE = "offline"
 
 

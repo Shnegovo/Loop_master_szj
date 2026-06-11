@@ -27,6 +27,7 @@ from src.core.debug_backend import (
     backend_snapshot_id,
     now_iso,
 )
+from src.core.debug_toolchains import DebugToolchainDescriptor, debug_toolchain_descriptor
 
 
 DebugBackendFactory = Callable[[], DebugBackendAdapter]
@@ -102,6 +103,7 @@ class UnavailableDebugBackend:
     kind: DebugBackendKind
     display_name: str
     detail: str
+    toolchain: DebugToolchainDescriptor | None = None
 
     def discover(
         self,
@@ -152,6 +154,9 @@ class UnavailableDebugBackend:
             DebugBackendDiagnostic("后端", self.display_name),
             DebugBackendDiagnostic("状态", "尚未接入"),
             DebugBackendDiagnostic("说明", self.detail),
+        ) + tuple(
+            DebugBackendDiagnostic(key, value)
+            for key, value in (self.toolchain.diagnostic_rows() if self.toolchain is not None else ())
         )
         payload = {
             "backend": self.kind.value,
@@ -189,6 +194,8 @@ def create_default_debug_backend_registry(
     root = Path(keil_root).expanduser() if keil_root else None
     port = int(uvsock_port)
     registry.register(
+        # Keil is the reference live backend; its toolchain metadata is kept in
+        # debug_toolchains.py for future adapters to mirror.
         DebugBackendDescriptor(
             kind=DebugBackendKind.KEIL,
             display_name="Keil / UVSOCK",
@@ -201,7 +208,7 @@ def create_default_debug_backend_registry(
                 notes="Keil UVSOCK 后端先以显式 opt-in 只读连接为边界，默认不启动进程、不连接探针、不写目标。",
             ),
             read_only_first=True,
-            notes="Keil is the first real backend; all live control remains opt-in.",
+            notes=debug_toolchain_descriptor(DebugBackendKind.KEIL.value).combo_note,
         )
     )
     if include_placeholders:
@@ -213,33 +220,39 @@ def _register_unavailable_placeholders(registry: DebugBackendRegistry) -> None:
     placeholders = (
         (
             DebugBackendKind.OPENOCD_GDB,
-            "OpenOCD / GDB",
-            "OpenOCD/GDB 后端占位已注册，真实进程启动与端口连接将在后续 opt-in 阶段接入。",
+            debug_toolchain_descriptor(DebugBackendKind.OPENOCD_GDB.value),
         ),
         (
             DebugBackendKind.PYOCD,
-            "pyOCD",
-            "pyOCD 后端占位已注册，真实连接将在后续 opt-in 阶段接入。",
+            debug_toolchain_descriptor(DebugBackendKind.PYOCD.value),
+        ),
+        (
+            DebugBackendKind.TI_MSPM0,
+            debug_toolchain_descriptor(DebugBackendKind.TI_MSPM0.value),
         ),
         (
             DebugBackendKind.OFFLINE,
-            "离线回放",
-            "离线回放后端占位已注册，后续用于记录回放和无硬件调试。",
+            debug_toolchain_descriptor(DebugBackendKind.OFFLINE.value),
         ),
     )
-    for kind, display_name, detail in placeholders:
+    for kind, toolchain in placeholders:
         registry.register(
             DebugBackendDescriptor(
                 kind=kind,
-                display_name=display_name,
-                factory=lambda k=kind, name=display_name, text=detail: UnavailableDebugBackend(k, name, text),
+                display_name=toolchain.display_name,
+                factory=lambda k=kind, meta=toolchain: UnavailableDebugBackend(
+                    k,
+                    meta.display_name,
+                    meta.unavailable_detail,
+                    meta,
+                ),
                 lifecycle=DebugBackendWorkerLifecycleRegistration(
                     worker_key=_worker_key_for_backend(kind),
                     read_only_first=True,
-                    notes=f"{detail} 当前仅登记生命周期元数据，不启动外部进程。",
+                    notes=f"{toolchain.unavailable_detail} 当前仅登记生命周期元数据，不启动外部进程。",
                 ),
                 read_only_first=True,
-                notes=detail,
+                notes=toolchain.combo_note,
             )
         )
 
@@ -251,6 +264,8 @@ def _worker_key_for_backend(kind: DebugBackendKind) -> str:
         return "openocd_gdb"
     if kind == DebugBackendKind.PYOCD:
         return "pyocd"
+    if kind == DebugBackendKind.TI_MSPM0:
+        return "ti_mspm0"
     if kind == DebugBackendKind.OFFLINE:
         return "offline"
     return kind.value
