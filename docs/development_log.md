@@ -6422,3 +6422,47 @@ separate sync action just to see that a breakpoint already exists in Keil.
     live session evidence,
   - then decide whether the next visible feature should be a compact "live loop"
     checklist or OpenOCD/pyOCD adapter work.
+
+## Milestone 73 - Live Keil Variable Write Recheck
+
+### Goal
+
+Reconfirm that the first real Keil value-change path is working on hardware,
+because this is the minimum useful live-debug feature the user asked to see
+before more adapter architecture is added.
+
+### Verified
+
+- Confirmed no `UV4/uVision` process was running before the test.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS.
+  - Launched Keil PID `76932`.
+  - Connected in 5 attempts.
+  - Target/project guard matched `STM32F401`.
+  - AXF existed and build was skipped.
+  - Strict write path used memory/DWARF resolution, not blind command fallback.
+  - Variable: `debug_setpoint`.
+  - Address: `0x20000008`.
+  - Write-before baseline read: `1000`.
+  - Written value: `6000`.
+  - Write-after readback: `6000`.
+  - Result: `Keil 写变量已回读：debug_setpoint @ 0x20000008 = 6000 (memory)`.
+- Confirmed no `UV4/uVision` process remained after the test.
+
+### Notes
+
+- This confirms the current Keil path can already do the core user-requested
+  operation: connect to Keil, resolve a variable from AXF/DWARF, read baseline,
+  write RAM, and verify readback.
+- No code change was needed in this milestone; it is a hardware-backed checkpoint
+  to prevent later UI/adapter work from drifting away from the real function.
+
+### Next Target
+
+- Add a compact first-live-loop surface in the Debug Workbench so the user can
+  see the real workflow as one chain:
+  - Keil connected,
+  - PC evidence,
+  - breakpoint evidence,
+  - latest variable baseline/write/readback,
+  - active scope acquisition source.
