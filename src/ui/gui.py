@@ -2158,6 +2158,7 @@ class MainWindow(QMainWindow):
         self._refresh_debug_scope_acquisition_status()
         self._tab_debug_workbench.set_debug_controls_ready(True)
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
+        self._refresh_debug_live_loop_status()
         self._refresh_debug_variable_presets()
         self._sync_debug_source_manifest_preview()
         self._sync_debug_command_preview()
@@ -2940,6 +2941,7 @@ class MainWindow(QMainWindow):
         tab.set_debug_status(status, controls_ready=True)
         tab.set_pc_evidence(pc_location)
         tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
+        self._refresh_debug_live_loop_status()
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
@@ -2956,6 +2958,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.set_debug_status(snapshot.status, controls_ready=True)
         self._tab_debug_workbench.set_pc_evidence(snapshot.pc_location)
         self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
+        self._refresh_debug_live_loop_status()
 
     def _connect_debug_backend_read_only_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -3006,6 +3009,7 @@ class MainWindow(QMainWindow):
         tab.set_debug_status(status, controls_ready=True)
         tab.set_pc_evidence(pc_location)
         tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
+        self._refresh_debug_live_loop_status()
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(status.detail)
@@ -4150,7 +4154,92 @@ class MainWindow(QMainWindow):
             return
         diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ()) or self._debug_workbench_idle_diagnostics())
         self._tab_debug_workbench.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
+        self._refresh_debug_live_loop_status()
         self._refresh_debug_variable_presets()
+
+    def _refresh_debug_live_loop_status(self) -> None:
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        self._tab_debug_workbench.set_live_loop_status(
+            (
+                self._live_loop_session_item(),
+                self._live_loop_pc_item(),
+                self._live_loop_breakpoint_item(),
+                self._live_loop_write_item(),
+                self._live_loop_scope_item(),
+            )
+        )
+
+    def _live_loop_session_item(self) -> tuple[str, str, str]:
+        status = self._tab_debug_workbench.debug_status
+        labels = {
+            DebugRuntimeState.DISCONNECTED: "未连接",
+            DebugRuntimeState.KEIL_DISCOVERED: "已发现",
+            DebugRuntimeState.KEIL_ATTACHED: "已连接",
+            DebugRuntimeState.PAUSED: "已暂停",
+            DebugRuntimeState.RUNNING: "运行中",
+            DebugRuntimeState.ERROR: "错误",
+        }
+        value = labels.get(status.state, status.label or "--")
+        return "会话", value, status.detail or status.label or "等待调试会话"
+
+    def _live_loop_pc_item(self) -> tuple[str, str, str]:
+        pc = getattr(self._tab_debug_workbench, "_pc_evidence", None)
+        if pc is None:
+            return "PC", "--", "等待 PC 回读"
+        value = "已回读" if getattr(pc, "complete", False) else "未验证"
+        parts = []
+        if getattr(pc, "address", None) is not None:
+            parts.append(f"0x{int(pc.address):08X}")
+        if getattr(pc, "path", None) is not None and getattr(pc, "line", None):
+            parts.append(f"{Path(pc.path).name}:{pc.line}")
+        if getattr(pc, "message", ""):
+            parts.append(str(pc.message))
+        return "PC", value, "；".join(parts) or value
+
+    def _live_loop_breakpoint_item(self) -> tuple[str, str, str]:
+        breakpoints = self._tab_debug_workbench.local_breakpoints()
+        snapshot = getattr(self, "_debug_remote_breakpoint_snapshot", None)
+        if not breakpoints:
+            remote_count = len(getattr(snapshot, "breakpoints", ()) or ()) if snapshot is not None else 0
+            detail = f"远端断点 {remote_count}" if snapshot is not None else "当前没有本地断点"
+            return "断点", "无", detail
+        verified = sum(1 for item in breakpoints if item.verified)
+        failed = sum(1 for item in breakpoints if not item.verified and item.message)
+        pending = max(0, len(breakpoints) - verified - failed)
+        remote_detail = "--"
+        if snapshot is not None:
+            remote_detail = (
+                f"远端 {len(getattr(snapshot, 'breakpoints', ()) or ())}；"
+                f"{'完整' if getattr(snapshot, 'complete', False) else '不完整'}"
+            )
+        detail = f"已验证 {verified}；未验证 {failed}；待验证 {pending}；{remote_detail}"
+        return "断点", f"{verified}/{len(breakpoints)}", detail
+
+    def _live_loop_write_item(self) -> tuple[str, str, str]:
+        read = getattr(self, "_debug_last_live_read_result", None)
+        write = getattr(self, "_debug_last_live_write_result", None)
+        if write is not None:
+            if getattr(write, "written", False):
+                value = str(getattr(write, "readback_value", "") or getattr(write, "value_text", "") or "成功")
+                detail = (
+                    f"{getattr(write, 'expression', '--')} 写入成功；"
+                    f"基线 {getattr(read, 'value', '--') if read is not None else '--'}；"
+                    f"回读 {getattr(write, 'readback_value', '--') or '--'}"
+                )
+                return "写入", value, detail
+            return "写入", "失败", getattr(write, "error", "") or "写入失败"
+        if read is not None:
+            value = str(getattr(read, "value", "") or ("成功" if getattr(read, "read", False) else "失败"))
+            detail = f"{getattr(read, 'expression', '--')} 写前读取"
+            if getattr(read, "error", ""):
+                detail += f"；{read.error}"
+            return "写入", value, detail
+        return "写入", "--", "尚未执行变量读取或写入"
+
+    def _live_loop_scope_item(self) -> tuple[str, str, str]:
+        descriptor = active_acquisition_source(getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD))
+        return "示波", descriptor.short_label, descriptor.detail
 
     def _keil_profile_diagnostics(self) -> tuple[tuple[str, str], ...]:
         profile = self._make_current_keil_profile() or getattr(self, "_debug_keil_profile", None)

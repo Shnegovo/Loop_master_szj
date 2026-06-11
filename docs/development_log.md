@@ -6466,3 +6466,71 @@ before more adapter architecture is added.
   - breakpoint evidence,
   - latest variable baseline/write/readback,
   - active scope acquisition source.
+
+## Milestone 74 - Live Loop Status Strip
+
+### Goal
+
+Make the first Keil live-debug loop visible as one compact chain instead of
+forcing the user to read through the full diagnostics table:
+
+- session state,
+- PC evidence,
+- breakpoint verification,
+- latest variable write/readback,
+- active scope acquisition source.
+
+### Completed
+
+- Added a `实时闭环` strip to the Debug Workbench navigation panel.
+- The strip shows five compact status chips:
+  - `会话`
+  - `PC`
+  - `断点`
+  - `写入`
+  - `示波`
+- Synced the strip from `MainWindow` whenever diagnostics/status evidence
+  refreshes.
+- The strip derives its values from real state:
+  - current debug session status,
+  - current PC evidence,
+  - local breakpoint verified/pending/failed counts plus remote snapshot summary,
+  - latest strict baseline-read/write/readback result,
+  - active acquisition source descriptor.
+- Kept details in tooltips and full diagnostics, so the strip stays compact.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+  - Verifies halt updates `会话 已暂停`, `PC 已回读`, and `断点 1/1`.
+  - Verifies run updates `会话 运行中` and `PC 未验证`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-live-loop-strip --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-live-loop-strip\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-live-loop-strip\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-live-loop-strip\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+
+### Notes
+
+- Visual review of the screenshot confirmed the strip fits in the left scroll
+  panel without taking space from the source editor.
+- This is a UI consolidation of evidence already produced by the Keil live
+  path; it does not change target-side behavior.
+
+### Next Target
+
+- Start preparing the next adapter layer after the Keil basics:
+  - keep Keil as the reference implementation,
+  - sketch the shared operations OpenOCD/pyOCD/TI need to implement,
+  - begin with a no-process OpenOCD/GDB adapter skeleton or TI MSPM0G3507
+    metadata, depending on which unlocks the next real feature fastest.

@@ -356,6 +356,7 @@ class DebugWorkbenchTab(QWidget):
         self._scope_acquisition_status = ("SWD", "LoopMaster 原轻侵入式 SWD 采集源")
         self._scope_acquisition_options: tuple[tuple[str, str, str, bool], ...] = ()
         self._scope_acquisition_selection_syncing = False
+        self._live_loop_status: tuple[tuple[str, str, str], ...] = ()
         self._variable_presets: tuple[tuple[str, str, str, str, str, bool], ...] = ()
 
         self.setObjectName("debugWorkbenchTab")
@@ -522,6 +523,16 @@ class DebugWorkbenchTab(QWidget):
     def set_backend_diagnostics(self, items: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> None:
         self._diagnostics = tuple((str(key), str(value)) for key, value in items)
         self._refresh_diagnostics_table()
+
+    def set_live_loop_status(
+        self,
+        items: tuple[tuple[str, str, str], ...] | list[tuple[str, str, str]],
+    ) -> None:
+        self._live_loop_status = tuple(
+            (str(label), str(value), str(detail))
+            for label, value, detail in items
+        )
+        self._refresh_live_loop_strip()
 
     def set_variable_presets(
         self,
@@ -879,6 +890,7 @@ class DebugWorkbenchTab(QWidget):
 
         layout.addWidget(self._build_source_manifest_strip())
         layout.addWidget(self._build_mode_boundary_strip())
+        layout.addWidget(self._build_live_loop_strip())
 
         self.source_tree = QTreeWidget()
         self.source_tree.setObjectName("debugSourceTree")
@@ -1072,6 +1084,25 @@ class DebugWorkbenchTab(QWidget):
         self.scope_source_combo.currentIndexChanged.connect(self._on_scope_acquisition_combo_changed)
         polish_combo_popup(self.scope_source_combo)
         row.addWidget(self.scope_source_combo)
+        return strip
+
+    def _build_live_loop_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setObjectName("debugLiveLoopStrip")
+        layout = QVBoxLayout(strip)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setSpacing(5)
+        title = QLabel("实时闭环")
+        title.setObjectName("debugBoundaryTitle")
+        layout.addWidget(title)
+        self.live_loop_chips: list[QLabel] = []
+        for label in ("会话", "PC", "断点", "写入", "示波"):
+            chip = QLabel(f"{label} --")
+            chip.setObjectName("debugLiveLoopChip")
+            chip.setToolTip("等待调试会话证据")
+            layout.addWidget(chip)
+            self.live_loop_chips.append(chip)
+        self._refresh_live_loop_strip()
         return strip
 
     def _build_breakpoint_quick_editor(self) -> QFrame:
@@ -1833,6 +1864,24 @@ class DebugWorkbenchTab(QWidget):
             self.scope_source_combo.setToolTip(f"当前示波采集源：{scope_label}\n{scope_detail or '等待采集配置'}")
         self._repolish(self.boundary_backend_label, self.boundary_source_label, self.boundary_scope_label)
 
+    def _refresh_live_loop_strip(self) -> None:
+        if not hasattr(self, "live_loop_chips"):
+            return
+        items = list(self._live_loop_status)
+        defaults = (
+            ("会话", "--", "等待调试会话"),
+            ("PC", "--", "等待 PC 回读"),
+            ("断点", "--", "等待断点证据"),
+            ("写入", "--", "等待变量写入"),
+            ("示波", "--", "等待示波采集源"),
+        )
+        while len(items) < len(defaults):
+            items.append(defaults[len(items)])
+        for chip, (label, value, detail) in zip(self.live_loop_chips, items):
+            chip.setText(f"{label} {value}")
+            chip.setToolTip(detail or f"{label} {value}")
+        self._repolish(*self.live_loop_chips)
+
     @staticmethod
     def _backend_boundary_label(value: str) -> str:
         labels = {
@@ -2324,12 +2373,26 @@ class DebugWorkbenchTab(QWidget):
                 border: 1px solid #d2deea;
                 border-radius: 7px;
             }
+            QFrame#debugLiveLoopStrip {
+                background: #fbfdff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
             QLabel#debugBoundaryTitle {
                 color: #64748b;
                 font-size: 9pt;
                 font-weight: 650;
             }
             QLabel#debugBoundaryChip {
+                color: #334155;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 2px 6px;
+                background: #ffffff;
+                border: 1px solid #dce6f0;
+                border-radius: 5px;
+            }
+            QLabel#debugLiveLoopChip {
                 color: #334155;
                 font-size: 9pt;
                 font-weight: 600;

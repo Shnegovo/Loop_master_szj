@@ -619,6 +619,13 @@ def run(output_dir: Path, width: int, height: int) -> int:
         boundary_text = " / ".join(boundary_labels)
         if "调试 Keil" not in boundary_text or "源码 Keil 工程" not in boundary_text or "示波" not in boundary_text:
             issues.append(f"mode boundary strip mismatch: {boundary_text!r}")
+        live_loop_text = " / ".join(
+            chip.text()
+            for chip in getattr(tab, "live_loop_chips", [])
+        )
+        for phrase in ("会话", "PC", "断点", "写入", "示波"):
+            if phrase not in live_loop_text:
+                issues.append(f"live loop strip missing {phrase}: {live_loop_text!r}")
         scope_source_labels = [
             tab.scope_source_combo.itemText(index)
             for index in range(tab.scope_source_combo.count())

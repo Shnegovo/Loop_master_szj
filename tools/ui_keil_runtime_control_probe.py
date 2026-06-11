@@ -240,6 +240,10 @@ def _diagnostics(tab) -> dict[str, str]:
     }
 
 
+def _live_loop_text(tab) -> str:
+    return " / ".join(chip.text() for chip in getattr(tab, "live_loop_chips", []))
+
+
 def _patch_confirmation():
     original = gui_module.ask_pcl_confirmation
     calls = []
@@ -322,6 +326,10 @@ def main() -> int:
                 "Keil 快照已回读" in verified_breakpoints[0].message,
                 f"halt breakpoint evidence message mismatch: {verified_breakpoints!r}",
             )
+            live_loop = _live_loop_text(tab)
+            _assert("会话 已暂停" in live_loop, f"halt live-loop session mismatch: {live_loop!r}")
+            _assert("PC 已回读" in live_loop, f"halt live-loop PC mismatch: {live_loop!r}")
+            _assert("断点 1/1" in live_loop, f"halt live-loop breakpoint mismatch: {live_loop!r}")
 
             window._on_debug_workbench_action("run")
             _pump(app, 0.15)
@@ -331,6 +339,9 @@ def main() -> int:
             _assert(rows.get("PC 证据") == "未验证", f"run PC evidence should be unverified: {rows!r}")
             _assert(rows.get("PC 说明") == "目标运行中，PC 位置暂不稳定", f"run PC detail mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "run-remote", f"run remote snapshot mismatch: {rows!r}")
+            live_loop = _live_loop_text(tab)
+            _assert("会话 运行中" in live_loop, f"run live-loop session mismatch: {live_loop!r}")
+            _assert("PC 未验证" in live_loop, f"run live-loop PC mismatch: {live_loop!r}")
 
             window._on_debug_workbench_action("reset")
             _pump(app, 0.15)
