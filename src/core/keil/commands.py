@@ -953,15 +953,15 @@ def _breakpoint_snapshot_digest(
 def _breakpoint_operation_command(operation: KeilBreakpointSyncOperation) -> str:
     line = _keil_source_line_expression(operation.path, operation.line)
     if operation.action == KeilBreakpointSyncAction.ADD:
-        return f'UVSC_DBG_EXEC_CMD(handle, "BreakSet {line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BS {line}")'
     if operation.action == KeilBreakpointSyncAction.REMOVE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "BreakKill {operation.remote_id or line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BK {operation.remote_id}")'
     if operation.action == KeilBreakpointSyncAction.ENABLE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "BreakEnable {operation.remote_id or line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BE {operation.remote_id}")'
     if operation.action == KeilBreakpointSyncAction.DISABLE:
-        return f'UVSC_DBG_EXEC_CMD(handle, "BreakDisable {operation.remote_id or line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BD {operation.remote_id}")'
     if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
-        return f'UVSC_DBG_EXEC_CMD(handle, "BreakSet {line}")'
+        return f'UVSC_DBG_EXEC_CMD(handle, "BS {line}")'
     return f'# noop {line}'
 
 
@@ -1052,8 +1052,11 @@ def _guard(key: str, label: str, state: KeilCommandGuardState, detail: str = "")
 
 
 def _breakpoint_intent(item: object) -> KeilBreakpointIntent:
+    path = getattr(item, "path", "")
+    if path is None or str(path) == "":
+        path = f"remote-{getattr(item, 'remote_id', '') or 'unknown'}"
     return KeilBreakpointIntent(
-        path=Path(getattr(item, "path", "")),
+        path=Path(path),
         line=int(getattr(item, "line", 0) or 0),
         enabled=bool(getattr(item, "enabled", True)),
         condition=str(getattr(item, "condition", "") or ""),

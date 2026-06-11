@@ -4485,3 +4485,110 @@ the diff, and send guarded Keil Debug Commands through UVSOCK.
   delete/enable/disable sync can be safely unlocked.
 - Begin the debugger source experience pass: PC line readback, gutter current
   line, source breakpoint hit feedback, and a more VSCode-like debug side panel.
+
+## Milestone 50 Update - Keil BL Remote Breakpoint Snapshot Foundation
+
+### Goal
+
+Turn breakpoint sync from local-only push into a safer remote-aware flow by
+parsing Keil breakpoint numbers and correcting command generation against the
+local Keil uVision help.
+
+### Completed
+
+- Verified Keil command syntax from local `D:\Keil\Keil_v5\UV4\uv4.chm`.
+  - uVision Debug Commands require the uppercase command abbreviation.
+  - Breakpoint commands are `BS`, `BL`, `BK`, `BE`, and `BD`.
+  - `BK`/`BE`/`BD` operate on breakpoint numbers from `BL`.
+  - `BK` renumbers breakpoints, so deletes must be ordered carefully.
+- Added `src/core/keil/breakpoint_list.py`.
+  - Parses Keil `BL` text into backend-neutral `RemoteBreakpointSnapshot`.
+  - Keeps `remote_id` as the Keil breakpoint number.
+  - Supports decimal/hex ids, English/Chinese enable state, quoted paths,
+    paths with spaces, `file:line`, `file line N`, and `file(N)`.
+  - Downgrades the snapshot to incomplete when a breakpoint-like line cannot
+    be resolved to source path and line, preventing unsafe full-diff deletes.
+- Corrected breakpoint command generation.
+  - Add: `BS <source-line-expression>`.
+  - Remove: `BK <remote_id>`.
+  - Enable: `BE <remote_id>`.
+  - Disable: `BD <remote_id>`.
+  - No location fallback is emitted for id-based commands.
+- Made sync execution safer.
+  - Enable/disable run before deletes.
+  - Deletes run in descending remote id order to reduce Keil renumbering risk.
+  - Condition add/update remains blocked until live command behavior is proven.
+- Wired backend snapshots.
+  - Connected Keil snapshots now attempt `BL` through the live UVSOCK session.
+  - Sync results attempt a post-sync `BL` and use it when command output text is
+    available.
+  - If UVSOCK only echoes or returns no command-window text, the snapshot stays
+    incomplete with a clear reason.
+- Extended probes.
+  - Parser coverage for id/path/state/condition formats.
+  - Backend BreakList plumbing with fake session output.
+  - UI full-diff confirmation path when a complete remote snapshot is present.
+  - Regression for descending `BK` order.
+
+### Verified
+
+- `python -m py_compile src/core/keil/breakpoint_list.py src/core/keil/backend.py src/core/keil/uvsock.py src/core/keil/breakpoint_sync.py src/core/keil/commands.py src/core/keil/__init__.py tools/keil_breakpoint_list_probe.py tools/keil_backend_breakpoint_list_probe.py tools/keil_breakpoint_sync_probe.py tools/ui_keil_breakpoint_sync_probe.py tools/debug_backend_adapter_probe.py tools/keil_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools/keil_breakpoint_list_probe.py`
+  - PASS.
+- `python tools/keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools/ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools/debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py`
+  - PASS in no-live-uVision discover mode.
+- `python tools/ui_debug_workbench_probe.py --output-dir tools/ui-debug-workbench-breaklist-final --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-breaklist-final\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breaklist-final\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-breaklist-final\03_debug_workbench_narrow.png`
+- `python tools/keil_command_transaction_probe.py`
+  - PASS.
+- `python tools/debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools/debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_smoke.py --json`
+  - PASS.
+- `python tools/keil_auto_debug_smoke_profile_probe.py`
+  - PASS.
+- `python tools/keil_watch_read_probe.py`
+  - PASS.
+- `python tools/keil_variable_presets_probe.py`
+  - PASS.
+
+### Notes
+
+- `UVSC_DBG_EXEC_CMD` may not return command-window output in `_ExecCmd.sCmd`
+  on real uVision. The code detects echo/no-output and keeps snapshots
+  incomplete instead of trusting a guessed list.
+- A future live run must capture the exact `BL` behavior on the user's Keil
+  setup. If UVSOCK cannot return `BL` text directly, the next option is a
+  command-window/output capture path or another UVSOCK callback mechanism.
+- Absolute Windows path source-line expressions still need live verification.
+  Keil documentation prefers `\ModuleName\LineNumber`, while current commands
+  keep the existing absolute path expression until hardware evidence says to
+  remap to module-only expressions.
+
+### Next Target
+
+- Run a guarded live Keil smoke against the connected F401/ST-Link setup:
+  - launch or attach uVision/UVSOCK
+  - execute `BS` on a harmless source line
+  - run `BL`
+  - record whether command output text is returned through UVSOCK.
+- If `BL` text is available, unlock full remote breakpoint delete/enable/disable
+  from the UI for verified complete snapshots.
+- Start the source debugger view pass: PC readback, current-line marker, break
+  hit feedback, and a compact VSCode-like debug side panel.

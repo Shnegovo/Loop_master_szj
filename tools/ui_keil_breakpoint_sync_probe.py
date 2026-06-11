@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core.debug_workbench import DebugCapabilities, DebugRuntimeState, make_debug_status  # noqa: E402
+from src.core.debug_snapshots import RemoteBreakpoint, RemoteBreakpointSnapshot  # noqa: E402
 from src.core.keil.breakpoint_sync import (  # noqa: E402
     KeilBreakpointSyncResult,
     execute_keil_breakpoint_sync,
@@ -191,7 +192,7 @@ def main() -> int:
         _assert(fake_backend.requests, "fake backend did not receive sync request")
         request = fake_backend.requests[0]
         _assert(not request.remote_snapshot_complete, "expected push-local mode without a complete remote snapshot")
-        _assert(any("BreakSet" in command for command in fake_backend.session.commands), fake_backend.session.commands)
+        _assert(any(command.startswith("BS ") for command in fake_backend.session.commands), fake_backend.session.commands)
 
         rows = _diagnostics(tab)
         _assert(rows.get("断点同步") == "成功", f"sync diagnostics mismatch: {rows!r}")
@@ -206,6 +207,29 @@ def main() -> int:
         _assert(audit_lines, "breakpoint sync audit log missing")
         record = json.loads(audit_lines[-1])
         _assert(record.get("action") == "keil_breakpoint_sync", f"audit action mismatch: {record!r}")
+
+        complete_snapshot = RemoteBreakpointSnapshot(
+            schema_version=1,
+            snapshot_id="ui-complete-breakpoints",
+            project_path=project_path,
+            target_name="DebugDemo",
+            captured_at="2026-06-11T00:00:00+00:00",
+            complete=True,
+            breakpoints=(RemoteBreakpoint(path=source_path, line=5, enabled=True, remote_id="11"),),
+            error="",
+        )
+        window._debug_remote_breakpoint_snapshot = complete_snapshot
+        window._sync_debug_command_preview()
+        second_confirm_calls, restore_second_confirmation = _patch_confirmation()
+        try:
+            window._on_debug_workbench_action("sync_breakpoints")
+            _pump(app, 0.2)
+        finally:
+            restore_second_confirmation()
+        _assert(len(second_confirm_calls) == 1, f"second confirmation mismatch: {second_confirm_calls!r}")
+        _assert("推送本地断点" not in second_confirm_calls[0]["message"], second_confirm_calls[0]["message"])
+        full_request = fake_backend.requests[-1]
+        _assert(full_request.remote_snapshot_complete, "expected full-diff mode with complete remote snapshot")
         window.close()
         _pump(app, 0.1)
 

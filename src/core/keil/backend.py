@@ -13,6 +13,11 @@ from src.core.debug_backend import (
     now_iso,
 )
 from src.core.keil.commands import KeilBreakpointRemoteSnapshot
+from src.core.keil.breakpoint_list import (
+    incomplete_keil_breakpoint_snapshot,
+    keil_breakpoint_list_command,
+    parse_keil_breakpoint_list,
+)
 from src.core.keil.live_write import (
     KeilLiveVariableWriteRequest,
     KeilLiveVariableWriteResult,
@@ -152,6 +157,12 @@ class KeilUvSockBackendAdapter:
                 target_name=target_name or status.target_name,
                 capabilities=status.capabilities,
             )
+        breakpoint_snapshot = self._breakpoint_snapshot_from_connection(
+            project_path=project_path or status.project_path,
+            target_name=target_name or status.target_name,
+            captured_at=None,
+            attempt=bool(connection and connection.connected),
+        )
         return self._snapshot(
             status=status,
             preflight=preflight,
@@ -160,6 +171,7 @@ class KeilUvSockBackendAdapter:
             project_path=project_path or status.project_path,
             target_name=target_name or status.target_name,
             connection_attempted=bool(connection and connection.attempted),
+            breakpoint_snapshot=breakpoint_snapshot,
         )
 
     def write_live_variable(
@@ -270,8 +282,19 @@ class KeilUvSockBackendAdapter:
                 connection_name=request.connection_name or "LoopMasterBreakpointSync",
                 require_debug=True,
             ) as session:
-                snapshot = remote_snapshot_from_operations(request, complete=True)
-                return execute_keil_breakpoint_sync(session, request, remote_snapshot=snapshot)
+                result = execute_keil_breakpoint_sync(session, request)
+                snapshot = self._breakpoint_snapshot_from_session(
+                    session,
+                    project_path=request.project_path,
+                    target_name=request.target_name,
+                    fallback=remote_snapshot_from_operations(request, complete=True),
+                )
+                return KeilBreakpointSyncResult(
+                    request=result.request,
+                    commands=result.commands,
+                    remote_snapshot=snapshot,
+                    error=result.error,
+                )
         except Exception as exc:
             return KeilBreakpointSyncResult(
                 request=request,
@@ -338,15 +361,17 @@ class KeilUvSockBackendAdapter:
         project_path: str | Path | None,
         target_name: str,
         connection_attempted: bool,
+        breakpoint_snapshot: KeilBreakpointRemoteSnapshot | None = None,
     ) -> DebugBackendSessionSnapshot:
         project = Path(project_path).expanduser().resolve() if project_path else status.project_path
         captured_at = now_iso()
-        breakpoint_snapshot = _placeholder_breakpoint_snapshot(
-            project_path=project,
-            target_name=target_name or status.target_name,
-            captured_at=captured_at,
-            reason="Keil 只读快照尚未实现断点枚举解析",
-        )
+        if breakpoint_snapshot is None:
+            breakpoint_snapshot = _placeholder_breakpoint_snapshot(
+                project_path=project,
+                target_name=target_name or status.target_name,
+                captured_at=captured_at,
+                reason="Keil 只读快照尚未实现断点枚举解析",
+            )
         pc_location = _placeholder_pc_location(status)
         profile = make_keil_debug_profile(
             root=self.config.root,
@@ -354,7 +379,14 @@ class KeilUvSockBackendAdapter:
             target_name=target_name or status.target_name,
             port=self.config.port,
         )
-        diagnostics = _diagnostics(preflight, launch_plan, connection, self.config.port, profile.diagnostic_rows())
+        diagnostics = _diagnostics(
+            preflight,
+            launch_plan,
+            connection,
+            self.config.port,
+            profile.diagnostic_rows(),
+            breakpoint_snapshot=breakpoint_snapshot,
+        )
         capabilities = tuple(sorted(preflight.discovery.capability_flags().items()))
         payload = {
             "backend": self.kind.value,
@@ -392,6 +424,75 @@ class KeilUvSockBackendAdapter:
             remote_breakpoint_snapshot_id=breakpoint_snapshot.snapshot_id,
         )
 
+    def _breakpoint_snapshot_from_connection(
+        self,
+        *,
+        project_path: str | Path | None,
+        target_name: str,
+        captured_at: str | None,
+        attempt: bool,
+    ) -> KeilBreakpointRemoteSnapshot | None:
+        if not attempt:
+            return None
+        try:
+            with KeilUvscLiveSession.connect_existing(
+                root=self.config.root,
+                port=self.config.port,
+                connection_name=f"{self.config.connection_name}BL",
+                require_debug=True,
+            ) as session:
+                return self._breakpoint_snapshot_from_session(
+                    session,
+                    project_path=project_path,
+                    target_name=target_name,
+                    captured_at=captured_at,
+                )
+        except Exception as exc:
+            return incomplete_keil_breakpoint_snapshot(
+                project_path=project_path,
+                target_name=target_name,
+                captured_at=captured_at or now_iso(),
+                error=f"Keil 远端断点枚举失败：{exc}",
+            )
+
+    def _breakpoint_snapshot_from_session(
+        self,
+        session,
+        *,
+        project_path: str | Path | None,
+        target_name: str,
+        captured_at: str | None = None,
+        fallback: KeilBreakpointRemoteSnapshot | None = None,
+    ) -> KeilBreakpointRemoteSnapshot:
+        command = keil_breakpoint_list_command()
+        getter = getattr(session, "try_execute_command_text", None)
+        if callable(getter):
+            text, error = getter(command, echo=True)
+        else:
+            try:
+                text = session.execute_command(command, echo=True)
+            except Exception as exc:
+                text = ""
+                error = str(exc)
+            else:
+                error = ""
+        if text:
+            return parse_keil_breakpoint_list(
+                text,
+                project_path=project_path,
+                target_name=target_name,
+                captured_at=captured_at or now_iso(),
+                command=command,
+            ).snapshot
+        if fallback is not None:
+            return fallback
+        return incomplete_keil_breakpoint_snapshot(
+            project_path=project_path,
+            target_name=target_name,
+            captured_at=captured_at or now_iso(),
+            error=error or "Keil 远端断点命令未返回可解析文本",
+        )
+
 
 def _diagnostics(
     preflight: UvscPreflight,
@@ -399,6 +500,7 @@ def _diagnostics(
     connection: UvscConnectionResult | None,
     port: int,
     profile_rows: tuple[tuple[str, str], ...] = (),
+    breakpoint_snapshot: KeilBreakpointRemoteSnapshot | None = None,
 ) -> tuple[DebugBackendDiagnostic, ...]:
     discovery = preflight.discovery
     dll = preflight.load_result.dll.path if preflight.load_result.dll else "--"
@@ -421,7 +523,7 @@ def _diagnostics(
         DebugBackendDiagnostic("启动预览", launch_status),
         DebugBackendDiagnostic("启动命令", command),
         DebugBackendDiagnostic("PC 位置", "待 Keil 回读"),
-        DebugBackendDiagnostic("远端断点", "待 Keil 枚举"),
+        DebugBackendDiagnostic("远端断点", _breakpoint_snapshot_text(breakpoint_snapshot)),
     ]
     if profile_rows:
         rows.extend(DebugBackendDiagnostic(key, value) for key, value in profile_rows)
@@ -436,6 +538,14 @@ def _diagnostics(
             ]
         )
     return tuple(rows)
+
+
+def _breakpoint_snapshot_text(snapshot: KeilBreakpointRemoteSnapshot | None) -> str:
+    if snapshot is None:
+        return "待 Keil 枚举"
+    if snapshot.complete:
+        return f"已枚举 {len(snapshot.breakpoints)} 个"
+    return snapshot.error or "待 Keil 枚举"
 
 
 def _reason_text(reason: str) -> str:

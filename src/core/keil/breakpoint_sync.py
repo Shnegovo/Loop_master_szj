@@ -100,6 +100,7 @@ class KeilBreakpointSyncResult:
                     "action": item.operation.action.value,
                     "path": str(item.operation.path),
                     "line": item.operation.line,
+                    "remote_id": item.operation.remote_id,
                     "command": item.command,
                     "attempted": item.attempted,
                     "succeeded": item.succeeded,
@@ -172,7 +173,7 @@ def execute_keil_breakpoint_sync(
     remote_snapshot: KeilBreakpointRemoteSnapshot | None = None,
 ) -> KeilBreakpointSyncResult:
     results: list[KeilBreakpointCommandResult] = []
-    for operation in request.operations:
+    for operation in _ordered_operations(request.operations):
         command = keil_breakpoint_command(operation)
         if not operation.valid:
             results.append(
@@ -234,16 +235,48 @@ def build_keil_breakpoint_audit_record(
 def keil_breakpoint_command(operation: KeilBreakpointSyncOperation) -> str:
     location = _location(operation)
     if operation.action == KeilBreakpointSyncAction.ADD:
-        return f"BreakSet {location}"
+        return f"BS {location}"
     if operation.action == KeilBreakpointSyncAction.REMOVE:
-        return f"BreakKill {operation.remote_id or location}"
+        return f"BK {operation.remote_id}"
     if operation.action == KeilBreakpointSyncAction.ENABLE:
-        return f"BreakEnable {operation.remote_id or location}"
+        return f"BE {operation.remote_id}"
     if operation.action == KeilBreakpointSyncAction.DISABLE:
-        return f"BreakDisable {operation.remote_id or location}"
+        return f"BD {operation.remote_id}"
     if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
-        return f"BreakSet {location}"
+        return f"BS {location}"
     return f"# noop {location}"
+
+
+def _ordered_operations(
+    operations: tuple[KeilBreakpointSyncOperation, ...],
+) -> tuple[KeilBreakpointSyncOperation, ...]:
+    def sort_key(operation: KeilBreakpointSyncOperation) -> tuple[int, int, str, int]:
+        if operation.action == KeilBreakpointSyncAction.NOOP or not operation.valid:
+            group = 3
+        elif operation.action in {KeilBreakpointSyncAction.ENABLE, KeilBreakpointSyncAction.DISABLE}:
+            group = 0
+        elif operation.action in {KeilBreakpointSyncAction.ADD, KeilBreakpointSyncAction.UPDATE_CONDITION}:
+            group = 1
+        elif operation.action == KeilBreakpointSyncAction.REMOVE:
+            group = 2
+        else:
+            group = 1
+        remote_number = _remote_id_number(operation.remote_id)
+        if operation.action == KeilBreakpointSyncAction.REMOVE:
+            remote_number = -remote_number
+        return group, remote_number, str(operation.path).lower(), int(operation.line or 0)
+
+    return tuple(sorted(operations, key=sort_key))
+
+
+def _remote_id_number(value: str) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(text, 0)
+    except ValueError:
+        return 0
 
 
 def remote_snapshot_from_operations(
@@ -274,6 +307,7 @@ def remote_snapshot_from_operations(
                     line=operation.line,
                     enabled=True if enabled is None else bool(enabled),
                     condition=operation.local_condition or operation.remote_condition,
+                    remote_id=operation.remote_id,
                     raw_location=f"{operation.path}:{operation.line}",
                 )
             )

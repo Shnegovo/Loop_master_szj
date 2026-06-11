@@ -81,6 +81,7 @@ def main() -> int:
 
     calls = {"preflight": 0, "connect": 0, "launch": 0, "halt": 0, "run": 0}
     fake_running = {"value": True}
+    breakpoint_text = "Breakpoints\n1 enabled D:\\demo\\Core\\Src\\main.c:42\n"
 
     def fake_check(root=None, require_running=False):
         calls["preflight"] += 1
@@ -139,6 +140,9 @@ def main() -> int:
                 target_running=True,
             )
 
+        def try_execute_command_text(self, command: str, *, echo: bool = False):
+            return breakpoint_text, ""
+
     def fake_connect_existing(*_args, **_kwargs):
         return FakeRuntimeSession()
 
@@ -182,8 +186,10 @@ def main() -> int:
         _assert(snapshot.connection_attempted and snapshot.connection_established, "read-only snapshot connection state mismatch")
         _assert(snapshot.target_running is True, "target running status mismatch")
         _assert(snapshot.status.state == DebugRuntimeState.RUNNING, "snapshot status state mismatch")
-        _assert(snapshot.remote_breakpoint_snapshot is not None, "read-only snapshot should carry a breakpoint placeholder")
-        _assert(not snapshot.remote_breakpoint_snapshot.complete, "read-only breakpoint placeholder must be incomplete")
+        _assert(snapshot.remote_breakpoint_snapshot is not None, "read-only snapshot should carry a breakpoint snapshot")
+        _assert(snapshot.remote_breakpoint_snapshot.complete, "read-only breakpoint snapshot should parse fake BreakList")
+        _assert(len(snapshot.remote_breakpoint_snapshot.breakpoints) == 1, "read-only breakpoint count mismatch")
+        _assert(snapshot.remote_breakpoint_snapshot.breakpoints[0].remote_id == "1", "read-only breakpoint id mismatch")
         _assert(snapshot.remote_breakpoint_snapshot_id == snapshot.remote_breakpoint_snapshot.snapshot_id, "breakpoint snapshot id mismatch")
         _assert(snapshot.pc_location is not None and not snapshot.pc_location.complete, "read-only PC placeholder must be incomplete")
         caps = snapshot.status.capabilities

@@ -78,7 +78,10 @@ def main() -> int:
     _assert(not snapshot.status.capabilities.can_halt, "read-only adapter must not enable halt")
     _assert(not snapshot.status.capabilities.can_run, "read-only adapter must not enable run")
     _assert(not snapshot.status.capabilities.can_step, "read-only adapter must not enable step")
-    _assert(not snapshot.status.capabilities.can_sync_breakpoints, "read-only adapter must not enable breakpoint sync")
+    if args.attempt_existing and snapshot.connection_established:
+        _assert(snapshot.status.capabilities.can_sync_breakpoints, "connected adapter should expose explicit breakpoint sync")
+    else:
+        _assert(not snapshot.status.capabilities.can_sync_breakpoints, "discover adapter must not enable breakpoint sync")
     if not args.attempt_existing:
         _assert(not snapshot.connection_attempted, "discover probe must not attempt UVSOCK connection")
     _assert(snapshot.pc_location is not None, "snapshot should carry a PC placeholder")

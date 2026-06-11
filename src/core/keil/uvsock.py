@@ -535,13 +535,23 @@ class KeilUvscLiveSession:
         if status != 0:
             raise UvscError("UVSC_DBG_MEM_WRITE", status, self.last_error_text())
 
-    def execute_command(self, command: str, *, echo: bool = False) -> None:
+    def execute_command(self, command: str, *, echo: bool = False) -> str:
         cmd = _ExecCmd()
         cmd.flags = 1 if echo else 0
         _set_sstr(cmd.sCmd, _sanitize_expression(command))
         status = int(self.library.UVSC_DBG_EXEC_CMD(self.handle, ctypes.byref(cmd), ctypes.sizeof(cmd)))
         if status != 0:
             raise UvscError("UVSC_DBG_EXEC_CMD", status, self.last_error_text())
+        return _sstr_to_text(cmd.sCmd)
+
+    def try_execute_command_text(self, command: str, *, echo: bool = False) -> tuple[str, str]:
+        try:
+            text = self.execute_command(command, echo=echo)
+        except Exception as exc:
+            return "", str(exc)
+        if text.strip() and text.strip() != command.strip():
+            return text, ""
+        return "", "UVSC_DBG_EXEC_CMD did not return command output text"
 
 
 def check_uvsock_preflight(

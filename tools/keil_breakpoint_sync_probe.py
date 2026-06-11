@@ -18,6 +18,7 @@ from src.core.keil.breakpoint_sync import (  # noqa: E402
     remote_snapshot_from_operations,
 )
 from src.core.keil.commands import KeilBreakpointIntent, KeilBreakpointSyncAction  # noqa: E402
+from src.core.keil.breakpoint_list import parse_keil_breakpoint_list  # noqa: E402
 
 
 class FakeSession:
@@ -71,7 +72,7 @@ def main() -> int:
         _assert(KeilBreakpointSyncAction.ADD in actions, f"missing add: {actions!r}")
         _assert(any(operation.action == KeilBreakpointSyncAction.ADD for operation in invalid), "conditional add should be guarded")
         command_text = "\n".join(keil_breakpoint_command(operation) for operation in request.operations)
-        _assert("BreakSet" in command_text and "BreakKill 4" in command_text, f"command text mismatch: {command_text}")
+        _assert("BS " in command_text and "BK 4" in command_text, f"command text mismatch: {command_text}")
 
         snapshot = remote_snapshot_from_operations(request, complete=True)
         session = FakeSession()
@@ -79,7 +80,7 @@ def main() -> int:
         _assert(not result.succeeded, "guarded conditional breakpoint should make the batch fail")
         _assert(result.attempted_count == 4, f"attempted count mismatch: {result.attempted_count}")
         _assert(result.remote_snapshot is not None and result.remote_snapshot.complete, "snapshot should be complete")
-        _assert(any("BreakSet" in command for command in session.commands), f"commands missing BreakSet: {session.commands!r}")
+        _assert(any(command.startswith("BS ") for command in session.commands), f"commands missing BS: {session.commands!r}")
 
         safe_request = build_keil_breakpoint_sync_request_from_state(
             project_path=root / "Project.uvprojx",
@@ -93,11 +94,44 @@ def main() -> int:
         _assert(safe_result.succeeded, safe_result.summary())
         _assert(safe_result.attempted_count == 4, f"safe attempted mismatch: {safe_result.attempted_count}")
 
-        failing = execute_keil_breakpoint_sync(FakeSession(fail_on="BreakKill"), safe_request)
+        failing = execute_keil_breakpoint_sync(FakeSession(fail_on="BK"), safe_request)
         _assert(not failing.succeeded, "failure should mark sync unsuccessful")
         _assert(failing.failed_count == 1, f"failed count mismatch: {failing.failed_count}")
         rows = dict(failing.diagnostic_rows())
         _assert(rows.get("断点同步") == "失败", f"diagnostics mismatch: {rows!r}")
+
+        parsed_remote = parse_keil_breakpoint_list(
+            f"Breakpoints\n4 enabled {pid_c}:40\n5 disabled {pid_c}:30\n",
+            project_path=root / "Project.uvprojx",
+            target_name="Target 1",
+        ).snapshot
+        parsed_request = build_keil_breakpoint_sync_request_from_state(
+            project_path=root / "Project.uvprojx",
+            target_name="Target 1",
+            local_breakpoints=local[:3],
+            remote_breakpoints=parsed_remote.breakpoints,
+            source_paths=(main_c, pid_c),
+            transaction_id="parsed-remote",
+        )
+        parsed_command_text = "\n".join(keil_breakpoint_command(operation) for operation in parsed_request.operations)
+        _assert("BK 4" in parsed_command_text, f"parsed remote remove id missing: {parsed_command_text}")
+        _assert("BE 5" in parsed_command_text, f"parsed remote enable id missing: {parsed_command_text}")
+        remove_order_remote = (
+            RemoteBreakpoint(pid_c, 40, enabled=True, remote_id="4"),
+            RemoteBreakpoint(pid_c, 50, enabled=True, remote_id="7"),
+        )
+        remove_order_request = build_keil_breakpoint_sync_request_from_state(
+            project_path=root / "Project.uvprojx",
+            target_name="Target 1",
+            local_breakpoints=(),
+            remote_breakpoints=remove_order_remote,
+            source_paths=(pid_c,),
+            transaction_id="remove-order",
+        )
+        remove_session = FakeSession()
+        remove_result = execute_keil_breakpoint_sync(remove_session, remove_order_request)
+        _assert(remove_result.succeeded, remove_result.summary())
+        _assert(remove_session.commands == ["BK 7", "BK 4"], f"remove order must be descending: {remove_session.commands!r}")
 
     print("PASS Keil breakpoint sync probe")
     return 0
