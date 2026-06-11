@@ -6287,3 +6287,75 @@ Make Keil breakpoint evidence visible enough that the UI does not merely say
   - ensure run/halt/reset status always refreshes PC and remote breakpoint
     evidence,
   - then tighten the variable write path inside the same live session.
+
+## Milestone 71 - Runtime Control Evidence Refresh
+
+### Goal
+
+Verify that Keil runtime-control actions refresh the visible evidence after the
+button press, not just the target state:
+
+- Halt should show a paused status, PC evidence, and remote breakpoint snapshot.
+- Run should show running state and avoid pretending the PC is stable.
+- Reset and step should return to paused state with fresh PC evidence.
+- Diagnostics should use Chinese action labels consistently.
+
+### Completed
+
+- Added `tools\ui_keil_runtime_control_probe.py`.
+  - Simulates a user clicking halt, run, reset, and step through the Debug
+    Workbench.
+  - Uses a fake Keil backend that returns a different PC location and remote
+    breakpoint snapshot after each action.
+  - Asserts that the UI updates:
+    - status state,
+    - runtime-control diagnostics,
+    - PC evidence rows,
+    - remote breakpoint evidence rows,
+    - marker text.
+- Changed runtime-control diagnostics to render `reset`, `step`, and
+  `step_over` as `复位`, `单步`, and `跨过`.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-runtime-control --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-runtime-control\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-runtime-control\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-runtime-control\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- Real F401/Keil live PC-control smoke:
+  - `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json --no-write`
+    - PASS.
+    - Launched Keil PID `78272`, connected in 3 attempts, did not write variables.
+  - `python tools\keil_pc_location_probe.py --live --step --step-over --reset --keil-root D:\Keil --json`
+    - PASS.
+    - Initial PC readback mapped to `main.c:24`.
+    - Step mapped to `main.c:25`.
+    - Step-over mapped to `main.c:26`.
+    - Reset mapped to `startup_stm32f401ccux.s:41`.
+  - Confirmed no `UV4/uVision` process remained after the live probe.
+
+### Notes
+
+- The existing UI path already applied backend snapshots after runtime control.
+  This milestone locks that behavior with a UI probe and fixes the remaining
+  English action labels in diagnostics.
+
+### Next Target
+
+- Move from evidence visibility to a more usable live-debug workflow:
+  - add a clearer "first live loop" path in the Debug Workbench,
+  - keep breakpoint sync, run-to-cursor, run/halt, and variable write visibly
+    connected,
+  - then retest live variable write in the same Keil session.

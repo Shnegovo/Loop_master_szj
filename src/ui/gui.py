@@ -4497,7 +4497,13 @@ class MainWindow(QMainWindow):
             return ()
         uvsc = getattr(result, "uvsc", None)
         action = getattr(result, "action", "")
-        label = "暂停" if action == "halt" else "运行" if action == "run" else str(action or "--")
+        label = {
+            "halt": "暂停",
+            "run": "运行",
+            "reset": "复位",
+            "step": "单步",
+            "step_over": "跨过",
+        }.get(str(action or ""), str(action or "--"))
         target_running = getattr(result, "target_running", None)
         target_text = "运行中" if target_running is True else "已暂停" if target_running is False else "未知"
         rows = [
