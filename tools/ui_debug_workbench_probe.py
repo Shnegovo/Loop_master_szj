@@ -1049,14 +1049,26 @@ Raw dump of debug contents of section .debug_line:
         tab.set_breakpoint_verification(3, verified=True)
         tab.set_breakpoint_verification(24, verified=False, message="Keil 未回读到该断点")
         tab._scroll_editor_to_line(31)
+        if getattr(tab, "current_line_breakpoint_button", None) is None:
+            issues.append("current-line breakpoint button missing")
+        elif not tab.current_line_breakpoint_button.isEnabled() or tab.current_line_breakpoint_button.text() != "当前行断点":
+            issues.append(
+                f"current-line breakpoint button initial state mismatch: "
+                f"{tab.current_line_breakpoint_button.isEnabled()} / {tab.current_line_breakpoint_button.text()!r}"
+            )
+        else:
+            tab.current_line_breakpoint_button.click()
+        _pump(app, 0.1)
+        if getattr(tab, "current_line_breakpoint_button", None) is not None and tab.current_line_breakpoint_button.text() != "移除断点":
+            issues.append(f"current-line breakpoint button did not switch to remove: {tab.current_line_breakpoint_button.text()!r}")
         tab.current_line_condition_button.click()
         _pump(app, 0.1)
         row31 = _row_for_line(tab, 31)
         if row31 < 0:
-            issues.append("current-line condition button did not create line 31 breakpoint")
+            issues.append("current-line breakpoint button did not create line 31 breakpoint")
         elif tab.breakpoint_table.currentRow() != row31 or "main.c:31" not in tab.breakpoint_editor_label.text():
             issues.append(
-                f"current-line condition breakpoint was not auto-selected: row={tab.breakpoint_table.currentRow()} "
+                f"current-line breakpoint was not auto-selected: row={tab.breakpoint_table.currentRow()} "
                 f"label={tab.breakpoint_editor_label.text()!r}"
             )
         tab.breakpoint_editor_condition.setText("speed > 70")
@@ -1065,10 +1077,12 @@ Raw dump of debug contents of section .debug_line:
         row31 = _row_for_line(tab, 31)
         if row31 >= 0 and tab.breakpoint_table.item(row31, 3).text() != "speed > 70":
             issues.append(f"current-line quick condition did not persist: {tab.breakpoint_table.item(row31, 3).text()!r}")
-        tab._toggle_breakpoint(31)
+        tab.current_line_breakpoint_button.click()
         _pump(app, 0.1)
         if _row_for_line(tab, 31) >= 0:
-            issues.append("current-line test breakpoint line 31 was not removed")
+            issues.append("current-line breakpoint button did not remove line 31")
+        if getattr(tab, "current_line_breakpoint_button", None) is not None and tab.current_line_breakpoint_button.text() != "当前行断点":
+            issues.append(f"current-line breakpoint button did not switch back to add: {tab.current_line_breakpoint_button.text()!r}")
         tab.add_breakpoint(72)
         tab.breakpoint_table.setCurrentCell(2, 2)
         tab.breakpoint_table.cellClicked.emit(2, 2)

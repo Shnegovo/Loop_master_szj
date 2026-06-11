@@ -1252,6 +1252,13 @@ class DebugWorkbenchTab(QWidget):
         self.marker_label = QLabel("未连接运行时")
         self.marker_label.setObjectName("debugHint")
         header.addWidget(self.marker_label)
+        self.current_line_breakpoint_button = QPushButton("当前行断点")
+        self.current_line_breakpoint_button.setObjectName("debugMiniButton")
+        self.current_line_breakpoint_button.setCursor(Qt.PointingHandCursor)
+        self.current_line_breakpoint_button.setToolTip("切换当前源码行的本地断点")
+        self.current_line_breakpoint_button.clicked.connect(self._toggle_current_line_breakpoint)
+        self.current_line_breakpoint_button.setEnabled(False)
+        header.addWidget(self.current_line_breakpoint_button)
         self.current_line_condition_button = QPushButton("当前行条件")
         self.current_line_condition_button.setObjectName("debugMiniButton")
         self.current_line_condition_button.setCursor(Qt.PointingHandCursor)
@@ -1263,6 +1270,7 @@ class DebugWorkbenchTab(QWidget):
 
         self.editor = SourceCodeEditor()
         self.editor.gutterLineClicked.connect(self._toggle_breakpoint)
+        self.editor.cursorPositionChanged.connect(self._refresh_current_line_actions)
         layout.addWidget(self.editor, 1)
         self.editor.set_code_document(None)
         return panel
@@ -1339,8 +1347,7 @@ class DebugWorkbenchTab(QWidget):
                     self._load_source(child.path)
                     return
         self.editor.set_code_document(None)
-        if hasattr(self, "current_line_condition_button"):
-            self.current_line_condition_button.setEnabled(False)
+        self._set_current_line_actions_enabled(False)
         self.file_label.setText("源码预览")
 
     def _on_source_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
@@ -1356,18 +1363,24 @@ class DebugWorkbenchTab(QWidget):
             self.editor.set_code_document(None)
             self.file_label.setText(path.name)
             self.summary_label.setText(f"源码读取失败：{exc}")
-            if hasattr(self, "current_line_condition_button"):
-                self.current_line_condition_button.setEnabled(False)
+            self._set_current_line_actions_enabled(False)
             return
         self._current_document = document
-        if hasattr(self, "current_line_condition_button"):
-            self.current_line_condition_button.setEnabled(True)
         self.file_label.setText(f"{document.path.name}  ·  {document.line_count} 行")
         self._select_source_tree_path(document.path)
         self._active_search_line = None
         self._search_index = -1
         self._refresh_decorations()
+        self._refresh_current_line_actions()
         self._refresh_summary()
+
+    def _toggle_current_line_breakpoint(self) -> None:
+        if self._current_document is None:
+            return
+        line = self._current_editor_line()
+        if line <= 0:
+            return
+        self._toggle_breakpoint(line)
 
     def _toggle_breakpoint(self, line: int) -> None:
         if self._current_document is None:
@@ -1381,6 +1394,7 @@ class DebugWorkbenchTab(QWidget):
     def _refresh_breakpoint_views(self, *, select_path: Path | None = None, select_line: int | None = None) -> None:
         self._refresh_decorations()
         self._refresh_summary()
+        self._refresh_current_line_actions()
         if select_path is not None and select_line is not None:
             self._select_breakpoint_row(select_path, select_line)
 
@@ -1704,6 +1718,38 @@ class DebugWorkbenchTab(QWidget):
         if self._current_document is None:
             return -1
         return self.editor.textCursor().blockNumber() + 1
+
+    def _set_current_line_actions_enabled(self, enabled: bool) -> None:
+        for attr in ("current_line_breakpoint_button", "current_line_condition_button"):
+            button = getattr(self, attr, None)
+            if button is not None:
+                button.setEnabled(bool(enabled))
+        if not enabled and hasattr(self, "current_line_breakpoint_button"):
+            self.current_line_breakpoint_button.setText("当前行断点")
+            self.current_line_breakpoint_button.setToolTip("打开源码后可切换当前行断点")
+        if not enabled and hasattr(self, "current_line_condition_button"):
+            self.current_line_condition_button.setToolTip("打开源码后可编辑当前行条件断点")
+
+    def _refresh_current_line_actions(self) -> None:
+        if not hasattr(self, "current_line_breakpoint_button"):
+            return
+        if self._current_document is None:
+            self._set_current_line_actions_enabled(False)
+            return
+        line = self._current_editor_line()
+        enabled = line > 0
+        self._set_current_line_actions_enabled(enabled)
+        if not enabled:
+            return
+        breakpoint = self._breakpoints.get(self._current_document.path, line)
+        has_breakpoint = breakpoint is not None
+        self.current_line_breakpoint_button.setText("移除断点" if has_breakpoint else "当前行断点")
+        action = "移除" if has_breakpoint else "添加"
+        self.current_line_breakpoint_button.setToolTip(f"{action}第 {line} 行本地断点")
+        if has_breakpoint and breakpoint.condition:
+            self.current_line_condition_button.setToolTip(f"编辑第 {line} 行条件断点：{breakpoint.condition}")
+        else:
+            self.current_line_condition_button.setToolTip(f"为第 {line} 行创建或编辑条件断点")
 
     def _edit_current_line_breakpoint_condition(self) -> None:
         if self._current_document is None:

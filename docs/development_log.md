@@ -7284,3 +7284,65 @@ waiting for Keil readback, or already verified by the remote debugger.
   - add a clearer current-line breakpoint affordance,
   - keep run-to-cursor and regular breakpoint evidence separate,
   - then move Keil Watch samples toward the shared acquisition-session runtime.
+
+## Milestone 86 - Current-Line Breakpoint Affordance
+
+### Goal
+
+Make source-level breakpoint editing feel less like a hidden gutter-only action.
+Users should be able to place or remove a breakpoint on the current cursor line
+without aiming at the gutter, while keeping condition editing as a separate,
+explicit action.
+
+### Completed
+
+- Added a `当前行断点` button to the source editor header.
+- The button follows cursor context:
+  - enabled only when a source file is loaded,
+  - shows `当前行断点` when the current line has no local breakpoint,
+  - shows `移除断点` when the current line already has a local breakpoint,
+  - tooltip includes the current line number and action.
+- Kept `当前行条件` as a separate condition editor:
+  - it creates/selects the current line breakpoint when needed,
+  - its tooltip shows the current condition when one exists.
+- Current-line actions now disable together when no source is loaded or source
+  loading fails.
+- Updated the full Debug Workbench probe so it exercises the user-facing flow:
+  current-line button creates a breakpoint, condition button edits it, and the
+  current-line button removes it again.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-current-line-breakpoint --width 1440 --height 900`
+  - PASS.
+  - Screenshots checked manually:
+    - `tools\ui-debug-workbench-current-line-breakpoint\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-current-line-breakpoint\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+
+### Notes
+
+- This is still local UI/UX work around the existing breakpoint model. It does
+  not execute Keil commands or touch hardware.
+- The gutter click path remains available; the new button is a discoverable
+  affordance for the same local breakpoint model.
+
+### Next Target
+
+- Move from breakpoint usability back into runtime capability:
+  - start a shared acquisition-session runtime contract,
+  - let Keil Watch, SWD memory polling, and serial waveform eventually feed the
+    same sample buffer concepts,
+  - keep OpenOCD/pyOCD/TI planned sources behind no-hardware gates until each
+    adapter has probes.
