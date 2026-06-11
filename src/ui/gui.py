@@ -40,6 +40,12 @@ from src.core.debug_workbench import (
 )
 from src.core.debug_backend_registry import create_default_debug_backend_registry
 from src.core.debug_session_controller import DebugSessionController
+from src.core.debug_variable_access import (
+    DebugVariableReadRequest,
+    DebugVariableReadResult,
+    DebugVariableWriteRequest,
+    DebugVariableWriteResult,
+)
 from src.core.debug_sources import (
     SourceManifest,
     SourcePathRemapPreview,
@@ -71,6 +77,7 @@ from src.core.keil.auto_debug import (
 from src.core.keil.live_write import (
     KeilLiveVariableReadRequest,
     KeilLiveVariableReadResult,
+    KeilResolvedVariable,
     KeilLiveVariableWriteRequest,
     KeilLiveVariableWriteResult,
 )
@@ -3435,7 +3442,14 @@ class MainWindow(QMainWindow):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 写变量", "当前调试后端不是 Keil / UVSOCK。")
             return
-        missing = [name for name in ("read_live_variable", "write_live_variable") if not hasattr(self._debug_backend, name)]
+        missing = [
+            label
+            for label, available in (
+                ("read_variable/read_live_variable", hasattr(self._debug_backend, "read_variable") or hasattr(self._debug_backend, "read_live_variable")),
+                ("write_variable/write_live_variable", hasattr(self._debug_backend, "write_variable") or hasattr(self._debug_backend, "write_live_variable")),
+            )
+            if not available
+        ]
         if missing:
             self._show_warning("Keil 写变量", f"当前 Keil 后端缺少执行器：{', '.join(missing)}。")
             return
@@ -3487,17 +3501,16 @@ class MainWindow(QMainWindow):
             connection_name="LoopMasterLiveWrite",
         )
 
-        read_request = KeilLiveVariableReadRequest(
-            expression=expression,
-            axf_path=axf,
-            connection_name="LoopMasterLiveWriteRead",
-        )
         tab.set_debug_controls_ready(False)
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(f"正在读取 {expression} 当前值...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            baseline_read = self._debug_backend.read_live_variable(read_request)
+            baseline_read = self._read_debug_variable_baseline(
+                expression=expression,
+                axf=axf,
+                connection_name="LoopMasterLiveWriteRead",
+            )
         except Exception as exc:
             baseline_read = KeilLiveVariableReadResult(
                 attempted=True,
@@ -3528,7 +3541,14 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(f"正在通过 Keil 写入 {expression}...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            result = self._debug_backend.write_live_variable(request)
+            result = self._write_debug_variable(
+                expression=expression,
+                value_text=value_text,
+                axf=axf,
+                prefer_memory=bool(axf),
+                allow_command_fallback=True,
+                connection_name="LoopMasterLiveWrite",
+            )
         except Exception as exc:
             result = KeilLiveVariableWriteResult(
                 attempted=True,
@@ -3555,6 +3575,109 @@ class MainWindow(QMainWindow):
             self._show_warning("Keil 写变量失败", result.summary())
             if hasattr(self, "_sb_label"):
                 self._sb_label.setText(result.summary())
+
+    def _read_debug_variable_baseline(
+        self,
+        *,
+        expression: str,
+        axf: Path | None,
+        connection_name: str,
+    ) -> KeilLiveVariableReadResult:
+        if hasattr(self._debug_backend, "read_variable"):
+            generic = self._debug_backend.read_variable(
+                DebugVariableReadRequest(
+                    expression=expression,
+                    binary_path=axf,
+                    connection_name=connection_name,
+                )
+            )
+            return self._keil_read_result_from_generic(generic)
+        return self._debug_backend.read_live_variable(
+            KeilLiveVariableReadRequest(
+                expression=expression,
+                axf_path=axf,
+                connection_name=connection_name,
+            )
+        )
+
+    def _write_debug_variable(
+        self,
+        *,
+        expression: str,
+        value_text: str,
+        axf: Path | None,
+        prefer_memory: bool,
+        allow_command_fallback: bool,
+        connection_name: str,
+    ) -> KeilLiveVariableWriteResult:
+        if hasattr(self._debug_backend, "write_variable"):
+            generic = self._debug_backend.write_variable(
+                DebugVariableWriteRequest(
+                    expression=expression,
+                    value_text=value_text,
+                    binary_path=axf,
+                    prefer_memory=prefer_memory,
+                    allow_command_fallback=allow_command_fallback,
+                    connection_name=connection_name,
+                )
+            )
+            return self._keil_write_result_from_generic(generic)
+        return self._debug_backend.write_live_variable(
+            KeilLiveVariableWriteRequest(
+                expression=expression,
+                value_text=value_text,
+                axf_path=axf,
+                prefer_memory=prefer_memory,
+                allow_command_fallback=allow_command_fallback,
+                connection_name=connection_name,
+            )
+        )
+
+    @staticmethod
+    def _keil_resolved_from_generic(resolved) -> KeilResolvedVariable | None:
+        if resolved is None:
+            return None
+        return KeilResolvedVariable(
+            expression=resolved.expression,
+            symbol=resolved.symbol,
+            address=int(resolved.address or 0),
+            size=int(resolved.size or 0),
+            type_name=resolved.type_name,
+            source=resolved.source,
+            ram_checked=resolved.ram_checked,
+        )
+
+    def _keil_read_result_from_generic(self, result: DebugVariableReadResult) -> KeilLiveVariableReadResult:
+        return KeilLiveVariableReadResult(
+            attempted=result.attempted,
+            read=result.read,
+            expression=result.expression,
+            method=result.method,
+            resolved=self._keil_resolved_from_generic(result.resolved),
+            raw=result.raw,
+            value=result.value,
+            diagnostics=result.diagnostics,
+            error=result.error,
+        )
+
+    def _keil_write_result_from_generic(self, result: DebugVariableWriteResult) -> KeilLiveVariableWriteResult:
+        return KeilLiveVariableWriteResult(
+            attempted=result.attempted,
+            written=result.written,
+            expression=result.expression,
+            value_text=result.value_text,
+            method=result.method,
+            resolved=self._keil_resolved_from_generic(result.resolved),
+            old_raw=result.old_raw,
+            new_raw=result.new_raw,
+            readback_raw=result.readback_raw,
+            old_value=result.old_value,
+            readback_value=result.readback_value,
+            command=result.command,
+            attempts=result.attempts,
+            diagnostics=result.diagnostics,
+            error=result.error,
+        )
 
     def _parse_keil_live_write_text(self, text: str) -> tuple[str, str]:
         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
@@ -3721,6 +3844,7 @@ class MainWindow(QMainWindow):
                     ("档案端口", str(default.uvsock_port)),
                 ]
             )
+            rows.extend(default.metadata.diagnostic_rows())
         else:
             rows.append(("默认调试档案", "未保存"))
         return tuple(rows)

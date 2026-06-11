@@ -4896,3 +4896,93 @@ later OpenOCD, pyOCD and GDB adapters are not forced to copy Keil method names.
   and F103 balance-car metadata together with runtime suitability.
 - Continue the source-debugger work: PC/current-line readback and breakpoint
   evidence should be the next visible debugging features after variable access.
+
+## Milestone 54 Update - Generic Variable UI and Richer Keil Profiles
+
+### Goal
+
+Use the shared variable-access contract in the UI, not just in backend tests,
+and make saved Keil debug profiles carry enough metadata to distinguish the
+real F401 smoke project from the F103 balance-car reference project.
+
+### Completed
+
+- Migrated the manual UI write-variable path to the generic variable-access
+  method names.
+  - `_write_keil_live_variable_from_workbench()` now prefers
+    `read_variable()` / `write_variable()`.
+  - Existing Keil `read_live_variable()` / `write_live_variable()` remains as a
+    fallback for compatibility.
+  - UI diagnostics and audit still use the existing Keil-shaped result surface,
+    with conversion helpers from generic results.
+- Extended the UI probe fake backend with generic methods.
+  - The probe now verifies manual writes use `read_variable()` and
+    `write_variable()` rather than only Keil-specific names.
+- Extended persistent Keil debug profile records.
+  - Store version is now `2`.
+  - Added `KeilDebugProfileMetadata` with:
+    - device and inferred CPU core
+    - adapter/protocol
+    - flash/RAM ranges
+    - flash algorithm
+    - runtime suitability
+    - preset key
+    - default write variable/value
+    - write and scope preset summaries
+    - warning summaries
+  - Old profile JSON remains readable because metadata defaults to an empty
+    record when absent.
+- Added metadata generation from `KeilDebugProfile`.
+  - F401 probe profiles are marked `connected_f401_smoke`.
+  - The user-provided balance-car project is marked `reference_only_f103`.
+  - Unknown projects fall back to `candidate_with_axf` or `profile_only`.
+- Surfaced saved profile metadata in the debug workbench diagnostics table.
+  - This makes the selected profile's device, adapter, suitability and default
+    write visible without opening the JSON file.
+
+### Verified
+
+- `python -m py_compile src\core\debug_variable_access.py src\core\keil\profile_store.py src\core\keil\backend.py src\ui\gui.py tools\keil_profile_store_probe.py tools\ui_debug_workbench_probe.py tools\keil_backend_live_write_probe.py tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS; verifies F401 metadata, F103 reference-only metadata and persisted
+    metadata reload.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-generic-variable-final --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-generic-variable-final\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-generic-variable-final\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-generic-variable-final\03_debug_workbench_narrow.png`
+- `python tools\keil_balance_reference_probe.py --json`
+  - PASS.
+- `python tools\keil_variable_presets_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --json`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on the connected ST-Link/F401 setup.
+  - Reused the existing paused UVSOCK session.
+  - Baseline read returned `6000`.
+  - Memory write/readback returned `6000`.
+
+### Notes
+
+- This does not make OpenOCD/pyOCD fully functional yet, but it removes one UI
+  hard dependency on Keil-specific method names.
+- The metadata is deliberately compact and serializable. It is meant to support
+  the next UI profile selector and future multi-toolchain profile import, not
+  replace the full Keil project parser.
+- The F103 balance-car project is now explicitly modeled as reference-only in
+  saved profile metadata, matching the hardware mismatch guard.
+
+### Next Target
+
+- Add a user-visible profile selector/inspector row for runtime suitability and
+  default write/scope presets.
+- Start the first source-debugger visible slice:
+  - current PC/current source line evidence,
+  - clearer breakpoint evidence when Keil only echoes command text,
+  - shared interface shape for OpenOCD/GDB run control.

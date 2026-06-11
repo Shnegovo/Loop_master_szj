@@ -15,6 +15,7 @@ from src.core.keil.profile_store import (  # noqa: E402
     KeilDebugProfileRecord,
     KeilDebugProfileStore,
     load_keil_profile_store,
+    metadata_from_debug_profile,
     profile_record_from_debug_profile,
     save_keil_profile_store,
 )
@@ -44,6 +45,9 @@ def main() -> int:
     _assert(record.target_name == "STM32F401CCU6 Variable Probe", f"target mismatch: {record.target_name}")
     _assert(record.uvsock_port == 4827, f"port mismatch: {record.uvsock_port}")
     _assert("F401VariableProbe" in record.display_name, f"display mismatch: {record.display_name}")
+    _assert(record.metadata.device.startswith("STM32F401"), f"F401 metadata device mismatch: {record.metadata}")
+    _assert(record.metadata.runtime_suitability == "connected_f401_smoke", f"F401 suitability mismatch: {record.metadata}")
+    _assert(record.metadata.default_write_expression == "debug_setpoint", f"F401 default write mismatch: {record.metadata}")
 
     store = KeilDebugProfileStore().upsert(record)
     _assert(store.default is not None and store.default.key == record.key, "default record mismatch")
@@ -66,8 +70,20 @@ def main() -> int:
             keil_root=Path("D:/Keil"),
             uvsock_port=4827,
         )
+        balance_metadata = metadata_from_debug_profile(balance.to_profile())
+        balance = KeilDebugProfileRecord(
+            name=balance.name,
+            project_path=balance.project_path,
+            target_name=balance.target_name,
+            keil_root=balance.keil_root,
+            uvsock_port=balance.uvsock_port,
+            metadata=balance_metadata,
+        )
         store = store.upsert(balance)
         _assert(store.default is not None and store.default.name == "平衡车 F103", "balance should become default")
+        _assert(store.default.metadata.runtime_suitability == "reference_only_f103", f"balance suitability mismatch: {store.default.metadata}")
+        _assert("AnglePID.Kp" in store.default.metadata.write_presets, f"balance write presets mismatch: {store.default.metadata}")
+        _assert("AveSpeed" in store.default.metadata.scope_presets, f"balance scope presets mismatch: {store.default.metadata}")
         balance_profile = store.default.to_profile()
         rows = dict(balance_profile.diagnostic_rows())
         _assert(rows.get("Target") == "Target 1", f"balance target diagnostics mismatch: {rows!r}")
@@ -80,6 +96,7 @@ def main() -> int:
         _assert(len(loaded.records) == len(store.records), "loaded record count mismatch")
         _assert(loaded.default is not None, "loaded default missing")
         _assert(loaded.default.key == store.default.key, "loaded default key mismatch")
+        _assert(loaded.default.metadata.runtime_suitability == store.default.metadata.runtime_suitability, "loaded metadata mismatch")
 
     print("PASS Keil profile store probe")
     return 0

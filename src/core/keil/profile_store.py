@@ -9,9 +9,91 @@ from pathlib import Path
 from typing import Any
 
 from src.core.keil.profile import KeilDebugProfile, make_keil_debug_profile
+from src.core.keil.presets import KeilVariablePresetProfile, keil_variable_preset_profile
 
 
-PROFILE_STORE_VERSION = 1
+PROFILE_STORE_VERSION = 2
+
+
+@dataclass(frozen=True)
+class KeilDebugProfileMetadata:
+    device: str = ""
+    cpu_core: str = ""
+    debug_adapter: str = ""
+    debug_protocol: str = ""
+    flash_range: str = ""
+    ram_range: str = ""
+    flash_algorithm: str = ""
+    runtime_suitability: str = ""
+    preset_key: str = ""
+    default_write_expression: str = ""
+    default_write_value: str = ""
+    write_presets: tuple[str, ...] = ()
+    scope_presets: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "device": self.device,
+            "cpu_core": self.cpu_core,
+            "debug_adapter": self.debug_adapter,
+            "debug_protocol": self.debug_protocol,
+            "flash_range": self.flash_range,
+            "ram_range": self.ram_range,
+            "flash_algorithm": self.flash_algorithm,
+            "runtime_suitability": self.runtime_suitability,
+            "preset_key": self.preset_key,
+            "default_write_expression": self.default_write_expression,
+            "default_write_value": self.default_write_value,
+            "write_presets": list(self.write_presets),
+            "scope_presets": list(self.scope_presets),
+            "warnings": list(self.warnings),
+        }
+
+    def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        rows = []
+        if self.device:
+            rows.append(("档案芯片", self.device))
+        if self.debug_adapter:
+            adapter = self.debug_adapter
+            if self.debug_protocol:
+                adapter += f" / {self.debug_protocol}"
+            rows.append(("档案调试器", adapter))
+        if self.runtime_suitability:
+            rows.append(("档案适用性", self.runtime_suitability))
+        if self.preset_key:
+            rows.append(("档案预设", self.preset_key))
+        if self.default_write_expression:
+            default = self.default_write_expression
+            if self.default_write_value:
+                default += f"={self.default_write_value}"
+            rows.append(("档案默认写入", default))
+        if self.scope_presets:
+            rows.append(("档案推荐示波", ", ".join(self.scope_presets[:8])))
+        if self.warnings:
+            rows.append(("档案警告", "；".join(self.warnings[:3])))
+        return tuple(rows)
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any] | None) -> "KeilDebugProfileMetadata":
+        if not isinstance(record, dict):
+            return cls()
+        return cls(
+            device=str(record.get("device", "") or ""),
+            cpu_core=str(record.get("cpu_core", "") or ""),
+            debug_adapter=str(record.get("debug_adapter", "") or ""),
+            debug_protocol=str(record.get("debug_protocol", "") or ""),
+            flash_range=str(record.get("flash_range", "") or ""),
+            ram_range=str(record.get("ram_range", "") or ""),
+            flash_algorithm=str(record.get("flash_algorithm", "") or ""),
+            runtime_suitability=str(record.get("runtime_suitability", "") or ""),
+            preset_key=str(record.get("preset_key", "") or ""),
+            default_write_expression=str(record.get("default_write_expression", "") or ""),
+            default_write_value=str(record.get("default_write_value", "") or ""),
+            write_presets=tuple(str(item) for item in record.get("write_presets", ()) or ()),
+            scope_presets=tuple(str(item) for item in record.get("scope_presets", ()) or ()),
+            warnings=tuple(str(item) for item in record.get("warnings", ()) or ()),
+        )
 
 
 @dataclass(frozen=True)
@@ -25,6 +107,7 @@ class KeilDebugProfileRecord:
     created_at: str = ""
     updated_at: str = ""
     notes: str = ""
+    metadata: KeilDebugProfileMetadata = KeilDebugProfileMetadata()
 
     @property
     def key(self) -> str:
@@ -54,6 +137,7 @@ class KeilDebugProfileRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "notes": self.notes,
+            "metadata": self.metadata.to_record(),
         }
 
     @classmethod
@@ -73,6 +157,7 @@ class KeilDebugProfileRecord:
             created_at=str(record.get("created_at", "") or now),
             updated_at=str(record.get("updated_at", "") or now),
             notes=str(record.get("notes", "") or ""),
+            metadata=KeilDebugProfileMetadata.from_record(record.get("metadata")),
         )
 
 
@@ -101,6 +186,7 @@ class KeilDebugProfileStore:
             created_at=record.created_at or now,
             updated_at=now,
             notes=record.notes,
+            metadata=record.metadata,
         )
         records = [item for item in self.records if item.key != next_record.key]
         records.insert(0, next_record)
@@ -151,6 +237,30 @@ def profile_record_from_debug_profile(
         created_at=_now_text(),
         updated_at=_now_text(),
         notes=notes,
+        metadata=metadata_from_debug_profile(profile),
+    )
+
+
+def metadata_from_debug_profile(profile: KeilDebugProfile) -> KeilDebugProfileMetadata:
+    debug_options = profile.debug_options
+    preset_profile = keil_variable_preset_profile(profile.project_path, profile.target_name)
+    default_write = preset_profile.default_write
+    device = debug_options.device if debug_options is not None else ""
+    return KeilDebugProfileMetadata(
+        device=device,
+        cpu_core=_cpu_core_from_device(device),
+        debug_adapter=debug_options.adapter_label if debug_options is not None else "",
+        debug_protocol=debug_options.protocol_label if debug_options is not None else "",
+        flash_range=debug_options.flash_range_label if debug_options is not None else "",
+        ram_range=debug_options.ram_range_label if debug_options is not None else "",
+        flash_algorithm=debug_options.flash_algorithm if debug_options is not None else "",
+        runtime_suitability=_runtime_suitability(profile, preset_profile),
+        preset_key=preset_profile.key,
+        default_write_expression=default_write.expression if default_write is not None else "",
+        default_write_value=default_write.default_value if default_write is not None else "",
+        write_presets=tuple(item.expression for item in preset_profile.write_presets[:12]),
+        scope_presets=tuple(item.expression for item in preset_profile.scope_presets[:18]),
+        warnings=tuple(debug_options.warnings if debug_options is not None else ()),
     )
 
 
@@ -179,6 +289,33 @@ def save_keil_profile_store(path: str | Path, store: KeilDebugProfileStore) -> b
 def _default_profile_name(profile: KeilDebugProfile) -> str:
     project = profile.project_path.stem if profile.project_path else "Keil"
     return f"{project} / {profile.target_name or 'Target'}"
+
+
+def _cpu_core_from_device(device: str) -> str:
+    text = str(device or "").upper()
+    if "STM32F0" in text:
+        return "Cortex-M0"
+    if "STM32F1" in text:
+        return "Cortex-M3"
+    if "STM32F3" in text or "STM32F4" in text:
+        return "Cortex-M4"
+    if "STM32F7" in text:
+        return "Cortex-M7"
+    return ""
+
+
+def _runtime_suitability(profile: KeilDebugProfile, preset_profile: KeilVariablePresetProfile) -> str:
+    device = ""
+    if profile.debug_options is not None:
+        device = profile.debug_options.device
+    device_upper = str(device or "").upper()
+    if preset_profile.key == "f401_variable_probe":
+        return "connected_f401_smoke"
+    if preset_profile.key == "balance_car_f103":
+        return "reference_only_f103" if "STM32F103" in device_upper else "reference_only"
+    if profile.axf_exists:
+        return "candidate_with_axf"
+    return "profile_only"
 
 
 def _norm_path(path: Path) -> str:

@@ -27,6 +27,7 @@ from src.core.debug_workbench import (  # noqa: E402
     search_document,
 )
 from src.core.debug_backend import DebugBackendDiagnostic, DebugBackendSessionSnapshot  # noqa: E402
+from src.core.debug_variable_access import DebugVariableReadResult, DebugVariableWriteResult  # noqa: E402
 from src.core.keil.commands import (  # noqa: E402
     KeilBreakpointRemoteSnapshot,
     KeilRemoteBreakpoint,
@@ -330,6 +331,8 @@ class _FakeReadOnlyBackend:
         self.launch_calls = 0
         self.read_calls = 0
         self.write_calls = 0
+        self.generic_read_calls = 0
+        self.generic_write_calls = 0
 
     def debug_profile(
         self,
@@ -406,6 +409,39 @@ class _FakeReadOnlyBackend:
             resolved=_fake_keil_resolved(request.expression),
             raw=(5000).to_bytes(4, "little", signed=True),
             value="5000",
+        )
+
+    def read_variable(self, request, *, require_debug: bool = True):
+        self.generic_read_calls += 1
+        self.read_calls += 1
+        return DebugVariableReadResult(
+            attempted=True,
+            read=True,
+            expression=request.expression,
+            method="memory",
+            backend="keil",
+            resolved=None,
+            raw=(5000).to_bytes(4, "little", signed=True),
+            value="5000",
+        )
+
+    def write_variable(self, request, *, require_debug: bool = True):
+        self.generic_write_calls += 1
+        self.write_calls += 1
+        new_raw = int(request.value_text, 0).to_bytes(4, "little", signed=True)
+        return DebugVariableWriteResult(
+            attempted=True,
+            written=True,
+            expression=request.expression,
+            value_text=request.value_text,
+            method="memory",
+            backend="keil",
+            resolved=None,
+            old_raw=(5000).to_bytes(4, "little", signed=True),
+            new_raw=new_raw,
+            readback_raw=new_raw,
+            old_value="5000",
+            readback_value=request.value_text,
         )
 
     def read_only_session_snapshot(
@@ -810,6 +846,11 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"preset write should request one fake write: {fake_backend.write_calls}")
                 if fake_backend.read_calls != 1:
                     issues.append(f"preset write should request one fake baseline read: {fake_backend.read_calls}")
+                if fake_backend.generic_read_calls != 1 or fake_backend.generic_write_calls != 1:
+                    issues.append(
+                        "preset write should use generic variable access: "
+                        f"read={fake_backend.generic_read_calls} write={fake_backend.generic_write_calls}"
+                    )
                 last_read = getattr(window, "_debug_last_live_read_result", None)
                 if last_read is None or not last_read.read or last_read.value != "5000":
                     issues.append(f"preset write baseline read mismatch: {last_read!r}")
