@@ -143,6 +143,7 @@ def main() -> int:
         _assert(not snapshot.connection_established, f"{kind.value} placeholder must not connect")
         _assert(not snapshot.status.capabilities.can_halt, f"{kind.value} placeholder must not allow halt")
         _assert(not snapshot.status.capabilities.can_run, f"{kind.value} placeholder must not allow run")
+        _assert(not snapshot.status.capabilities.can_reset, f"{kind.value} placeholder must not allow reset")
         _assert(not snapshot.status.capabilities.can_write_variables, f"{kind.value} placeholder must not allow writes")
         _assert("尚未接入" in " ".join(value for _, value in snapshot.diagnostic_rows()), f"{kind.value} diagnostics mismatch")
         contract = snapshot.to_session_contract()

@@ -67,12 +67,19 @@ class DebugSessionCapabilities:
     can_write_variables: bool = False
     can_halt: bool = False
     can_run: bool = False
+    can_reset: bool = False
     can_step: bool = False
     can_sync_breakpoints: bool = False
 
     @property
     def read_only(self) -> bool:
-        return not self.can_write_variables and not self.can_halt and not self.can_run and not self.can_step
+        return (
+            not self.can_write_variables
+            and not self.can_halt
+            and not self.can_run
+            and not self.can_reset
+            and not self.can_step
+        )
 
     def enabled_commands(self) -> tuple[str, ...]:
         commands: list[str] = []
@@ -86,6 +93,8 @@ class DebugSessionCapabilities:
             commands.append("halt")
         if self.can_run:
             commands.append("run")
+        if self.can_reset:
+            commands.append("reset")
         if self.can_step:
             commands.append("step")
         if self.can_sync_breakpoints:
@@ -103,6 +112,7 @@ class DebugSessionCapabilities:
             "can_write_variables": self.can_write_variables,
             "can_halt": self.can_halt,
             "can_run": self.can_run,
+            "can_reset": self.can_reset,
             "can_step": self.can_step,
             "can_sync_breakpoints": self.can_sync_breakpoints,
         }
@@ -296,6 +306,7 @@ def default_session_capabilities(
         can_write_variables=attached and variable_write,
         can_halt=attached and run_control and state_value != DebugSessionState.PAUSED,
         can_run=attached and run_control and state_value != DebugSessionState.RUNNING,
+        can_reset=attached and run_control,
         can_step=attached and run_control and state_value == DebugSessionState.PAUSED,
         can_sync_breakpoints=attached and breakpoint_sync,
     )
@@ -368,6 +379,7 @@ def command_matrix_for_session(snapshot: DebugSessionSnapshot) -> tuple[DebugSes
         _session_command(snapshot, "disconnect", "断开会话", DebugCommandSafety.READ_ONLY, caps.can_disconnect, ("停止轮询", "释放会话")),
         _session_command(snapshot, "halt", "暂停目标", DebugCommandSafety.RUN_CONTROL, caps.can_halt, ("发送 Halt", "读取 PC")),
         _session_command(snapshot, "run", "继续运行", DebugCommandSafety.RUN_CONTROL, caps.can_run, ("发送 Run", "轮询状态")),
+        _session_command(snapshot, "reset", "复位目标", DebugCommandSafety.RUN_CONTROL, caps.can_reset, ("发送 Reset", "读取 PC")),
         _session_command(snapshot, "step", "单步", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step", "读取 PC")),
         _session_command(snapshot, "step_over", "跨过", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step Over", "读取 PC")),
         _session_command(snapshot, "sync_breakpoints", "同步断点", DebugCommandSafety.RUN_CONTROL, caps.can_sync_breakpoints, ("生成断点差异", "回读验证")),

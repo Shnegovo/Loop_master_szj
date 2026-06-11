@@ -137,6 +137,7 @@ def _backend_snapshot(project_path: Path) -> dict[str, object]:
                 "can_write_variables": False,
                 "can_halt": False,
                 "can_run": False,
+                "can_reset": False,
                 "can_step": False,
                 "can_sync_breakpoints": False,
             },
@@ -208,6 +209,7 @@ def main() -> int:
             "disconnect",
             "halt",
             "run",
+            "reset",
             "step",
             "step_over",
             "sync_breakpoints",
@@ -215,7 +217,7 @@ def main() -> int:
         }
         _assert(set(disconnected) == expected, f"transaction keys changed: {sorted(disconnected)}")
         _assert_all_dry_run(disconnected)
-        for key in ("attach", "halt", "run", "step", "step_over", "sync_breakpoints", "write_variables"):
+        for key in ("attach", "halt", "run", "reset", "step", "step_over", "sync_breakpoints", "write_variables"):
             _assert(not disconnected[key].preconditions_met, f"{key} should be blocked while disconnected")
 
         session.mark_discovered(can_attach=True)
@@ -259,6 +261,7 @@ def main() -> int:
             _assert(transaction.backend_snapshot["connection_established"], f"{key} backend connection evidence missing")
         _assert(running["halt"].preconditions_met, "halt should be precondition-ready while running")
         _assert(not running["run"].preconditions_met, "run should be blocked while already running")
+        _assert(running["reset"].preconditions_met, "reset should be precondition-ready while running")
         _assert(not running["step"].preconditions_met, "step should be blocked while running")
         _assert(not running["step_over"].preconditions_met, "step_over should be blocked while running")
         _assert(running["sync_breakpoints"].preconditions_met, "breakpoint sync capability should surface readiness")
@@ -384,6 +387,7 @@ def main() -> int:
         paused = _transaction_map(session, project_path=project_path, target_name="DebugDemo")
         _assert_all_dry_run(paused)
         _assert(paused["run"].preconditions_met, "run should be precondition-ready while paused")
+        _assert(paused["reset"].preconditions_met, "reset should be precondition-ready while paused")
         _assert(paused["step"].preconditions_met, "step should be precondition-ready while paused")
         _assert(paused["step_over"].preconditions_met, "step_over should be precondition-ready while paused")
         _assert(not paused["halt"].preconditions_met, "halt should be blocked while paused")

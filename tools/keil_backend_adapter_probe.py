@@ -77,6 +77,7 @@ def main() -> int:
     _assert(not snapshot.status.capabilities.can_write_variables, "read-only adapter must not enable variable writes")
     _assert(not snapshot.status.capabilities.can_halt, "read-only adapter must not enable halt")
     _assert(not snapshot.status.capabilities.can_run, "read-only adapter must not enable run")
+    _assert(not snapshot.status.capabilities.can_reset, "read-only adapter must not enable reset")
     _assert(not snapshot.status.capabilities.can_step, "read-only adapter must not enable step")
     if args.attempt_existing and snapshot.connection_established:
         _assert(snapshot.status.capabilities.can_sync_breakpoints, "connected adapter should expose explicit breakpoint sync")

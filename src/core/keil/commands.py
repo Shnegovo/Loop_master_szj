@@ -23,6 +23,7 @@ class KeilCommandKind(str, Enum):
     DISCONNECT = "disconnect"
     HALT = "halt"
     RUN = "run"
+    RESET = "reset"
     STEP = "step"
     STEP_OVER = "step_over"
     SYNC_BREAKPOINTS = "sync_breakpoints"
@@ -761,6 +762,7 @@ def _guards_for(
     if kind in {
         KeilCommandKind.HALT,
         KeilCommandKind.RUN,
+        KeilCommandKind.RESET,
         KeilCommandKind.STEP,
         KeilCommandKind.STEP_OVER,
         KeilCommandKind.DISCONNECT,
@@ -804,6 +806,8 @@ def _command_preview(
         return ("UVSC_DBG_STOP_EXECUTION(handle)", "UVSC_DBG_STATUS(handle)", "read_pc_location()")
     if kind == KeilCommandKind.RUN:
         return ("UVSC_DBG_START_EXECUTION(handle)", "UVSC_DBG_STATUS(handle)")
+    if kind == KeilCommandKind.RESET:
+        return ('UVSC_DBG_EXEC_CMD(handle, "RESET")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
     if kind == KeilCommandKind.STEP:
         return ('UVSC_DBG_EXEC_CMD(handle, "T")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
     if kind == KeilCommandKind.STEP_OVER:
@@ -1027,6 +1031,7 @@ def _expected_effect(kind: KeilCommandKind) -> str:
         KeilCommandKind.DISCONNECT: "关闭桥接连接但不关闭 Keil 或复位目标",
         KeilCommandKind.HALT: "让目标暂停并刷新 PC/source marker",
         KeilCommandKind.RUN: "让目标继续运行并刷新运行状态",
+        KeilCommandKind.RESET: "复位目标并刷新 PC/source marker",
         KeilCommandKind.STEP: "执行一次单步并刷新 PC/source marker",
         KeilCommandKind.STEP_OVER: "执行一次跨过并刷新 PC/source marker",
         KeilCommandKind.SYNC_BREAKPOINTS: "将本地断点差异同步到 Keil 并回读验证",

@@ -17,6 +17,7 @@ class DebugCommandKind(str, Enum):
     DISCONNECT = "disconnect"
     HALT = "halt"
     RUN = "run"
+    RESET = "reset"
     STEP = "step"
     STEP_OVER = "step_over"
     SYNC_BREAKPOINTS = "sync_breakpoints"

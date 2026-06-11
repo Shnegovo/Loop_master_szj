@@ -5581,3 +5581,105 @@ mode-selectable instead of forcing every waveform through a debugger.
   OpenOCD/pyOCD/TI watch polling and file replay.
 - Continue avoiding Step Out until a live probe can prove a consistent
   paused-after-action result across source locations.
+
+## Milestone 61 - Keil Reset Runtime Control
+
+### Goal
+
+Add one more real Keil debugger control only after live verification: Reset must
+be exposed as its own capability, execute through UVSOCK, leave the target in a
+known state, and refresh PC/source evidence.
+
+### Completed
+
+- Tested Keil reset command candidates against the connected ST-Link/F401
+  probe.
+  - `RESET` succeeds through `UVSC_DBG_EXEC_CMD`.
+  - `RST` also succeeds as an alias, but LoopMaster uses only `RESET` to keep
+    UI, preview and audit wording consistent.
+  - Reset leaves the target paused and PC maps to
+    `startup_stm32f401ccux.s:41`.
+- Added explicit reset capability.
+  - `DebugCapabilities` and `DebugSessionCapabilities` now have `can_reset`.
+  - Generic debug session command matrix includes `reset`.
+  - `DebugCommandKind` and `KeilCommandKind` include `reset`.
+  - Read-only snapshots and placeholder backends assert that reset is not
+    enabled by accident.
+- Added Keil reset execution.
+  - `KeilUvscLiveSession.reset_target()` sends `RESET` and polls until target
+    state is paused.
+  - `KeilUvSockBackendAdapter.reset_target()` refreshes the backend snapshot
+    and PC/source evidence after execution.
+  - UI runtime-control path now handles `reset` with the same explicit
+    confirmation flow as Halt/Run/Step/Step Over.
+- Added Debug Workbench UI action.
+  - New `复位` button in the action row.
+  - Top action buttons now use tighter minimum width to preserve 1440px and
+    narrow-probe layout.
+- Hardened UVSOCK connection setup.
+  - `UVSC_GEN_SET_OPTIONS` is treated as optional in
+    `KeilUvscLiveSession.connect_existing()`.
+  - If Keil returns an internal error while setting this option, the session
+    records `options_warning` and continues to `enter_debug`, letting real
+    status/command/PC readback decide success.
+  - Direct `set_extended_stack()` remains strict for low-level tests and
+    explicit callers.
+- Extended live PC probe.
+  - `tools/keil_pc_location_probe.py` now supports `--reset`.
+  - The probe asserts reset succeeds, target remains paused, and PC/source
+    mapping exists after reset.
+
+### Verified
+
+- Reset candidate inline probe:
+  - `RESET`: success, target paused, after PC `0x08000054 ->
+    startup_stm32f401ccux.s:41`.
+  - `RST`: success, target paused, same PC/source; kept as observed alias only.
+- `python -m py_compile src\core\debug_workbench.py src\core\debug_transactions.py src\core\debug_session_contract.py src\core\debug_backend.py src\core\keil\uvsock.py src\core\keil\backend.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\debug_workbench_model_probe.py tools\debug_session_contract_probe.py tools\debug_session_controller_probe.py tools\debug_transaction_shell_probe.py tools\keil_command_transaction_probe.py tools\debug_backend_adapter_probe.py tools\ui_debug_workbench_probe.py tools\keil_pc_location_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS; adapter reset execution refreshes paused snapshot.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py`
+  - PASS; read-only adapter still does not enable reset.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-reset --width 1440 --height 900`
+  - PASS; screenshot reviewed and action row still fits after adding `复位`.
+- `python tools\keil_pc_location_probe.py --live --step --step-over --reset --keil-root D:\Keil --json`
+  - PASS on connected ST-Link/F401.
+  - Reset result: `UVSOCK 复位成功，目标已暂停`.
+  - After reset PC: `startup_stm32f401ccux.s:41`.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on connected ST-Link/F401.
+  - Confirmed live variable read/write still works after reset support.
+  - `debug_setpoint @ 0x20000008 = 6000`; command exit code `0`.
+- Keil/uVision cleanup check:
+  - Closed the test-created UV4 session.
+  - `Get-Process UV4,uVision` returned no remaining process.
+
+### Notes
+
+- Reset is high-risk runtime control even though it leaves the target paused.
+  It remains behind explicit user confirmation.
+- `UVSC_GEN_SET_OPTIONS` can return `UVSC Internal Error` while an otherwise
+  valid Keil session is running. The new connection path no longer treats that
+  optional setup step as fatal.
+- Step Out remains intentionally unavailable.
+
+### Next Target
+
+- Investigate run-to-cursor as a temporary-breakpoint transaction, with strict
+  cleanup of the temporary breakpoint before exposing any UI button.
+- Start defining the acquisition-source model so lightweight scope, serial
+  scope, Keil polling and later OpenOCD/pyOCD/TI polling can share waveform UI
+  without sharing debugger state.

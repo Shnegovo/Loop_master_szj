@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--live", action="store_true", help="Read PC from an existing Keil UVSOCK debug session.")
     parser.add_argument("--step", action="store_true", help="With --live, execute one Keil trace step and read PC again.")
     parser.add_argument("--step-over", action="store_true", help="With --live, execute one Keil step-over and read PC again.")
+    parser.add_argument("--reset", action="store_true", help="With --live, reset the target and read PC again.")
     parser.add_argument("--keil-root", default="D:\\Keil")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -76,8 +77,10 @@ def main() -> int:
             after_step = None
             step_over_result = None
             after_step_over = None
+            reset_result = None
+            after_reset = None
             halted_before_step = None
-            if args.step or args.step_over:
+            if args.step or args.step_over or args.reset:
                 try:
                     if session.target_running() is True:
                         halted_before_step = session.halt_target()
@@ -89,6 +92,9 @@ def main() -> int:
             if args.step_over:
                 step_over_result = session.step_over_target()
                 after_step_over = read_keil_pc_location(session, axf_path=AXF, source_roots=(SOURCE_ROOT,))
+            if args.reset:
+                reset_result = session.reset_target()
+                after_reset = read_keil_pc_location(session, axf_path=AXF, source_roots=(SOURCE_ROOT,))
         record["live"] = {
             "succeeded": live.succeeded,
             "pc": live.pc_location.to_record(),
@@ -122,6 +128,19 @@ def main() -> int:
             _assert(step_over_result is not None and step_over_result.succeeded, f"live step-over failed: {step_over_result!r}")
             _assert(step_over_result.target_running is False, f"live step-over should leave target paused: {step_over_result!r}")
             _assert(after_step_over is not None and after_step_over.succeeded, f"after-step-over PC read failed: {after_step_over!r}")
+        if args.reset:
+            record["reset"] = {
+                "succeeded": reset_result.succeeded if reset_result is not None else False,
+                "summary": reset_result.summary() if reset_result is not None else "",
+                "error": reset_result.error if reset_result is not None else "",
+                "target_running": reset_result.target_running if reset_result is not None else None,
+                "after_pc": after_reset.pc_location.to_record() if after_reset is not None else None,
+                "halted_before_step": halted_before_step.summary() if halted_before_step is not None else "",
+            }
+            _assert(reset_result is not None and reset_result.succeeded, f"live reset failed: {reset_result!r}")
+            _assert(reset_result.target_running is False, f"live reset should leave target paused: {reset_result!r}")
+            _assert(after_reset is not None and after_reset.succeeded, f"after-reset PC read failed: {after_reset!r}")
+            _assert(after_reset.pc_location.path is not None, f"after-reset source mapping missing: {after_reset!r}")
 
     if args.json:
         print(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True, default=str))

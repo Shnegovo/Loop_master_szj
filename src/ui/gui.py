@@ -2166,7 +2166,7 @@ class MainWindow(QMainWindow):
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
-        if action_key in {"halt", "run", "step", "step_over"}:
+        if action_key in {"halt", "run", "reset", "step", "step_over"}:
             self._control_keil_runtime_from_workbench(action_key)
             return
         if action_key == "sync_breakpoints":
@@ -2963,6 +2963,7 @@ class MainWindow(QMainWindow):
         method_name = {
             "halt": "halt_target",
             "run": "run_target",
+            "reset": "reset_target",
             "step": "step_target",
             "step_over": "step_over_target",
         }.get(action_key, "")
@@ -2977,6 +2978,13 @@ class MainWindow(QMainWindow):
         if action_key == "run" and status.state != DebugRuntimeState.PAUSED:
             self._show_warning("Keil 运行", "目标当前不是暂停状态。")
             return
+        if action_key == "reset" and status.state not in {
+            DebugRuntimeState.KEIL_ATTACHED,
+            DebugRuntimeState.PAUSED,
+            DebugRuntimeState.RUNNING,
+        }:
+            self._show_warning("Keil 复位", "目标当前尚未连接调试会话。")
+            return
         if action_key == "step" and status.state != DebugRuntimeState.PAUSED:
             self._show_warning("Keil 单步", "目标当前不是暂停状态。")
             return
@@ -2986,6 +2994,7 @@ class MainWindow(QMainWindow):
         label = {
             "halt": "暂停",
             "run": "运行",
+            "reset": "复位",
             "step": "单步",
             "step_over": "跨过",
         }.get(action_key, action_key)

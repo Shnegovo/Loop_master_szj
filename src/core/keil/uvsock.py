@@ -119,6 +119,7 @@ class UvscRuntimeControlResult:
         label = {
             "run": "运行",
             "halt": "暂停",
+            "reset": "复位",
             "step": "单步",
             "step_over": "跨过",
         }.get(self.action, self.action)
@@ -278,6 +279,7 @@ class KeilUvscLiveSession:
         self.handle = int(handle)
         self._owns_uvsc = bool(owns_uvsc)
         self._closed = False
+        self.options_warning = ""
 
     @classmethod
     def connect_existing(
@@ -325,7 +327,10 @@ class KeilUvscLiveSession:
                 raise UvscError("UVSC_OpenConnection", open_code)
             session = cls(library, handle.value, owns_uvsc=True)
             if extended_stack:
-                session.set_extended_stack(True)
+                try:
+                    session.set_extended_stack(True)
+                except UvscError as exc:
+                    session.options_warning = str(exc)
             if require_debug:
                 session.enter_debug()
             return session
@@ -391,6 +396,15 @@ class KeilUvscLiveSession:
         return self._runtime_control("run", "UVSC_DBG_START_EXECUTION", expected_running=True)
 
     def step_target(self, command: str = "T", *, action: str = "step") -> UvscRuntimeControlResult:
+        return self._exec_pausing_command(command, action=action)
+
+    def step_over_target(self) -> UvscRuntimeControlResult:
+        return self._exec_pausing_command("P", action="step_over")
+
+    def reset_target(self) -> UvscRuntimeControlResult:
+        return self._exec_pausing_command("RESET", action="reset")
+
+    def _exec_pausing_command(self, command: str, *, action: str) -> UvscRuntimeControlResult:
         try:
             self.execute_command(command, echo=True)
         except Exception as exc:
@@ -425,9 +439,6 @@ class KeilUvscLiveSession:
             target_running=target_running,
             error=error,
         )
-
-    def step_over_target(self) -> UvscRuntimeControlResult:
-        return self.step_target(command="P", action="step_over")
 
     def _runtime_control(
         self,

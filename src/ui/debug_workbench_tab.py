@@ -707,6 +707,7 @@ class DebugWorkbenchTab(QWidget):
             ("disconnect", "断开"),
             ("halt", "暂停"),
             ("run", "运行"),
+            ("reset", "复位"),
             ("step", "单步"),
             ("step_over", "跨过"),
             ("sync_breakpoints", "断点"),
@@ -715,7 +716,7 @@ class DebugWorkbenchTab(QWidget):
             button = QPushButton(title)
             button.setObjectName("debugActionButton")
             button.setCursor(Qt.PointingHandCursor)
-            button.setMinimumWidth(50)
+            button.setMinimumWidth(46)
             button.setEnabled(False)
             button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
             self._action_buttons[key] = button
@@ -1964,6 +1965,11 @@ class DebugWorkbenchTab(QWidget):
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.state.value == "paused"
+            ) or (
+                key == "reset"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value in {"keil_attached", "paused", "running"}
             ) or (
                 key in {"step", "step_over"}
                 and self._backend_controls_ready

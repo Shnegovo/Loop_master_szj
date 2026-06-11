@@ -54,7 +54,7 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - `tools\keil_uvsock_preflight_probe.py --keil-root D:\Keil` 已确认 DLL 可加载；当前没有运行中的 uVision，因此只能证明可预检，不能宣称已连接真实会话。
 - Keil live write 已经有真实 UVSOCK 路径：F401 probe 项目可通过 `debug_setpoint` 做写入/回读烟测；UI 现在会根据工程识别 F401 probe 或平衡车 F103 工程的变量预设。
 - Keil Halt/Run 已经接入显式 UVSOCK runtime control：`暂停` / `运行` 会调用 start/stop execution 并回读状态，但仍必须由用户点击并确认。
-- Keil PC/源码定位、单步和跨过已经有真实 UVSOCK 路径：暂停态会用 `LOG+EVAL PC` 回读 PC 并映射到 AXF/DWARF 源码；`T` 单步和 `P` 跨过都已在 ST-Link/F401 上验证会回到暂停态并刷新源码行。
+- Keil PC/源码定位、复位、单步和跨过已经有真实 UVSOCK 路径：暂停态会用 `LOG+EVAL PC` 回读 PC 并映射到 AXF/DWARF 源码；`RESET` 复位、`T` 单步和 `P` 跨过都已在 ST-Link/F401 上验证会回到暂停态并刷新源码行。
 - Keil Step Out 暂不开放：本机实测 `O` 在当前 F401 probe 主循环上下文没有稳定回到暂停态，不能作为用户按钮暴露。
 - 平衡车参考工程已确认：`Target 1`、`STM32F103C8`、输出 `Objects\Project.axf`，当前 AXF 未生成；首批建议变量为 `SpeedLevel`、`AngleAcc_Offset`、`AnglePID.Kp/Kd`，首批示波变量为 `Angle`、`AveSpeed`、`PWML/PWMR`。
 - 结论：Keil 方案真实可行，但必须分级实测：先只读连接和状态快照，再读变量/断点快照，再 opt-in 写变量、断点同步和 Halt/Run/Step/Step Over。

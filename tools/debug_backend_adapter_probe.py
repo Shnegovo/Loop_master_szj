@@ -79,7 +79,7 @@ def _fake_launch_plan():
 def main() -> int:
     import src.core.keil.backend as backend_module
 
-    calls = {"preflight": 0, "connect": 0, "launch": 0, "halt": 0, "run": 0}
+    calls = {"preflight": 0, "connect": 0, "launch": 0, "halt": 0, "run": 0, "reset": 0}
     fake_running = {"value": True}
     breakpoint_text = "Breakpoints\n1 enabled D:\\demo\\Core\\Src\\main.c:42\n"
 
@@ -140,6 +140,18 @@ def main() -> int:
                 target_running=True,
             )
 
+        def reset_target(self):
+            calls["reset"] += 1
+            fake_running["value"] = False
+            return UvscRuntimeControlResult(
+                attempted=True,
+                action="reset",
+                succeeded=True,
+                status_code=0,
+                status_name="UVSC_STATUS_SUCCESS",
+                target_running=False,
+            )
+
         def try_execute_command_text(self, command: str, *, echo: bool = False):
             return breakpoint_text, ""
 
@@ -195,7 +207,10 @@ def main() -> int:
         caps = snapshot.status.capabilities
         _assert(caps.can_read_variables, "read-only snapshot should allow read capability")
         _assert(not caps.can_write_variables, "read-only snapshot must not allow writes")
-        _assert(not caps.can_halt and not caps.can_run and not caps.can_step, "read-only snapshot must not allow run control")
+        _assert(
+            not caps.can_halt and not caps.can_run and not caps.can_reset and not caps.can_step,
+            "read-only snapshot must not allow run control",
+        )
         _assert(caps.can_sync_breakpoints, "connected snapshot should expose explicit breakpoint sync capability")
         contract = snapshot.to_session_contract()
         _assert(contract.state == DebugSessionState.RUNNING, "running contract state mismatch")
@@ -236,6 +251,14 @@ def main() -> int:
         _assert(run_result.snapshot is not None and run_result.snapshot.status.state == DebugRuntimeState.RUNNING, "run should refresh running snapshot")
         _assert(run_result.target_running is True, "run target state mismatch")
         _assert_data_only(run_result)
+
+        reset = adapter.reset_target(project_path="D:/demo/demo.uvprojx", target_name="DebugDemo")
+        _assert(calls["reset"] == 1, "reset should call runtime session once")
+        _assert(calls["connect"] == 4, "reset should refresh read-only status after execution")
+        _assert(reset.succeeded, f"reset should succeed: {reset}")
+        _assert(reset.snapshot is not None and reset.snapshot.status.state == DebugRuntimeState.PAUSED, "reset should refresh paused snapshot")
+        _assert(reset.target_running is False, "reset target state mismatch")
+        _assert_data_only(reset)
     finally:
         backend_module.check_uvsock_preflight = original_check
         backend_module.build_uvision_uvsock_command = original_launch

@@ -82,6 +82,7 @@ class DebugCapabilities:
     can_write_variables: bool = False
     can_halt: bool = False
     can_run: bool = False
+    can_reset: bool = False
     can_step: bool = False
     can_sync_breakpoints: bool = False
 
@@ -307,7 +308,12 @@ class DebugWorkbenchSession:
         state = DebugRuntimeState.RUNNING if running else DebugRuntimeState.PAUSED
         capabilities = default_debug_capabilities(
             state,
-            runtime_control=self._status.capabilities.can_halt or self._status.capabilities.can_run,
+            runtime_control=(
+                self._status.capabilities.can_halt
+                or self._status.capabilities.can_run
+                or self._status.capabilities.can_reset
+                or self._status.capabilities.can_step
+            ),
             breakpoint_sync=self._status.capabilities.can_sync_breakpoints,
             variable_write=self._status.capabilities.can_write_variables,
         )
@@ -417,6 +423,7 @@ def default_debug_capabilities(
         can_write_variables=attached and variable_write,
         can_halt=attached and runtime_control and state_value != DebugRuntimeState.PAUSED,
         can_run=attached and runtime_control and state_value != DebugRuntimeState.RUNNING,
+        can_reset=attached and runtime_control,
         can_step=attached and runtime_control and state_value == DebugRuntimeState.PAUSED,
         can_sync_breakpoints=attached and breakpoint_sync,
     )
@@ -437,6 +444,7 @@ def debug_actions_for_status(status: DebugWorkbenchStatus) -> tuple[DebugAction,
         DebugAction("disconnect", "断开", caps.can_disconnect, _disabled_reason(caps.can_disconnect, status)),
         DebugAction("halt", "暂停", caps.can_halt and running, _disabled_reason(caps.can_halt and running, status)),
         DebugAction("run", "运行", caps.can_run and (paused or attached), _disabled_reason(caps.can_run and (paused or attached), status)),
+        DebugAction("reset", "复位", caps.can_reset and attached, _disabled_reason(caps.can_reset and attached, status)),
         DebugAction("step", "单步", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
         DebugAction("step_over", "跨过", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
         DebugAction(
@@ -547,6 +555,20 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             ),
             safety_notes=("继续运行会恢复真实目标行为，需要确认外设和执行环境安全",),
             preview_steps=("发送 Run 命令", "确认运行状态", "更新工作台状态灯"),
+        ),
+        _command_plan(
+            actions,
+            "reset",
+            "复位目标",
+            DebugPlanRisk.HIGH,
+            f"请求{control_backend}复位 MCU 并回读 PC",
+            requirements=(
+                "已完成连接烟测并确认运行控制能力",
+                "确认复位不会损坏外设状态或当前实验流程",
+                "复位后读取 PC 并重新定位启动源码",
+            ),
+            safety_notes=("复位会重启真实 MCU，所有外设、通信和控制状态都会被打断",),
+            preview_steps=("发送 Reset 命令", "确认暂停状态", "读取 PC 和启动源码位置"),
         ),
         _command_plan(
             actions,

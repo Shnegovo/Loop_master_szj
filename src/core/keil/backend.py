@@ -346,6 +346,18 @@ class KeilUvSockBackendAdapter:
             target_name=target_name,
         )
 
+    def reset_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        return self._runtime_control(
+            "reset",
+            project_path=project_path,
+            target_name=target_name,
+        )
+
     def step_target(
         self,
         *,
@@ -446,6 +458,8 @@ class KeilUvSockBackendAdapter:
                     uvsc_result = session.halt_target()
                 elif action == "run":
                     uvsc_result = session.run_target()
+                elif action == "reset":
+                    uvsc_result = session.reset_target()
                 elif action == "step":
                     uvsc_result = session.step_target()
                 elif action == "step_over":
@@ -478,7 +492,7 @@ class KeilUvSockBackendAdapter:
             error = "暂停后状态回读仍不是已暂停"
         elif action == "run" and snapshot.target_running is not True:
             error = "运行后状态回读仍不是运行中"
-        elif action in {"step", "step_over"} and snapshot.target_running is not False:
+        elif action in {"reset", "step", "step_over"} and snapshot.target_running is not False:
             label = _runtime_action_label(action)
             error = f"{label}后状态回读仍不是已暂停"
         return KeilRuntimeControlResult(
@@ -864,6 +878,8 @@ def _runtime_action_label(action: str) -> str:
         return "Keil 继续运行"
     if action == "halt":
         return "Keil 暂停"
+    if action == "reset":
+        return "Keil 复位"
     if action == "step":
         return "Keil 单步"
     if action == "step_over":

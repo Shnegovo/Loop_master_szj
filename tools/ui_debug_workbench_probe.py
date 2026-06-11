@@ -298,6 +298,7 @@ def _focused_transaction(transactions):
         "attach",
         "halt",
         "run",
+        "reset",
         "step",
         "step_over",
         "sync_breakpoints",
@@ -737,7 +738,7 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"OpenOCD placeholder history missing generic entry: {placeholder_history_tip!r}")
                 unsafe_actions = [
                     key
-                    for key in ("halt", "run", "step", "step_over", "sync_breakpoints", "write_variables")
+                    for key in ("halt", "run", "reset", "step", "step_over", "sync_breakpoints", "write_variables")
                     if getattr(tab, "_action_buttons", {}).get(key) is not None
                     and getattr(tab, "_action_buttons", {})[key].isEnabled()
                 ]
@@ -843,6 +844,11 @@ Raw dump of debug contents of section .debug_line:
                 issues.append("read-only attach should expose explicit Keil halt action while target is running")
             elif "UVSOCK" not in halt_button.toolTip() or ("确认" not in halt_button.toolTip() and "显式" not in halt_button.toolTip()):
                 issues.append(f"Keil halt action tooltip should mention explicit confirmation: {halt_button.toolTip()!r}")
+            reset_button = getattr(tab, "_action_buttons", {}).get("reset")
+            if reset_button is None or not reset_button.isEnabled():
+                issues.append("read-only attach should expose explicit Keil reset action while target is attached")
+            elif "UVSOCK" not in reset_button.toolTip() or ("确认" not in reset_button.toolTip() and "显式" not in reset_button.toolTip()):
+                issues.append(f"Keil reset action tooltip should mention explicit confirmation: {reset_button.toolTip()!r}")
             write_button = getattr(tab, "_action_buttons", {}).get("write_variables")
             if write_button is None or not write_button.isEnabled():
                 issues.append("read-only attach should expose explicit Keil live write action")
@@ -1182,6 +1188,8 @@ Raw dump of debug contents of section .debug_line:
         paused_plans = _plan_rows(tab)
         if paused_plans.get("继续运行", {}).get("status") != "计划就绪":
             issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
+        if paused_plans.get("复位目标", {}).get("status") != "计划就绪":
+            issues.append(f"reset plan should be ready but disabled while paused: {paused_plans.get('复位目标')!r}")
         if paused_plans.get("单步", {}).get("status") != "计划就绪":
             issues.append(f"step plan should be ready but disabled while paused: {paused_plans.get('单步')!r}")
         if paused_plans.get("跨过", {}).get("status") != "计划就绪":
