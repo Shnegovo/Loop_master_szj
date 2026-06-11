@@ -6756,3 +6756,80 @@ safe commands look like a hard Keil failure.
   - map remote breakpoint IDs and addresses back into local verification,
   - then run a live F401 breakpoint sync smoke that does not leave residual
     breakpoints behind.
+
+## Milestone 78 - Live F401 Keil Breakpoint Sync Smoke
+
+### Goal
+
+Prove the normal Keil breakpoint sync path can set a real breakpoint, read it
+back from Keil, map it to source, and clean it up without leaving residual
+breakpoints or UV4 processes.
+
+### Completed
+
+- Added `tools\keil_breakpoint_sync_live_probe.py`.
+  - Uses the same `KeilUvSockBackendAdapter.sync_breakpoints()` path as the
+    Debug Workbench.
+  - Dry-run mode resolves the target source line/address without touching
+    hardware.
+  - `--execute` mode first requires a complete read-only `BL` snapshot before
+    setting anything.
+  - Refuses to touch the target if a matching user breakpoint already exists.
+  - Adds one breakpoint, identifies the new remote id by comparing before/after
+    snapshots, deletes only that new remote breakpoint, and verifies no leak.
+  - Uses a hard exit after `--execute` cleanup to avoid UVSOCK/Python teardown
+    access violations while preserving the real probe exit code.
+
+### Verified
+
+- `python -m py_compile tools\keil_breakpoint_sync_live_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_live_probe.py --json`
+  - PASS.
+  - Dry-run only.
+  - Resolved F401 test line to `0x08000164`.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- Live setup:
+  - `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --no-write --json`
+  - PASS.
+  - Launched Keil PID `40948`.
+  - Connected in 4 attempts.
+- Live breakpoint sync:
+  - `python tools\keil_breakpoint_sync_live_probe.py --keil-root D:\Keil --execute --json`
+  - PASS.
+  - `LIVE_LASTEXIT=0`.
+  - Before snapshot: complete, 0 breakpoints.
+  - Add command: `BS 0x08000164`.
+  - Add result: success, 1/1 command succeeded.
+  - Remote readback: id `0`, address `0x08000164`, mapped to `main.c:62`.
+  - Cleanup command: `BK 0`.
+  - Cleanup result: success, 1/1 command succeeded.
+  - After cleanup: complete, 0 breakpoints.
+  - Leak check: `[]`.
+- Process cleanup:
+  - Closed/killed test-launched UV4 after the smoke.
+  - Final process check: `NO_UVISION_PROCESS`.
+
+### Notes
+
+- The first live run completed and cleaned the breakpoint but reported a Windows
+  access-violation exit code during interpreter teardown. The live probe now
+  hard-exits only after cleanup in `--execute` mode, and the repeated live run
+  returned `LIVE_LASTEXIT=0`.
+- This is the first full Keil breakpoint sync proof, separate from the earlier
+  run-to-cursor temporary-breakpoint proof.
+
+### Next Target
+
+- Pull the live sync evidence into the Debug Workbench UX:
+  - after a successful sync, show the remote id/address/source mapping in the
+    local breakpoint verification message,
+  - keep the compact sync strip and live-loop strip aligned with the latest
+    remote snapshot,
+  - then move toward the first OpenOCD/GDB no-process profile or TI MSPM0G3507
+    research pass.
