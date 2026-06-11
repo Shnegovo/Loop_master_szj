@@ -185,6 +185,9 @@ def main() -> int:
         button = tab._action_buttons.get("sync_breakpoints")
         _assert(button is not None, "sync breakpoint action button missing")
         _assert(button.isEnabled(), "sync breakpoint action button should be enabled")
+        _assert(button.text() == "同步断点", f"sync breakpoint action label mismatch: {button.text()!r}")
+        _assert("推送本地" in button.toolTip(), f"sync breakpoint tooltip should expose push-local mode: {button.toolTip()!r}")
+        _assert(tab.breakpoint_editor_status.text() == "待同步", f"new local breakpoint should be marked pending: {tab.breakpoint_editor_status.text()!r}")
 
         confirm_calls, restore_confirmation = _patch_confirmation()
         try:
@@ -210,6 +213,7 @@ def main() -> int:
             any("等待断点列表回读" in item.message for item in breakpoint_rows),
             f"accepted-command evidence missing: {breakpoint_rows!r}",
         )
+        _assert(tab.breakpoint_editor_status.text() == "待回读", f"accepted breakpoint should wait for readback: {tab.breakpoint_editor_status.text()!r}")
         audit_lines = (output_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         _assert(audit_lines, "breakpoint sync audit log missing")
         record = json.loads(audit_lines[-1])
@@ -264,6 +268,7 @@ def main() -> int:
             any(item.line == 5 and item.verified and "id 11" in item.message for item in verified_rows),
             f"remote id evidence missing from verified breakpoint: {verified_rows!r}",
         )
+        _assert(tab.breakpoint_editor_status.text() == "已验证", f"verified breakpoint chip mismatch: {tab.breakpoint_editor_status.text()!r}")
         _assert(tab.remote_breakpoint_count_label.text() == "远端 1", f"remote mirror count mismatch: {tab.remote_breakpoint_count_label.text()!r}")
         _assert(tab.remote_breakpoint_table.rowCount() == 1, f"remote mirror table row count mismatch: {tab.remote_breakpoint_table.rowCount()}")
         _assert(

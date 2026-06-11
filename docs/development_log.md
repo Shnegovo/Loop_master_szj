@@ -7211,3 +7211,76 @@ same risk, speed, or control surface.
     view,
   - then start wiring debugger-backed variable/watch samples into a shared
     acquisition session interface instead of only source descriptors.
+
+## Milestone 85 - Keil Breakpoint Usability Signals
+
+### Goal
+
+Make the existing Keil breakpoint foundation easier to understand during real
+use. The user should not have to guess whether a red gutter marker is only local,
+waiting for Keil readback, or already verified by the remote debugger.
+
+### Completed
+
+- Renamed the top action button from `断点` to `同步断点`, keeping the action
+  explicit and harder to confuse with merely toggling a local gutter marker.
+- Added a selected-breakpoint status chip to the quick editor:
+  - `待同步` for a local breakpoint that has not been read back,
+  - `待回读` after commands were accepted but Keil breakpoint list readback is
+    still incomplete,
+  - `未验证` when the backend reports a verification issue,
+  - `已验证` when a remote snapshot confirms the breakpoint.
+- Fed the current breakpoint diff summary into the sync button tooltip:
+  - full-diff vs push-local mode,
+  - add/remove/enable/disable/condition counts,
+  - verification counts,
+  - remote snapshot incompleteness and limited-operation warnings.
+- Kept all real sync behavior unchanged:
+  - no new Keil commands,
+  - no automatic sync,
+  - existing confirmation dialog and audit log remain the execution boundary.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_keil_breakpoint_sync_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-usability --width 1440 --height 900`
+  - PASS.
+  - Screenshots checked manually:
+    - `tools\ui-debug-workbench-breakpoint-usability\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breakpoint-usability\04_debug_breakpoint_sync_strip.png`
+- Regression probes:
+  - `python tools\ui_keil_runtime_control_probe.py`
+    - PASS.
+  - `python tools\ui_keil_run_to_cursor_probe.py`
+    - PASS.
+  - `python tools\ui_keil_watch_scope_probe.py`
+    - PASS.
+  - `python tools\debug_backend_adapter_probe.py`
+    - PASS.
+  - `python tools\debug_session_controller_probe.py`
+    - PASS.
+  - `python tools\acquisition_sources_probe.py`
+    - PASS.
+  - `python tools\ti_mspm0_profile_probe.py --json`
+    - PASS.
+
+### Notes
+
+- This stage improves the breakpoint UX around the already-existing Keil sync
+  executor. It does not start Keil, OpenOCD, pyOCD, TI tools, or touch hardware.
+- The UI now makes the local/remote distinction visible at the exact place the
+  user edits a breakpoint, which should reduce mistakes during real debugging.
+
+### Next Target
+
+- Continue Keil basics by making breakpoint workflows closer to a modern IDE:
+  - add a clearer current-line breakpoint affordance,
+  - keep run-to-cursor and regular breakpoint evidence separate,
+  - then move Keil Watch samples toward the shared acquisition-session runtime.

@@ -914,6 +914,8 @@ Raw dump of debug contents of section .debug_line:
             sync_button = getattr(tab, "_action_buttons", {}).get("sync_breakpoints")
             if sync_button is None or not sync_button.isEnabled():
                 issues.append("read-only attach should expose explicit Keil breakpoint sync action")
+            elif sync_button.text() != "同步断点":
+                issues.append(f"Keil breakpoint sync button label mismatch: {sync_button.text()!r}")
             elif "确认" not in sync_button.toolTip() and "显式" not in sync_button.toolTip():
                 issues.append(f"Keil breakpoint sync tooltip should mention explicit confirmation: {sync_button.toolTip()!r}")
             remote_refresh = getattr(tab, "remote_breakpoint_refresh_button", None)
@@ -1145,6 +1147,11 @@ Raw dump of debug contents of section .debug_line:
         sync_strip_tooltip = getattr(tab, "breakpoint_sync_mode_label", None).toolTip() if hasattr(tab, "breakpoint_sync_mode_label") else ""
         if "keil-ui-remote-breakpoint-snapshot-demo" not in sync_strip_tooltip or "完整差分同步" not in sync_strip_tooltip:
             issues.append(f"breakpoint sync strip tooltip mismatch: {sync_strip_tooltip!r}")
+        sync_button = getattr(tab, "_action_buttons", {}).get("sync_breakpoints")
+        if sync_button is None or sync_button.text() != "同步断点":
+            issues.append(f"breakpoint sync action label mismatch: {getattr(sync_button, 'text', lambda: None)()!r}")
+        elif "完整差分同步" not in sync_button.toolTip() or "点击后会再次确认" not in sync_button.toolTip():
+            issues.append(f"breakpoint sync action tooltip mismatch: {sync_button.toolTip()!r}")
         remote_state_text = getattr(tab, "remote_breakpoint_state_label", None).text() if hasattr(tab, "remote_breakpoint_state_label") else ""
         remote_count_text = getattr(tab, "remote_breakpoint_count_label", None).text() if hasattr(tab, "remote_breakpoint_count_label") else ""
         if "完整" not in remote_state_text:
@@ -1238,6 +1245,8 @@ Raw dump of debug contents of section .debug_line:
             _pump(app, 0.1)
             if "main.c:12" not in tab.breakpoint_editor_label.text():
                 issues.append(f"quick editor did not follow selected breakpoint: {tab.breakpoint_editor_label.text()!r}")
+            if getattr(tab, "breakpoint_editor_status", None) is None or tab.breakpoint_editor_status.text() not in {"待同步", "未验证", "已验证"}:
+                issues.append(f"quick editor status chip mismatch: {getattr(getattr(tab, 'breakpoint_editor_status', None), 'text', lambda: '')()!r}")
             if tab.breakpoint_editor_condition.text() != "speed_error > 40":
                 issues.append(f"quick editor condition did not load selected breakpoint: {tab.breakpoint_editor_condition.text()!r}")
             tab.breakpoint_editor_clear.click()

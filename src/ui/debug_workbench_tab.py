@@ -790,7 +790,7 @@ class DebugWorkbenchTab(QWidget):
             (("discover", "发现"), ("build_project", "构建"), ("launch_uvsock", "启动"), ("auto_debug", "调试")),
             (("attach", "连接"), ("disconnect", "断开")),
             (("halt", "暂停"), ("run", "运行"), ("reset", "复位"), ("step", "单步"), ("step_over", "跨过"), ("run_to_cursor", "到光标")),
-            (("sync_breakpoints", "断点"), ("write_variables", "写入")),
+            (("sync_breakpoints", "同步断点"), ("write_variables", "写入")),
         )
         for group_index, group in enumerate(groups):
             if group_index:
@@ -799,7 +799,7 @@ class DebugWorkbenchTab(QWidget):
                 button = QPushButton(title)
                 button.setObjectName("debugActionButton")
                 button.setCursor(Qt.PointingHandCursor)
-                button.setMinimumWidth(54 if len(title) >= 3 else 46)
+                button.setMinimumWidth(72 if key == "sync_breakpoints" else 54 if len(title) >= 3 else 46)
                 button.setEnabled(False)
                 button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
                 self._action_buttons[key] = button
@@ -1204,6 +1204,11 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_editor_label = QLabel("未选择断点")
         self.breakpoint_editor_label.setObjectName("debugBreakpointEditorLabel")
         row.addWidget(self.breakpoint_editor_label)
+
+        self.breakpoint_editor_status = QLabel("状态 --")
+        self.breakpoint_editor_status.setObjectName("debugBreakpointSyncChip")
+        self.breakpoint_editor_status.setToolTip("等待选择本地断点")
+        row.addWidget(self.breakpoint_editor_status)
 
         self.breakpoint_editor_enabled = QPushButton("启用")
         self.breakpoint_editor_enabled.setObjectName("debugMiniToggleButton")
@@ -1727,11 +1732,18 @@ class DebugWorkbenchTab(QWidget):
         self._breakpoint_quick_syncing = True
         if breakpoint is None:
             self.breakpoint_editor_label.setText("未选择断点")
+            self.breakpoint_editor_status.setText("状态 --")
+            self.breakpoint_editor_status.setToolTip("等待选择本地断点")
+            self.breakpoint_editor_status.setProperty("state", "idle")
             self.breakpoint_editor_enabled.setChecked(False)
             self.breakpoint_editor_enabled.setText("启用")
             self.breakpoint_editor_condition.setText("")
         else:
             self.breakpoint_editor_label.setText(f"{breakpoint.path.name}:{breakpoint.line}")
+            status_text, status_state, status_tip = self._breakpoint_status_chip(breakpoint)
+            self.breakpoint_editor_status.setText(status_text)
+            self.breakpoint_editor_status.setToolTip(status_tip)
+            self.breakpoint_editor_status.setProperty("state", status_state)
             self.breakpoint_editor_enabled.setChecked(breakpoint.enabled)
             self.breakpoint_editor_enabled.setText("启用" if breakpoint.enabled else "停用")
             self.breakpoint_editor_condition.setText(breakpoint.condition)
@@ -1740,6 +1752,19 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_editor_clear.setEnabled(enabled)
         self.breakpoint_editor_delete.setEnabled(enabled)
         self._breakpoint_quick_syncing = False
+        self._repolish(self.breakpoint_editor_status)
+
+    @staticmethod
+    def _breakpoint_status_chip(breakpoint) -> tuple[str, str, str]:
+        if breakpoint.verified:
+            detail = breakpoint.message or "已由调试后端回读验证"
+            return "已验证", "ready", detail
+        message = str(getattr(breakpoint, "message", "") or "")
+        if "等待断点列表回读" in message:
+            return "待回读", "warn", message
+        if message:
+            return "未验证", "warn", message
+        return "待同步", "warn", "本地断点尚未由调试后端回读验证"
 
     def _on_breakpoint_quick_enabled_toggled(self, checked: bool) -> None:
         self.breakpoint_editor_enabled.setText("启用" if checked else "停用")
@@ -2147,7 +2172,7 @@ class DebugWorkbenchTab(QWidget):
             mode_text = "同步 等待交易"
             ops_text = f"本地 {local_count}"
             verify_text = "验证 --"
-            tooltip = "等待调试后端生成断点同步交易"
+            tooltip = f"本地断点: {local_count}\n等待调试后端生成断点同步交易"
             mode_state = "idle"
             ops_state = "idle"
             verify_state = "idle"
@@ -2204,6 +2229,24 @@ class DebugWorkbenchTab(QWidget):
             self.breakpoint_sync_ops_label,
             self.breakpoint_sync_verify_label,
         )
+        self._refresh_breakpoint_action_hint(summary, tooltip)
+
+    def _refresh_breakpoint_action_hint(self, summary, tooltip: str) -> None:
+        button = self._action_buttons.get("sync_breakpoints") if hasattr(self, "_action_buttons") else None
+        if button is None:
+            return
+        button.setText("同步断点")
+        if summary is None:
+            if button.isEnabled():
+                button.setToolTip(f"{tooltip}\n\n点击后会再次确认。")
+            return
+        detail = tooltip
+        if summary.invalid_count:
+            detail += f"\n受限操作: {summary.invalid_count}"
+        if not summary.snapshot_complete:
+            detail += "\n远端快照不完整：当前只会推送本地断点，不会删除远端断点。"
+        detail += "\n\n点击后会再次确认，并通过调试后端执行。"
+        button.setToolTip(detail)
 
     def _refresh_command_history_preview(self) -> None:
         if not hasattr(self, "plan_history_label"):
