@@ -230,6 +230,21 @@ def main() -> int:
         _assert("推送本地断点" not in second_confirm_calls[0]["message"], second_confirm_calls[0]["message"])
         full_request = fake_backend.requests[-1]
         _assert(full_request.remote_snapshot_complete, "expected full-diff mode with complete remote snapshot")
+
+        window._debug_remote_breakpoint_snapshot = complete_snapshot
+        tab._remove_breakpoint(source_path, 5)
+        _pump(app, 0.1)
+        clear_confirm_calls, restore_clear_confirmation = _patch_confirmation()
+        try:
+            window._on_debug_workbench_action("sync_breakpoints")
+            _pump(app, 0.2)
+        finally:
+            restore_clear_confirmation()
+        _assert(len(clear_confirm_calls) == 1, f"clear confirmation mismatch: {clear_confirm_calls!r}")
+        _assert("删除：1" in clear_confirm_calls[0]["message"], clear_confirm_calls[0]["message"])
+        clear_request = fake_backend.requests[-1]
+        _assert(clear_request.remote_snapshot_complete, "clear-all should require a complete remote snapshot")
+        _assert(any(command == "BK 11" for command in fake_backend.session.commands), fake_backend.session.commands)
         window.close()
         _pump(app, 0.1)
 

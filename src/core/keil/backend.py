@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from src.core.debug_variable_access import (
@@ -45,6 +45,7 @@ from src.core.keil.profile import (
     launch_keil_uvsock_from_profile,
     run_keil_project_build,
 )
+from src.core.keil.project import parse_keil_project, source_paths
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugCapabilities,
@@ -68,6 +69,7 @@ from src.core.keil.breakpoint_sync import (
     KeilBreakpointSyncRequest,
     KeilBreakpointSyncResult,
     execute_keil_breakpoint_sync,
+    map_remote_breakpoint_sources_from_axf,
     remote_snapshot_from_operations,
 )
 
@@ -576,16 +578,25 @@ class KeilUvSockBackendAdapter:
                 command=command,
             )
             if _breakpoint_text_is_meaningful(text, result):
-                return result.snapshot
+                return self._map_breakpoint_snapshot_sources(
+                    result.snapshot,
+                    project_path=project_path,
+                    target_name=target_name,
+                )
         log_text, log_error = _capture_breakpoint_list_log(session, command)
         if log_text:
-            return parse_keil_breakpoint_list(
+            result = parse_keil_breakpoint_list(
                 log_text,
                 project_path=project_path,
                 target_name=target_name,
                 captured_at=captured_at or now_iso(),
                 command="LOG+BL",
-            ).snapshot
+            )
+            return self._map_breakpoint_snapshot_sources(
+                result.snapshot,
+                project_path=project_path,
+                target_name=target_name,
+            )
         if fallback is not None:
             return fallback
         return incomplete_keil_breakpoint_snapshot(
@@ -593,6 +604,44 @@ class KeilUvSockBackendAdapter:
             target_name=target_name,
             captured_at=captured_at or now_iso(),
             error=error or log_error or "Keil 远端断点命令未返回可解析文本",
+        )
+
+    def _map_breakpoint_snapshot_sources(
+        self,
+        snapshot: KeilBreakpointRemoteSnapshot,
+        *,
+        project_path: str | Path | None,
+        target_name: str,
+    ) -> KeilBreakpointRemoteSnapshot:
+        if not snapshot.breakpoints or snapshot.complete:
+            return snapshot
+        profile = make_keil_debug_profile(
+            root=self.config.root,
+            project_path=project_path,
+            target_name=target_name,
+            port=self.config.port,
+        )
+        if not profile.axf_exists or profile.axf_path is None:
+            return snapshot
+        mapped = map_remote_breakpoint_sources_from_axf(
+            snapshot.breakpoints,
+            profile.axf_path,
+            source_roots=_source_roots_for_project_target(project_path, target_name),
+        )
+        if mapped.mapped_count <= 0:
+            return snapshot
+        complete = mapped.complete
+        error = "" if complete else f"{snapshot.error}；{mapped.mapped_count} 个远端地址已映射到源码行"
+        payload = snapshot.to_record()
+        payload["breakpoints"] = [item.to_record() for item in mapped.breakpoints]
+        payload["complete"] = complete
+        payload["error"] = error
+        return replace(
+            snapshot,
+            snapshot_id=backend_snapshot_id(payload).replace("debug-backend-", "keil-breakpoints-"),
+            complete=complete,
+            breakpoints=mapped.breakpoints,
+            error=error,
         )
 
 
@@ -679,6 +728,33 @@ def _capture_breakpoint_list_log(session, command: str) -> tuple[str, str]:
             log_path.unlink()
         except OSError:
             pass
+
+
+def _source_roots_for_project_target(project_path: str | Path | None, target_name: str) -> tuple[Path, ...]:
+    if project_path is None:
+        return ()
+    try:
+        project = parse_keil_project(project_path)
+    except Exception:
+        return (Path(project_path).expanduser().resolve().parent,)
+    target = project.default_target
+    if target_name:
+        for item in project.targets:
+            if item.name == target_name:
+                target = item
+                break
+    roots: list[Path] = [project.path.parent]
+    if target is not None:
+        for path in source_paths(target):
+            roots.append(path.parent)
+    unique: dict[str, Path] = {}
+    for root in roots:
+        try:
+            resolved = root.expanduser().resolve()
+        except OSError:
+            resolved = root.expanduser()
+        unique[str(resolved).lower()] = resolved
+    return tuple(unique.values())
 
 
 def _reason_text(reason: str) -> str:

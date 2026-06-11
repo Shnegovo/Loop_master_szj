@@ -1945,7 +1945,6 @@ class DebugWorkbenchTab(QWidget):
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.state.value in {"keil_attached", "paused", "running"}
-                and bool(self._breakpoints.all())
             )
             explicit_keil_profile_action = (
                 key in {"build_project", "launch_uvsock", "auto_debug"}
@@ -1978,7 +1977,7 @@ class DebugWorkbenchTab(QWidget):
             if enabled:
                 if explicit_keil_runtime_action:
                     button.setToolTip("显式通过 Keil/UVSOCK 改变目标运行状态，执行前会再次确认")
-                elif explicit_keil_breakpoint_sync and not action.enabled:
+                elif explicit_keil_breakpoint_sync:
                     button.setToolTip("显式通过 Keil/UVSOCK 同步本地断点，执行前会再次确认")
                 elif explicit_keil_profile_action:
                     button.setToolTip("使用当前 Keil 工程/Target 的调试档案执行显式动作")

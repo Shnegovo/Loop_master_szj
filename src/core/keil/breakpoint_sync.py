@@ -14,7 +14,7 @@ from src.core.keil.commands import (
     diff_keil_breakpoints,
 )
 from src.core.debug_snapshots import RemoteBreakpoint
-from src.core.keil.source_line_address import resolve_source_line_address
+from src.core.keil.source_line_address import resolve_address_source_line, resolve_source_line_address
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,24 @@ class KeilBreakpointSyncResult:
         }
 
 
+@dataclass(frozen=True)
+class KeilRemoteBreakpointSourceMapResult:
+    breakpoints: tuple[RemoteBreakpoint, ...]
+    mapped_count: int
+    unresolved_count: int
+    axf_path: Path | None = None
+
+    @property
+    def complete(self) -> bool:
+        return self.unresolved_count == 0
+
+    def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("远端断点源码映射", f"{self.mapped_count} 已映射 / {self.unresolved_count} 未映射"),
+            ("远端断点映射 AXF", str(self.axf_path or "--")),
+        )
+
+
 class KeilBreakpointCommandSession(Protocol):
     def execute_command(self, command: str, *, echo: bool = False) -> Any:
         ...
@@ -247,6 +265,63 @@ def execute_keil_breakpoint_sync(
         )
     snapshot = remote_snapshot if request.verify_after else None
     return KeilBreakpointSyncResult(request=request, commands=tuple(results), remote_snapshot=snapshot)
+
+
+def map_remote_breakpoint_sources_from_axf(
+    remote_breakpoints: Iterable[RemoteBreakpoint | object],
+    axf_path: str | Path | None,
+    *,
+    source_roots: Iterable[str | Path] = (),
+) -> KeilRemoteBreakpointSourceMapResult:
+    axf = Path(axf_path).expanduser().resolve() if axf_path else None
+    if axf is None or not axf.exists():
+        items = tuple(RemoteBreakpoint.from_record(item) for item in remote_breakpoints)
+        unresolved = sum(1 for item in items if item.path is None or item.line <= 0)
+        return KeilRemoteBreakpointSourceMapResult(
+            breakpoints=items,
+            mapped_count=0,
+            unresolved_count=unresolved,
+            axf_path=axf,
+        )
+    mapped: list[RemoteBreakpoint] = []
+    mapped_count = 0
+    unresolved_count = 0
+    for raw_item in remote_breakpoints:
+        item = RemoteBreakpoint.from_record(raw_item)
+        if item.path is not None and item.line > 0:
+            mapped.append(item)
+            continue
+        if item.address is None:
+            unresolved_count += 1
+            mapped.append(item)
+            continue
+        result = resolve_address_source_line(
+            axf,
+            item.address,
+            source_roots=source_roots,
+            allow_nearest=False,
+        )
+        if not result.resolved:
+            unresolved_count += 1
+            mapped.append(item)
+            continue
+        mapped_count += 1
+        mapped.append(
+            replace(
+                item,
+                path=result.path,
+                line=result.line,
+                raw_location=f"{result.path}:{result.line} @ 0x{int(item.address):08X}",
+                verified=True,
+                message="Keil 地址断点已映射到源码行",
+            )
+        )
+    return KeilRemoteBreakpointSourceMapResult(
+        breakpoints=tuple(mapped),
+        mapped_count=mapped_count,
+        unresolved_count=unresolved_count,
+        axf_path=axf,
+    )
 
 
 def build_keil_breakpoint_audit_record(

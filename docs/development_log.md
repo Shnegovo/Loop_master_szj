@@ -5291,3 +5291,99 @@ remote evidence instead of reporting only "command accepted".
 - Then move to Keil PC/source-location readback and stepping.
 - TI MSPM0G3507 remains queued after Keil basics, starting from offline
   project/ELF/source mapping under `D:\ti` until live TI hardware exists.
+
+## Milestone 58 Update - Keil Breakpoint Full Diff Basics
+
+### Goal
+
+Turn Keil breakpoint readback into a usable management loop: map remote
+address-only breakpoints back to source lines, preserve Keil IDs, and allow
+LoopMaster to add, disable, enable, and remove breakpoints through full diff
+sync.
+
+### Completed
+
+- Added reverse AXF/DWARF mapping.
+  - `resolve_address_source_line()` maps code addresses back to source file and
+    line.
+  - Verified `0x08000164 -> main.c:62` on the F401 probe AXF.
+- Mapped Keil address-only `LOG+BL` snapshots back to source lines.
+  - Backend now uses current project/Target source roots and AXF profile data.
+  - When all remote address breakpoints map to source, the snapshot becomes
+    complete and safe for diff.
+  - Keil remote ID is preserved, for example ID `0` at `main.c:62`.
+- Enabled safe clear-all behavior.
+  - The UI no longer blocks breakpoint sync just because there are no local
+    breakpoints.
+  - If there is a complete remote snapshot, syncing an empty local set produces
+    remove operations such as `BK 0`.
+  - If no local breakpoints exist and the remote snapshot is incomplete, the UI
+    still blocks cleanup.
+- Updated UI action availability.
+  - The `同步断点` action is available after Keil attach so users can open the
+    explicit confirmation flow for add/remove/clear.
+  - The tooltip now clearly states that it performs an explicit UVSOCK action
+    with confirmation.
+- Extended probes.
+  - Address reverse mapping.
+  - Backend source mapping from real Keil-style `LOG+BL` text.
+  - UI clear-all sync path producing `BK <id>`.
+  - Workbench probe expectations updated so `sync_breakpoints` is allowed while
+    `run`/`step` remain blocked in the read-only attach scenario.
+
+### Verified
+
+- `python -m py_compile src\core\keil\source_line_address.py src\core\keil\breakpoint_sync.py src\core\keil\backend.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\keil_source_line_address_probe.py tools\keil_breakpoint_list_probe.py tools\keil_breakpoint_sync_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_source_line_address_probe.py`
+  - PASS; `line 62 -> 0x08000164` and
+    `0x08000164 -> ...\main.c:62`.
+- `python tools\keil_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS; includes clear-all remote sync.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-clear --width 1440 --height 900`
+  - PASS; screenshots generated and reviewed.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- Real F401/ST-Link Keil checks:
+  - Keil auto debug variable smoke passed.
+  - `BS 0x08000164` set and hit at `main.c:62`.
+  - Backend read-only snapshot mapped remote ID `0` to `main.c:62`.
+  - `BK 0` clear-all removed the remote breakpoint; final read-only snapshot
+    reported `complete=true`, `count=0`.
+  - Manual enable/disable script output showed `BD 0` and `BE 0` succeed with
+    remote enabled state changing false/true; the script's shell return code was
+    unreliable, so the JSON evidence was used and final cleanup was separately
+    confirmed.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- Keil breakpoint basics now cover:
+  - source line to address,
+  - address breakpoint set,
+  - target hit detection,
+  - remote address/ID readback,
+  - address to source remap,
+  - full-diff clear via `BK`,
+  - disable/enable via `BD`/`BE` verified by JSON output.
+- The remaining Keil basics before moving on:
+  - make PC/source-location readback real,
+  - add single-step/step-over behavior,
+  - improve UI layout for narrow debug-workbench widths where the top action
+    row is still crowded.
+- Test-created `UV4.exe` and `tools\keil_breakpoint_live_bl.log` were cleaned
+  up after verification.
+
+### Next Target
+
+- Implement truthful Keil PC/source-location readback.
+- Add stepping controls backed by Keil commands and refresh PC/source markers.
+- Keep TI MSPM0G3507 queued after Keil debug basics; start with offline adapter
+  parsing from `D:\ti`.

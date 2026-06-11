@@ -37,6 +37,21 @@ class KeilSourceLineAddressResult:
         return self.address is not None
 
 
+@dataclass(frozen=True)
+class KeilAddressSourceLineResult:
+    requested_address: int
+    path: Path | None = None
+    line: int = 0
+    raw_file: str = ""
+    resolved_from: str = ""
+    exact: bool = False
+    error: str = ""
+
+    @property
+    def resolved(self) -> bool:
+        return self.path is not None and self.line > 0
+
+
 _OFFSET_RE = re.compile(r"^\s*Offset:\s+")
 _DIR_ROW_RE = re.compile(r"^\s*(?P<index>\d+)\t(?P<path>.+?)\s*$")
 _FILE_ROW_RE = re.compile(r"^\s*(?P<index>\d+)\t(?P<dir>\d+)\t\d+\t\d+\t(?P<name>.+?)\s*$")
@@ -107,6 +122,45 @@ def parse_source_line_addresses(
     axf = _resolve_path(Path(axf_path))
     roots = tuple(_resolve_path(Path(root)) for root in source_roots)
     return _parse_source_line_addresses_cached(str(axf), tuple(str(root) for root in roots))
+
+
+def resolve_address_source_line(
+    axf_path: str | Path,
+    address: int | str,
+    *,
+    source_roots: Iterable[str | Path] = (),
+    allow_nearest: bool = False,
+    max_address_delta: int = 4,
+) -> KeilAddressSourceLineResult:
+    requested_address = _address_int(address)
+    if requested_address is None or requested_address <= 0:
+        return KeilAddressSourceLineResult(
+            requested_address=0,
+            error="invalid address",
+        )
+    records = parse_source_line_addresses(axf_path, source_roots=tuple(source_roots))
+    exact = [item for item in records if int(item.address) == requested_address]
+    if exact:
+        return _address_result_from_record(
+            min(exact, key=lambda item: (str(item.path).lower(), item.line)),
+            requested_address,
+            exact=True,
+        )
+    if allow_nearest:
+        nearest = [
+            item for item in records
+            if 0 <= requested_address - int(item.address) <= int(max_address_delta)
+        ]
+        if nearest:
+            return _address_result_from_record(
+                min(nearest, key=lambda item: (requested_address - int(item.address), str(item.path).lower(), item.line)),
+                requested_address,
+                exact=False,
+            )
+    return KeilAddressSourceLineResult(
+        requested_address=requested_address,
+        error="address has no source line in DWARF line table",
+    )
 
 
 @lru_cache(maxsize=32)
@@ -291,6 +345,34 @@ def _result_from_record(
     )
 
 
+def _address_result_from_record(
+    record: KeilSourceLineAddress,
+    requested_address: int,
+    *,
+    exact: bool,
+) -> KeilAddressSourceLineResult:
+    return KeilAddressSourceLineResult(
+        requested_address=requested_address,
+        path=record.path,
+        line=record.line,
+        raw_file=record.raw_file,
+        resolved_from=record.resolved_from,
+        exact=exact,
+    )
+
+
+def _address_int(value: int | str) -> int | None:
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
 def _path_match_score(candidate: Path, requested: Path) -> int:
     candidate_parts = _path_parts(candidate)
     requested_parts = _path_parts(requested)
@@ -316,8 +398,10 @@ def _resolve_path(path: Path) -> Path:
 
 
 __all__ = [
+    "KeilAddressSourceLineResult",
     "KeilSourceLineAddress",
     "KeilSourceLineAddressResult",
     "parse_source_line_addresses",
+    "resolve_address_source_line",
     "resolve_source_line_address",
 ]

@@ -826,12 +826,17 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"read-only attach should keep {key} action enabled")
             blocked_actions = [
                 key
-                for key in ("run", "step", "sync_breakpoints")
+                for key in ("run", "step")
                 if getattr(tab, "_action_buttons", {}).get(key) is not None
                 and getattr(tab, "_action_buttons", {})[key].isEnabled()
             ]
             if blocked_actions:
                 issues.append(f"read-only attach enabled dangerous actions: {blocked_actions!r}")
+            sync_button = getattr(tab, "_action_buttons", {}).get("sync_breakpoints")
+            if sync_button is None or not sync_button.isEnabled():
+                issues.append("read-only attach should expose explicit Keil breakpoint sync action")
+            elif "确认" not in sync_button.toolTip() and "显式" not in sync_button.toolTip():
+                issues.append(f"Keil breakpoint sync tooltip should mention explicit confirmation: {sync_button.toolTip()!r}")
             halt_button = getattr(tab, "_action_buttons", {}).get("halt")
             if halt_button is None or not halt_button.isEnabled():
                 issues.append("read-only attach should expose explicit Keil halt action while target is running")

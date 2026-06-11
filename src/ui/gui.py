@@ -3276,14 +3276,16 @@ class MainWindow(QMainWindow):
         }:
             self._show_warning("Keil 断点同步", "请先连接 Keil 调试会话。")
             return
-        local_breakpoints = tab.local_breakpoints()
-        if not local_breakpoints:
-            self._show_warning("Keil 断点同步", "请先在源码视图里添加本地断点。")
-            return
-
         remote_snapshot = getattr(self, "_debug_remote_breakpoint_snapshot", None)
         remote_complete = bool(remote_snapshot is not None and getattr(remote_snapshot, "complete", False))
         remote_breakpoints = getattr(remote_snapshot, "breakpoints", ()) if remote_complete else ()
+        local_breakpoints = tab.local_breakpoints()
+        if not local_breakpoints and not remote_breakpoints:
+            if remote_snapshot is not None and not remote_complete:
+                self._show_warning("Keil 断点同步", "当前没有本地断点，且 Keil 远端断点快照不完整，不能安全清理远端断点。")
+            else:
+                self._show_warning("Keil 断点同步", "当前没有本地断点，也没有可同步的 Keil 远端断点。")
+            return
         transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
         profile = self._make_current_keil_profile()
         axf_path = profile.axf_path if profile is not None and profile.axf_exists else None

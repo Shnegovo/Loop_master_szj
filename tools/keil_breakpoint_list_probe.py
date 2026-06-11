@@ -138,6 +138,20 @@ def main() -> int:
     _assert(not log_snapshot.complete and len(log_snapshot.breakpoints) == 1, f"log snapshot mismatch: {log_snapshot!r}")
     _assert(log_snapshot.breakpoints[0].address == 0x08000164, f"log address mismatch: {log_snapshot.breakpoints!r}")
 
+    f401_project = ROOT / "firmware" / "keil_f401_variable_probe" / "F401VariableProbe.uvprojx"
+    f401_session = FakeLogSession(ADDRESS_ONLY_SAMPLE)
+    f401_snapshot = adapter._breakpoint_snapshot_from_session(
+        f401_session,
+        project_path=f401_project,
+        target_name="STM32F401CCU6 Variable Probe",
+        captured_at="2026-06-11T00:00:00+00:00",
+    )
+    _assert(f401_snapshot.complete, f"F401 address snapshot should map to source: {f401_snapshot!r}")
+    _assert(len(f401_snapshot.breakpoints) == 1, f"F401 mapped breakpoint missing: {f401_snapshot!r}")
+    f401_bp = f401_snapshot.breakpoints[0]
+    _assert(f401_bp.path is not None and f401_bp.path.name == "main.c", f"F401 mapped path mismatch: {f401_bp!r}")
+    _assert(f401_bp.line == 62 and f401_bp.address == 0x08000164, f"F401 mapped line/address mismatch: {f401_bp!r}")
+
     empty_session = SimpleNamespace(try_execute_command_text=lambda command, echo=False: ("", "no text"))
     failed_snapshot = adapter._breakpoint_snapshot_from_session(
         empty_session,

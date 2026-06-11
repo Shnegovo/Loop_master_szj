@@ -9,7 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.core.keil.source_line_address import resolve_source_line_address  # noqa: E402
+from src.core.keil.source_line_address import (  # noqa: E402
+    resolve_address_source_line,
+    resolve_source_line_address,
+)
 
 
 AXF = ROOT / "firmware" / "keil_f401_variable_probe" / "Objects" / "f401_variable_probe.axf"
@@ -35,8 +38,15 @@ def main() -> int:
     _assert(nearest.resolved, f"line 66 should resolve to a nearby executable line: {nearest}")
     _assert(nearest.line >= 66, f"nearest line should not move backwards: {nearest}")
 
+    reverse = resolve_address_source_line(AXF, result.address, source_roots=(MAIN_C.parent,))
+    _assert(reverse.resolved, f"address did not reverse-resolve: {reverse}")
+    _assert(reverse.path is not None and reverse.path.name == "main.c", f"reverse path mismatch: {reverse}")
+    _assert(reverse.line == 62, f"reverse line mismatch: {reverse}")
+    _assert(reverse.exact, f"expected exact reverse match: {reverse}")
+
     print("PASS Keil source line address probe")
     print(f"line 62 -> 0x{result.address:08X}")
+    print(f"0x{result.address:08X} -> {reverse.path}:{reverse.line}")
     return 0
 
 
