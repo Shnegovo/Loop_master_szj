@@ -17,6 +17,14 @@ SCOPE_SOURCE_SERIAL_WAVEFORM = "serial_waveform"
 SCOPE_SOURCE_OPENOCD_GDB = "openocd_gdb"
 SCOPE_SOURCE_PYOCD = "pyocd"
 SCOPE_SOURCE_TI_MSPM0 = "ti_mspm0g3507"
+KNOWN_ACQUISITION_SOURCE_KEYS = (
+    SCOPE_SOURCE_SWD,
+    SCOPE_SOURCE_KEIL_WATCH,
+    SCOPE_SOURCE_SERIAL_WAVEFORM,
+    SCOPE_SOURCE_OPENOCD_GDB,
+    SCOPE_SOURCE_PYOCD,
+    SCOPE_SOURCE_TI_MSPM0,
+)
 
 
 class AcquisitionSourceState(str, Enum):
@@ -395,6 +403,26 @@ def active_acquisition_source(
     return build_acquisition_source_catalog(SCOPE_SOURCE_SWD)[0]
 
 
+def acquisition_source_descriptor(
+    key: str | None = SCOPE_SOURCE_SWD,
+    *,
+    active_key: str = SCOPE_SOURCE_SWD,
+    keil_watch_ready: bool = True,
+    serial_ready: bool = True,
+    include_planned: bool = True,
+) -> AcquisitionSourceDescriptor:
+    wanted = normalize_known_acquisition_source_key(key)
+    for source in build_acquisition_source_catalog(
+        active_key,
+        keil_watch_ready=keil_watch_ready,
+        serial_ready=serial_ready,
+        include_planned=include_planned,
+    ):
+        if source.key == wanted:
+            return source
+    return build_acquisition_source_catalog(SCOPE_SOURCE_SWD)[0]
+
+
 def acquisition_source_key_for_debug_backend(backend_key: str | None) -> str | None:
     mapping = {
         "keil": SCOPE_SOURCE_KEIL_WATCH,
@@ -417,6 +445,13 @@ def debugger_backed_source_keys() -> tuple[str, ...]:
 def normalize_acquisition_source_key(key: str | None) -> str:
     text = str(key or "").strip()
     if text in {SCOPE_SOURCE_SWD, SCOPE_SOURCE_KEIL_WATCH}:
+        return text
+    return SCOPE_SOURCE_SWD
+
+
+def normalize_known_acquisition_source_key(key: str | None) -> str:
+    text = str(key or "").strip()
+    if text in KNOWN_ACQUISITION_SOURCE_KEYS:
         return text
     return SCOPE_SOURCE_SWD
 

@@ -7346,3 +7346,64 @@ explicit action.
     same sample buffer concepts,
   - keep OpenOCD/pyOCD/TI planned sources behind no-hardware gates until each
     adapter has probes.
+
+## Milestone 87 - Acquisition Session Sample Contract
+
+### Goal
+
+Start the shared runtime layer for waveform data without prematurely rewriting
+the existing collector. SWD memory polling, Keil Watch, serial waveform, and
+future OpenOCD/pyOCD/TI sources need a common sample/batch contract before they
+can feed one scope surface cleanly.
+
+### Completed
+
+- Added `src\core\acquisition_session.py` with backend-neutral contracts:
+  - `AcquisitionSessionState`,
+  - `AcquisitionSessionContract`,
+  - `AcquisitionSample`,
+  - `AcquisitionBatch`.
+- Added helpers to normalize transport rows into named sample values:
+  - dict rows from debugger/watch transports,
+  - positional rows from fast memory/serial transports,
+  - missing or invalid values preserved as `NaN` instead of crashing the scope
+    path.
+- Added batch series conversion so future plot code can consume the same shape:
+  `{variable: (timestamps, values)}`.
+- Split acquisition source normalization into two meanings:
+  - `normalize_acquisition_source_key()` still protects the main scope selector
+    and falls route-only serial back to SWD,
+  - `normalize_known_acquisition_source_key()` preserves all known source keys
+    for runtime contracts and future adapters.
+- Added `acquisition_source_descriptor()` for looking up serial/planned source
+  descriptors without pretending they are active main-scope selections.
+
+### Verified
+
+- `python -m py_compile src\core\acquisition_session.py src\core\acquisition_sources.py tools\acquisition_session_probe.py tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage is a no-hardware architecture contract. It does not change the
+  existing `DataCollector` sampling loop yet.
+- The contract intentionally keeps route-only serial representable as a source
+  while the main LoopMaster scope selector still keeps serial as a navigation
+  route to the serial assistant.
+
+### Next Target
+
+- Wire the new acquisition batch contract into one low-risk producer path first:
+  - likely the fake transport / collector probe path,
+  - then Keil Watch batch conversion,
+  - finally serial waveform samples once the parser/plot contract is ready.

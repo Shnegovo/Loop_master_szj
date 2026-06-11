@@ -18,12 +18,14 @@ from src.core.acquisition_sources import (  # noqa: E402
     SCOPE_SOURCE_TI_MSPM0,
     AcquisitionSourceMode,
     AcquisitionSourceState,
+    acquisition_source_descriptor,
     acquisition_source_key_for_debug_backend,
     active_acquisition_source,
     acquisition_source_options,
     build_acquisition_source_catalog,
     debugger_backed_source_keys,
     normalize_acquisition_source_key,
+    normalize_known_acquisition_source_key,
 )
 
 
@@ -79,6 +81,9 @@ def main() -> int:
     active_keil = active_acquisition_source(SCOPE_SOURCE_KEIL_WATCH)
     _assert(active_keil.key == SCOPE_SOURCE_KEIL_WATCH and active_keil.active, f"active Keil mismatch: {active_keil!r}")
     _assert(normalize_acquisition_source_key("unknown") == SCOPE_SOURCE_SWD, "unknown source should fall back to SWD")
+    _assert(normalize_acquisition_source_key(SCOPE_SOURCE_SERIAL_WAVEFORM) == SCOPE_SOURCE_SWD, "main scope normalizer should keep serial route-only")
+    _assert(normalize_known_acquisition_source_key(SCOPE_SOURCE_SERIAL_WAVEFORM) == SCOPE_SOURCE_SERIAL_WAVEFORM, "known source normalizer should keep serial")
+    _assert(acquisition_source_descriptor(SCOPE_SOURCE_SERIAL_WAVEFORM).key == SCOPE_SOURCE_SERIAL_WAVEFORM, "serial descriptor lookup mismatch")
 
     options = acquisition_source_options(SCOPE_SOURCE_SWD)
     option_map = {key: (label, note, enabled) for key, label, note, enabled in options}
