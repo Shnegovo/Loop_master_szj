@@ -20,6 +20,7 @@ class DebugCommandKind(str, Enum):
     RESET = "reset"
     STEP = "step"
     STEP_OVER = "step_over"
+    RUN_TO_CURSOR = "run_to_cursor"
     SYNC_BREAKPOINTS = "sync_breakpoints"
     WRITE_VARIABLES = "write_variables"
 

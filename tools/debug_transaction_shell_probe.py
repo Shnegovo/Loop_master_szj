@@ -62,10 +62,11 @@ def main() -> int:
         reason="OpenOCD/GDB 后端尚未接入执行器",
         backend_snapshot=snapshot,
     )
-    _assert(len(transactions) == 10, f"transaction count changed: {len(transactions)}")
+    _assert(len(transactions) == 11, f"transaction count changed: {len(transactions)}")
     _assert(debug_transaction_by_key(transactions, "attach") is not None, "attach transaction missing")
     _assert(debug_transaction_by_key(transactions, "reset") is not None, "reset transaction missing")
     _assert(debug_transaction_by_key(transactions, "step_over") is not None, "step_over transaction missing")
+    _assert(debug_transaction_by_key(transactions, "run_to_cursor") is not None, "run_to_cursor transaction missing")
     for transaction in transactions:
         _assert(transaction.backend == "openocd_gdb", "transaction backend mismatch")
         _assert(transaction.dry_run, f"{transaction.kind.value} must be dry-run")

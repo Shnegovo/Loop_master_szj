@@ -372,6 +372,21 @@ class DebugWorkbenchTab(QWidget):
     def debug_status(self) -> DebugWorkbenchStatus:
         return self._session.status
 
+    def current_cursor_location(self) -> tuple[Path, int] | None:
+        if self._current_document is None:
+            return None
+        line = self._current_editor_line()
+        if line < 1 or line > self._current_document.line_count:
+            return None
+        return self._current_document.path, line
+
+    def show_source_location(self, path: str | Path, line: int) -> None:
+        target = Path(path).expanduser().resolve()
+        if self._current_document is None or self._current_document.path != target:
+            if target.exists():
+                self._load_source(target)
+        self._scroll_editor_to_line(line)
+
     def local_breakpoints(self) -> tuple:
         return self._breakpoints.all()
 
@@ -710,6 +725,7 @@ class DebugWorkbenchTab(QWidget):
             ("reset", "复位"),
             ("step", "单步"),
             ("step_over", "跨过"),
+            ("run_to_cursor", "到光标"),
             ("sync_breakpoints", "断点"),
             ("write_variables", "写入"),
         ):
@@ -1763,6 +1779,7 @@ class DebugWorkbenchTab(QWidget):
             "halt",
             "run",
             "step",
+            "run_to_cursor",
             "sync_breakpoints",
             "write_variables",
             "disconnect",
@@ -1971,7 +1988,7 @@ class DebugWorkbenchTab(QWidget):
                 and status.backend.value == "keil"
                 and status.state.value in {"keil_attached", "paused", "running"}
             ) or (
-                key in {"step", "step_over"}
+                key in {"step", "step_over", "run_to_cursor"}
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.state.value == "paused"
@@ -1989,7 +2006,10 @@ class DebugWorkbenchTab(QWidget):
             button.setEnabled(enabled)
             if enabled:
                 if explicit_keil_runtime_action:
-                    button.setToolTip("显式通过 Keil/UVSOCK 改变目标运行状态，执行前会再次确认")
+                    if key == "run_to_cursor":
+                        button.setToolTip("显式通过 Keil/UVSOCK 运行到当前光标源码行，执行前会再次确认")
+                    else:
+                        button.setToolTip("显式通过 Keil/UVSOCK 改变目标运行状态，执行前会再次确认")
                 elif explicit_keil_breakpoint_sync:
                     button.setToolTip("显式通过 Keil/UVSOCK 同步本地断点，执行前会再次确认")
                 elif explicit_keil_profile_action:

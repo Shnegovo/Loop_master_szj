@@ -101,6 +101,7 @@ from src.core.keil.profile_store import (
     save_keil_profile_store,
 )
 from src.core.keil.project import parse_keil_project
+from src.core.keil.run_to_cursor import KeilRunToCursorRequest, KeilRunToCursorResult
 from src.core.keil.uvsock import UvscLaunchResult
 from src.core.mem_backend import DEFAULT_TARGET, SWDBackend, _extract_val
 from src.core.models import (
@@ -499,6 +500,7 @@ class MainWindow(QMainWindow):
         self._debug_last_live_read_result: KeilLiveVariableReadResult | None = None
         self._debug_last_live_write_result: KeilLiveVariableWriteResult | None = None
         self._debug_last_breakpoint_sync_result: KeilBreakpointSyncResult | None = None
+        self._debug_last_run_to_cursor_result: KeilRunToCursorResult | None = None
         self._debug_keil_profile: KeilDebugProfile | None = None
         self._debug_keil_build_result: KeilBuildResult | None = None
         self._debug_keil_launch_result = None
@@ -2169,6 +2171,9 @@ class MainWindow(QMainWindow):
         if action_key in {"halt", "run", "reset", "step", "step_over"}:
             self._control_keil_runtime_from_workbench(action_key)
             return
+        if action_key == "run_to_cursor":
+            self._run_keil_to_cursor_from_workbench()
+            return
         if action_key == "sync_breakpoints":
             self._sync_keil_breakpoints_from_workbench()
             return
@@ -2205,6 +2210,7 @@ class MainWindow(QMainWindow):
         self._debug_last_live_read_result = None
         self._debug_last_live_write_result = None
         self._debug_last_breakpoint_sync_result = None
+        self._debug_last_run_to_cursor_result = None
         self._debug_keil_profile = None
         self._debug_keil_build_result = None
         self._debug_keil_launch_result = None
@@ -3064,6 +3070,144 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(summary)
         self._refresh_hero()
 
+    def _run_keil_to_cursor_from_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("Keil 运行到光标", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "run_to_cursor"):
+            self._show_warning("Keil 运行到光标", "当前 Keil 后端尚未提供运行到光标执行器。")
+            return
+        tab = self._tab_debug_workbench
+        status = tab.debug_status
+        if status.state != DebugRuntimeState.PAUSED:
+            self._show_warning("Keil 运行到光标", "目标必须先暂停，才能运行到当前光标行。")
+            return
+        cursor_location = tab.current_cursor_location()
+        if cursor_location is None:
+            self._show_warning("Keil 运行到光标", "请先在源码视图中选择一个有效源码行。")
+            return
+        source_path, line = cursor_location
+        transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "run_to_cursor")
+        profile = self._make_current_keil_profile()
+        axf_path = profile.axf_path if profile is not None and profile.axf_exists else self._current_debug_axf_path()
+        if not self._confirm_keil_run_to_cursor(source_path, line, status, axf_path=axf_path):
+            return
+
+        tab.set_debug_controls_ready(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(f"正在通过 Keil 运行到 {source_path.name}:{line}...")
+        try:
+            result = self._debug_backend.run_to_cursor(
+                source_path=source_path,
+                line=line,
+                project_path=status.project_path,
+                target_name=status.target_name,
+                timeout_s=5.0,
+                reset_before_run=False,
+            )
+        except Exception as exc:
+            result = KeilRunToCursorResult(
+                request=KeilRunToCursorRequest(
+                    project_path=status.project_path,
+                    target_name=status.target_name,
+                    source_path=source_path,
+                    line=line,
+                    axf_path=axf_path,
+                ),
+                attempted=True,
+                succeeded=False,
+                error=str(exc),
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            tab.set_debug_controls_ready(True)
+
+        self._debug_last_run_to_cursor_result = result
+        if result.hit_pc is not None:
+            hit_path = result.hit_pc.path or source_path
+            if result.hit_pc.line is not None:
+                tab.show_source_location(hit_path, int(result.hit_pc.line))
+            tab.set_debug_status(
+                make_debug_status(
+                    state=DebugRuntimeState.PAUSED,
+                    backend=DebugBackendKind.KEIL,
+                    detail=result.summary(),
+                    project_path=status.project_path,
+                    target_name=status.target_name,
+                    current_pc_line=result.hit_pc.line,
+                    capabilities=status.capabilities,
+                ),
+                controls_ready=True,
+            )
+            tab.set_pc_evidence(result.hit_pc)
+            if not isinstance(self._debug_backend_snapshot_record, dict):
+                self._debug_backend_snapshot_record = {
+                    "snapshot_id": f"ui-run-to-cursor-{int(time.time() * 1000)}",
+                    "backend": DebugBackendKind.KEIL.value,
+                    "adapter_name": self._debug_backend_display_name(),
+                    "state": DebugRuntimeState.PAUSED.value,
+                    "connection_established": True,
+                    "read_only": False,
+                    "target_running": False,
+                    "project_path": str(status.project_path or ""),
+                    "target_name": status.target_name,
+                }
+            self._debug_backend_snapshot_record["pc_location"] = result.hit_pc.to_record()
+        snapshot = result.after_cleanup_snapshot or result.after_set_snapshot or result.before_snapshot
+        if snapshot is not None:
+            self._debug_remote_breakpoint_snapshot = snapshot
+            if isinstance(self._debug_backend_snapshot_record, dict):
+                self._debug_backend_snapshot_record["remote_breakpoint_snapshot"] = snapshot.to_record()
+                self._debug_backend_snapshot_record["remote_breakpoint_snapshot_id"] = snapshot.snapshot_id
+                self._debug_backend_snapshot_record["remote_breakpoint_complete"] = snapshot.complete
+        self._append_keil_run_to_cursor_audit(result, transaction)
+        if transaction is not None:
+            self._debug_command_history.record(
+                transaction,
+                event="executed" if result.succeeded else "failed",
+                source="ui_run_to_cursor",
+            )
+            tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
+        self._refresh_debug_workbench_diagnostics()
+        self._sync_debug_command_preview()
+        summary = result.summary()
+        if result.succeeded:
+            self._show_info("Keil 运行到光标完成", summary)
+        else:
+            self._show_warning("Keil 运行到光标失败", summary)
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText(summary)
+        self._refresh_hero()
+
+    def _confirm_keil_run_to_cursor(
+        self,
+        source_path: Path,
+        line: int,
+        status,
+        *,
+        axf_path: Path | None,
+    ) -> bool:
+        axf_text = str(axf_path) if axf_path else "未找到 AXF，无法解析源码行地址"
+        message = (
+            f"工程：{status.project_path or '--'}\n"
+            f"Target：{status.target_name or '--'}\n"
+            f"源码：{source_path}\n"
+            f"行号：{line}\n"
+            f"AXF：{axf_text}\n"
+            f"端口：{self._debug_uvsock_port}\n\n"
+            "这会通过 Keil/UVSOCK 真实运行 MCU 到当前源码行。"
+            "LoopMaster 会优先复用已有断点，否则创建临时断点，命中后回读 PC 并清理临时断点。"
+        )
+        return ask_pcl_confirmation(
+            self,
+            "确认 Keil 运行到光标",
+            message,
+            confirm_text="运行到光标",
+            cancel_text="取消",
+            kind="warning",
+        )
+
     def _build_keil_project_for_workbench(self):
         if self._debug_backend_kind != DebugBackendKind.KEIL:
             self._show_warning("Keil 构建", "当前调试后端不是 Keil / UVSOCK。")
@@ -3522,6 +3666,20 @@ class MainWindow(QMainWindow):
                 f.write("\n")
         except Exception as exc:
             logger.warning("Keil 断点同步审计日志保存失败：%s", exc)
+
+    def _append_keil_run_to_cursor_audit(self, result: KeilRunToCursorResult, transaction=None) -> None:
+        record = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "action": "keil_run_to_cursor",
+            "transaction": transaction.audit_record(event="executed" if result.succeeded else "failed") if transaction is not None else None,
+            "result": result.to_record(),
+        }
+        try:
+            with open(self._variable_write_audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=str))
+                f.write("\n")
+        except Exception as exc:
+            logger.warning("Keil 运行到光标审计日志保存失败：%s", exc)
 
     def _write_keil_live_variable_from_preset(self, expression: str, value_text: str) -> None:
         self._write_keil_live_variable_from_workbench(default_expression=expression, default_value=value_text)
@@ -4096,6 +4254,7 @@ class MainWindow(QMainWindow):
         self._debug_last_live_read_result = None
         self._debug_last_live_write_result = None
         self._debug_last_breakpoint_sync_result = None
+        self._debug_last_run_to_cursor_result = None
         self._debug_keil_profile = None
         self._debug_keil_build_result = None
         self._debug_keil_launch_result = None
@@ -4264,6 +4423,12 @@ class MainWindow(QMainWindow):
             return ()
         return result.diagnostic_rows()
 
+    def _keil_run_to_cursor_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        result = getattr(self, "_debug_last_run_to_cursor_result", None)
+        if result is None:
+            return ()
+        return result.diagnostic_rows()
+
     def _keil_auto_debug_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_auto_debug_result", None)
         if result is None:
@@ -4336,6 +4501,7 @@ class MainWindow(QMainWindow):
             "halt",
             "run",
             "step",
+            "run_to_cursor",
             "sync_breakpoints",
             "write_variables",
             "disconnect",
@@ -4397,6 +4563,7 @@ class MainWindow(QMainWindow):
             + self._keil_launch_diagnostics()
             + self._keil_auto_debug_diagnostics()
             + self._keil_breakpoint_sync_diagnostics()
+            + self._keil_run_to_cursor_diagnostics()
             + self._debug_pc_evidence_diagnostics()
             + self._keil_live_write_diagnostics()
         )

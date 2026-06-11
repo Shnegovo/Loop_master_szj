@@ -5830,3 +5830,103 @@ up temporary breakpoints after timeout or PC/source verification failure.
   tied to the current editor line.
 - The UI path must surface target source, resolved address, temporary
   breakpoint id, hit PC and cleanup result in diagnostics/history.
+
+## Milestone 64 - Keil Run-to-Cursor UI Flow
+
+### Goal
+
+Move the already verified Keil run-to-cursor transaction from backend-only into
+the Debug Workbench UI, while keeping it explicit, auditable, and honest about
+PC evidence.
+
+### Completed
+
+- Added `run_to_cursor` to the debugger action model, backend-neutral dry-run
+  transaction model, Keil dry-run transaction model, and debug session contract.
+- Added a visible `到光标` button in the Debug Workbench action bar.
+- Added `DebugWorkbenchTab.current_cursor_location()` and
+  `show_source_location()` so execution code can use the active editor file and
+  line without reaching through private UI details.
+- Added `MainWindow._run_keil_to_cursor_from_workbench()`:
+  - requires Keil backend,
+  - requires target paused,
+  - requires a valid source cursor line,
+  - shows an explicit high-risk confirmation,
+  - calls `KeilUvSockBackendAdapter.run_to_cursor()`,
+  - surfaces target source, resolved address, temporary breakpoint id, hit PC,
+    cleanup result and errors in diagnostics,
+  - writes `keil_run_to_cursor` audit records,
+  - updates the editor PC marker with verified backend PC evidence.
+- Fixed a latent PC evidence UI bug so real `DebugPcLocation` values no longer
+  crash source decoration refresh.
+- Added `tools/ui_keil_run_to_cursor_probe.py` to simulate a user selecting a
+  source line and triggering `到光标` through a fake Keil backend.
+
+### Verified
+
+- `python -m py_compile src\core\debug_workbench.py src\core\debug_transactions.py src\core\debug_session_contract.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+  - Button enabled in paused Keil state.
+  - Confirmation includes `main.c` and target line.
+  - Fake backend receives the current editor line.
+  - Diagnostics show `运行到光标=成功`, `目标地址=0x08000164`, `临时断点=0`, `PC 证据=已回读`.
+  - Gutter tooltip shows verified current PC.
+  - Audit log records `keil_run_to_cursor`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-run-to-cursor --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-run-to-cursor\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-run-to-cursor\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-run-to-cursor\03_debug_workbench_narrow.png`
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_run_to_cursor_probe.py --json`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Mode Boundary Requirement
+
+- LoopMaster must keep multiple acquisition/debug modes available:
+  - original non/light-intrusive SWD variable oscilloscope,
+  - serial assistant and VOFA-like serial waveform source,
+  - Keil/UVSOCK debugger mode,
+  - future OpenOCD/GDB and pyOCD modes,
+  - future TI MSPM0G3507 adapter work under `D:\ti`.
+- These modes should be selectable as source/debug backends, not forced into one
+  crowded panel and not allowed to replace each other.
+- The scope UI should accept data from SWD memory polling, serial frames, Keil
+  Watch/variables, and later GDB/TI adapters through a shared acquisition-source
+  boundary.
+
+### Notes
+
+- This stage adds UI exposure but still uses a fake UI probe for the button
+  path. Live run-to-cursor hardware coverage remains from Milestone 62.
+- The action is intentionally allowed only while the target is paused.
+- The current command plan is still dry-run/audit-oriented. The actual action is
+  guarded by a user confirmation before sending UVSOCK commands.
+
+### Next Target
+
+- Run a live F401 UI/manual smoke for `到光标` when a Keil Debug session is
+  available, then tighten any status or diagnostic rough edges found there.
+- Continue Keil basics before TI: visual breakpoint interaction, breakpoint
+  validation feedback, current PC/run line polish, and a clearer debugger/scope
+  source selector.
+- After the Keil basics are usable, start the TI MSPM0G3507 research/adaptation
+  notes from `D:\ti`, even without live TI hardware.

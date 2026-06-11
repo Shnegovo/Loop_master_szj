@@ -26,6 +26,7 @@ class KeilCommandKind(str, Enum):
     RESET = "reset"
     STEP = "step"
     STEP_OVER = "step_over"
+    RUN_TO_CURSOR = "run_to_cursor"
     SYNC_BREAKPOINTS = "sync_breakpoints"
     WRITE_VARIABLES = "write_variables"
 
@@ -765,6 +766,7 @@ def _guards_for(
         KeilCommandKind.RESET,
         KeilCommandKind.STEP,
         KeilCommandKind.STEP_OVER,
+        KeilCommandKind.RUN_TO_CURSOR,
         KeilCommandKind.DISCONNECT,
     }:
         guards.append(
@@ -812,6 +814,16 @@ def _command_preview(
         return ('UVSC_DBG_EXEC_CMD(handle, "T")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
     if kind == KeilCommandKind.STEP_OVER:
         return ('UVSC_DBG_EXEC_CMD(handle, "P")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
+    if kind == KeilCommandKind.RUN_TO_CURSOR:
+        return (
+            "resolve_source_line_address(current_editor_file, current_cursor_line)",
+            'UVSC_DBG_EXEC_CMD(handle, "BL")',
+            'UVSC_DBG_EXEC_CMD(handle, "BS 0x<line-address>") or reuse existing breakpoint',
+            "UVSC_DBG_START_EXECUTION(handle)",
+            "poll UVSC_DBG_STATUS(handle) until paused",
+            'UVSC_DBG_EXEC_CMD(handle, "EVAL PC")',
+            'UVSC_DBG_EXEC_CMD(handle, "BK <temp-id>") if temporary breakpoint was created',
+        )
     if kind == KeilCommandKind.SYNC_BREAKPOINTS:
         counts = _breakpoint_operation_counts(breakpoint_ops)
         summary = breakpoint_diff_summary or build_keil_breakpoint_diff_summary(breakpoints, (), breakpoint_ops)
@@ -1034,6 +1046,7 @@ def _expected_effect(kind: KeilCommandKind) -> str:
         KeilCommandKind.RESET: "复位目标并刷新 PC/source marker",
         KeilCommandKind.STEP: "执行一次单步并刷新 PC/source marker",
         KeilCommandKind.STEP_OVER: "执行一次跨过并刷新 PC/source marker",
+        KeilCommandKind.RUN_TO_CURSOR: "运行到当前编辑器光标所在源码行并刷新 PC/source marker",
         KeilCommandKind.SYNC_BREAKPOINTS: "将本地断点差异同步到 Keil 并回读验证",
         KeilCommandKind.WRITE_VARIABLES: "写入变量后立即回读验证并记录审计",
     }

@@ -97,6 +97,8 @@ class DebugSessionCapabilities:
             commands.append("reset")
         if self.can_step:
             commands.append("step")
+            commands.append("step_over")
+            commands.append("run_to_cursor")
         if self.can_sync_breakpoints:
             commands.append("sync_breakpoints")
         if self.can_write_variables:
@@ -382,6 +384,7 @@ def command_matrix_for_session(snapshot: DebugSessionSnapshot) -> tuple[DebugSes
         _session_command(snapshot, "reset", "复位目标", DebugCommandSafety.RUN_CONTROL, caps.can_reset, ("发送 Reset", "读取 PC")),
         _session_command(snapshot, "step", "单步", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step", "读取 PC")),
         _session_command(snapshot, "step_over", "跨过", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step Over", "读取 PC")),
+        _session_command(snapshot, "run_to_cursor", "运行到光标", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("解析光标行", "临时断点运行", "回读 PC")),
         _session_command(snapshot, "sync_breakpoints", "同步断点", DebugCommandSafety.RUN_CONTROL, caps.can_sync_breakpoints, ("生成断点差异", "回读验证")),
         _session_command(snapshot, "write_variables", "写变量", DebugCommandSafety.TARGET_WRITE, caps.can_write_variables, ("校验类型/RAM", "写入后回读")),
     )

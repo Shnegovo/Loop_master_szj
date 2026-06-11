@@ -84,6 +84,7 @@ def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
         "reset",
         "step",
         "step_over",
+        "run_to_cursor",
         "sync_breakpoints",
         "write_variables",
     }
@@ -102,7 +103,7 @@ def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
 
 
 def _assert_risky_plans_disabled(plans: dict[str, DebugCommandPlan]) -> None:
-    for key in ("attach", "disconnect", "halt", "run", "reset", "step", "step_over", "sync_breakpoints", "write_variables"):
+    for key in ("attach", "disconnect", "halt", "run", "reset", "step", "step_over", "run_to_cursor", "sync_breakpoints", "write_variables"):
         plan = plans[key]
         _assert(not plan.execution_enabled, f"{key} must remain execution-disabled")
         _assert(plan.requirements, f"{key} should explain requirements")
@@ -208,6 +209,7 @@ def main() -> int:
         _assert(actions["disconnect"], "disconnect should be enabled after attach")
         _assert(actions["halt"], "halt should be enabled while running")
         _assert(not actions["run"], "run should be disabled while already running")
+        _assert(not actions["run_to_cursor"], "run_to_cursor should be disabled while running")
         _assert(actions["reset"], "reset should be enabled while running")
         _assert(actions["sync_breakpoints"], "breakpoint sync should be enabled when declared")
         _assert(not actions["write_variables"], "write variables should default disabled")
@@ -227,6 +229,7 @@ def main() -> int:
         _assert(actions["reset"], "reset should be enabled while paused")
         _assert(actions["step"], "step should be enabled while paused with runtime control")
         _assert(actions["step_over"], "step_over should be enabled while paused with runtime control")
+        _assert(actions["run_to_cursor"], "run_to_cursor should be enabled while paused with runtime control")
         _assert(not actions["halt"], "halt should be disabled while paused")
         plans = _plan_map(session)
         _assert_plan_shape(plans)
@@ -235,6 +238,7 @@ def main() -> int:
         _assert(plans["reset"].preconditions_met, "reset plan should be ready while paused")
         _assert(plans["step"].preconditions_met, "step plan should be ready while paused")
         _assert(plans["step_over"].preconditions_met, "step-over plan should be ready while paused")
+        _assert(plans["run_to_cursor"].preconditions_met, "run-to-cursor plan should be ready while paused")
         _assert(not plans["halt"].preconditions_met, "halt plan should be blocked while paused")
 
         session.mark_attached(running=False, runtime_control=True, breakpoint_sync=True, variable_write=True)
@@ -322,6 +326,7 @@ def main() -> int:
         _assert(actions["reset"], "reset should be enabled after connected paused state")
         _assert(actions["step"], "step should be enabled after connected paused state")
         _assert(actions["step_over"], "step_over should be enabled after connected paused state")
+        _assert(actions["run_to_cursor"], "run_to_cursor should be enabled after connected paused state")
         _assert(not actions["write_variables"], "write variables must stay disabled after UVSOCK projection")
 
     print("PASS debug workbench model probe")

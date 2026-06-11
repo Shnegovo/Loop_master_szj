@@ -301,6 +301,7 @@ def _focused_transaction(transactions):
         "reset",
         "step",
         "step_over",
+        "run_to_cursor",
         "sync_breakpoints",
         "write_variables",
         "disconnect",
@@ -738,7 +739,7 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"OpenOCD placeholder history missing generic entry: {placeholder_history_tip!r}")
                 unsafe_actions = [
                     key
-                    for key in ("halt", "run", "reset", "step", "step_over", "sync_breakpoints", "write_variables")
+                    for key in ("halt", "run", "reset", "step", "step_over", "run_to_cursor", "sync_breakpoints", "write_variables")
                     if getattr(tab, "_action_buttons", {}).get(key) is not None
                     and getattr(tab, "_action_buttons", {})[key].isEnabled()
                 ]
@@ -828,7 +829,7 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"read-only attach should keep {key} action enabled")
             blocked_actions = [
                 key
-                for key in ("run", "step", "step_over")
+                for key in ("run", "step", "step_over", "run_to_cursor")
                 if getattr(tab, "_action_buttons", {}).get(key) is not None
                 and getattr(tab, "_action_buttons", {})[key].isEnabled()
             ]

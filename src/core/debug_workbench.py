@@ -447,6 +447,7 @@ def debug_actions_for_status(status: DebugWorkbenchStatus) -> tuple[DebugAction,
         DebugAction("reset", "复位", caps.can_reset and attached, _disabled_reason(caps.can_reset and attached, status)),
         DebugAction("step", "单步", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
         DebugAction("step_over", "跨过", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
+        DebugAction("run_to_cursor", "运行到光标", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
         DebugAction(
             "sync_breakpoints",
             "同步断点",
@@ -597,6 +598,23 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             ),
             safety_notes=("跨过仍会真实执行当前语句，函数内副作用、外设访问和等待路径必须按真实目标处理",),
             preview_steps=("发送 Step Over 命令", "读取 PC", "刷新当前行和调用上下文"),
+        ),
+        _command_plan(
+            actions,
+            "run_to_cursor",
+            "运行到光标",
+            DebugPlanRisk.HIGH,
+            f"请求{control_backend}运行到当前编辑器光标所在源码行",
+            requirements=(
+                "目标处于暂停状态",
+                "当前编辑器已选中可映射到 AXF/DWARF 的源码行",
+                "命中后必须回读 PC 并确认停在目标行",
+            ),
+            safety_notes=(
+                "会真实运行 MCU，期间外设、控制环和通信都会继续执行",
+                "Keil 路径会优先复用已有断点，否则创建临时断点并在结束后清理",
+            ),
+            preview_steps=("解析光标源码行地址", "设置或复用断点", "运行目标", "回读 PC", "清理临时断点"),
         ),
         _command_plan(
             actions,
