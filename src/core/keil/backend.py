@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
-import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -28,6 +26,7 @@ from src.core.keil.breakpoint_list import (
     keil_breakpoint_list_command,
     parse_keil_breakpoint_list,
 )
+from src.core.keil.pc_location import capture_keil_command_log, read_keil_pc_location
 from src.core.keil.live_write import (
     KeilLiveVariableReadRequest,
     KeilLiveVariableReadResult,
@@ -183,6 +182,14 @@ class KeilUvSockBackendAdapter:
                 captured_at=None,
                 attempt=bool(connection and connection.connected),
             )
+        pc_location = None
+        if connection and connection.connected:
+            pc_location = self._pc_location_from_connection(
+                project_path=project_path or status.project_path,
+                target_name=target_name or status.target_name,
+                attempt=connection.target_running is False,
+                target_running=connection.target_running,
+            )
         return self._snapshot(
             status=status,
             preflight=preflight,
@@ -192,6 +199,7 @@ class KeilUvSockBackendAdapter:
             target_name=target_name or status.target_name,
             connection_attempted=bool(connection and connection.attempted),
             breakpoint_snapshot=breakpoint_snapshot,
+            pc_location=pc_location,
         )
 
     def write_live_variable(
@@ -338,6 +346,18 @@ class KeilUvSockBackendAdapter:
             target_name=target_name,
         )
 
+    def step_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        return self._runtime_control(
+            "step",
+            project_path=project_path,
+            target_name=target_name,
+        )
+
     def create_watch_transport(
         self,
         *,
@@ -410,7 +430,14 @@ class KeilUvSockBackendAdapter:
                 connection_name=f"{self.config.connection_name}{action.title()}",
                 require_debug=True,
             ) as session:
-                uvsc_result = session.halt_target() if action == "halt" else session.run_target()
+                if action == "halt":
+                    uvsc_result = session.halt_target()
+                elif action == "run":
+                    uvsc_result = session.run_target()
+                elif action == "step":
+                    uvsc_result = session.step_target()
+                else:
+                    raise ValueError(f"unsupported Keil runtime action: {action}")
         except Exception as exc:
             return KeilRuntimeControlResult(
                 action=action,
@@ -437,6 +464,8 @@ class KeilUvSockBackendAdapter:
             error = "暂停后状态回读仍不是已暂停"
         elif action == "run" and snapshot.target_running is not True:
             error = "运行后状态回读仍不是运行中"
+        elif action == "step" and snapshot.target_running is not False:
+            error = "单步后状态回读仍不是已暂停"
         return KeilRuntimeControlResult(
             action=action,
             uvsc=uvsc_result,
@@ -455,6 +484,7 @@ class KeilUvSockBackendAdapter:
         target_name: str,
         connection_attempted: bool,
         breakpoint_snapshot: KeilBreakpointRemoteSnapshot | None = None,
+        pc_location: DebugPcLocation | None = None,
     ) -> DebugBackendSessionSnapshot:
         project = Path(project_path).expanduser().resolve() if project_path else status.project_path
         captured_at = now_iso()
@@ -465,7 +495,7 @@ class KeilUvSockBackendAdapter:
                 captured_at=captured_at,
                 reason="Keil 只读快照尚未实现断点枚举解析",
             )
-        pc_location = _placeholder_pc_location(status)
+        pc_location = pc_location or _placeholder_pc_location(status)
         profile = make_keil_debug_profile(
             root=self.config.root,
             project_path=project,
@@ -479,6 +509,7 @@ class KeilUvSockBackendAdapter:
             self.config.port,
             profile.diagnostic_rows(),
             breakpoint_snapshot=breakpoint_snapshot,
+            pc_location=pc_location,
         )
         capabilities = tuple(sorted(preflight.discovery.capability_flags().items()))
         payload = {
@@ -548,6 +579,46 @@ class KeilUvSockBackendAdapter:
                 error=f"Keil 远端断点枚举失败：{exc}",
             )
 
+    def _pc_location_from_connection(
+        self,
+        *,
+        project_path: str | Path | None,
+        target_name: str,
+        attempt: bool,
+        target_running: bool | None,
+    ) -> DebugPcLocation:
+        if not attempt:
+            return DebugPcLocation(
+                source="keil_eval_pc",
+                complete=False,
+                message="目标运行中，未读取 PC" if target_running is True else "Keil PC 读取尚未尝试",
+            )
+        try:
+            with KeilUvscLiveSession.connect_existing(
+                root=self.config.root,
+                port=self.config.port,
+                connection_name=f"{self.config.connection_name}PC",
+                require_debug=True,
+            ) as session:
+                profile = make_keil_debug_profile(
+                    root=self.config.root,
+                    project_path=project_path,
+                    target_name=target_name,
+                    port=self.config.port,
+                )
+                result = read_keil_pc_location(
+                    session,
+                    axf_path=profile.axf_path if profile.axf_exists else None,
+                    source_roots=_source_roots_for_project_target(project_path, target_name),
+                )
+                return result.pc_location
+        except Exception as exc:
+            return DebugPcLocation(
+                source="keil_eval_pc",
+                complete=False,
+                message=f"Keil PC 读取失败：{exc}",
+            )
+
     def _breakpoint_snapshot_from_session(
         self,
         session,
@@ -583,7 +654,7 @@ class KeilUvSockBackendAdapter:
                     project_path=project_path,
                     target_name=target_name,
                 )
-        log_text, log_error = _capture_breakpoint_list_log(session, command)
+        log_text, log_error = capture_keil_command_log(session, command)
         if log_text:
             result = parse_keil_breakpoint_list(
                 log_text,
@@ -652,6 +723,7 @@ def _diagnostics(
     port: int,
     profile_rows: tuple[tuple[str, str], ...] = (),
     breakpoint_snapshot: KeilBreakpointRemoteSnapshot | None = None,
+    pc_location: DebugPcLocation | None = None,
 ) -> tuple[DebugBackendDiagnostic, ...]:
     discovery = preflight.discovery
     dll = preflight.load_result.dll.path if preflight.load_result.dll else "--"
@@ -673,7 +745,7 @@ def _diagnostics(
         DebugBackendDiagnostic("UV4 目录", str(discovery.uv4_dir or "--")),
         DebugBackendDiagnostic("启动预览", launch_status),
         DebugBackendDiagnostic("启动命令", command),
-        DebugBackendDiagnostic("PC 位置", "待 Keil 回读"),
+        DebugBackendDiagnostic("PC 位置", _pc_location_text(pc_location)),
         DebugBackendDiagnostic("远端断点", _breakpoint_snapshot_text(breakpoint_snapshot)),
     ]
     if profile_rows:
@@ -699,6 +771,19 @@ def _breakpoint_snapshot_text(snapshot: KeilBreakpointRemoteSnapshot | None) -> 
     return snapshot.error or "待 Keil 枚举"
 
 
+def _pc_location_text(pc_location: DebugPcLocation | None) -> str:
+    if pc_location is None:
+        return "待 Keil 回读"
+    if pc_location.address is not None:
+        parts = [f"0x{int(pc_location.address):08X}"]
+        if pc_location.path is not None and pc_location.line:
+            parts.append(f"{pc_location.path.name}:{pc_location.line}")
+        if not pc_location.complete:
+            parts.append("未验证")
+        return " / ".join(parts)
+    return pc_location.message or "待 Keil 回读"
+
+
 def _breakpoint_text_is_meaningful(text: str, result) -> bool:
     if result.snapshot.breakpoints:
         return True
@@ -708,26 +793,6 @@ def _breakpoint_text_is_meaningful(text: str, result) -> bool:
     if result.snapshot.error:
         return True
     return False
-
-
-def _capture_breakpoint_list_log(session, command: str) -> tuple[str, str]:
-    log_path = Path(tempfile.gettempdir()) / f"loopmaster_keil_bl_{uuid.uuid4().hex}.log"
-    try:
-        try:
-            log_path.unlink()
-        except OSError:
-            pass
-        session.execute_command(f"LOG > {log_path}", echo=True)
-        session.execute_command(command, echo=True)
-        session.execute_command("LOG OFF", echo=True)
-        return log_path.read_text(encoding="utf-8", errors="replace"), ""
-    except Exception as exc:
-        return "", str(exc)
-    finally:
-        try:
-            log_path.unlink()
-        except OSError:
-            pass
 
 
 def _source_roots_for_project_target(project_path: str | Path | None, target_name: str) -> tuple[Path, ...]:
@@ -780,7 +845,13 @@ def _target_running_text(value: bool | None) -> str:
 
 
 def _runtime_action_label(action: str) -> str:
-    return "Keil 继续运行" if action == "run" else "Keil 暂停" if action == "halt" else f"Keil {action}"
+    if action == "run":
+        return "Keil 继续运行"
+    if action == "halt":
+        return "Keil 暂停"
+    if action == "step":
+        return "Keil 单步"
+    return f"Keil {action}"
 
 
 def _keil_read_request_from_generic(request: DebugVariableReadRequest) -> KeilLiveVariableReadRequest:

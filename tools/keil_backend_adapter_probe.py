@@ -84,10 +84,19 @@ def main() -> int:
         _assert(not snapshot.status.capabilities.can_sync_breakpoints, "discover adapter must not enable breakpoint sync")
     if not args.attempt_existing:
         _assert(not snapshot.connection_attempted, "discover probe must not attempt UVSOCK connection")
-    _assert(snapshot.pc_location is not None, "snapshot should carry a PC placeholder")
-    _assert(not snapshot.pc_location.complete, "PC placeholder must stay incomplete until Keil readback exists")
-    _assert(snapshot.remote_breakpoint_snapshot is not None, "snapshot should carry a remote breakpoint placeholder")
-    _assert(not snapshot.remote_breakpoint_snapshot.complete, "remote breakpoint placeholder must stay incomplete")
+    _assert(snapshot.pc_location is not None, "snapshot should carry PC evidence")
+    if args.attempt_existing and snapshot.connection_established and snapshot.target_running is False:
+        _assert(snapshot.pc_location.address is not None, "paused live snapshot should carry a PC address when readback works")
+    else:
+        _assert(not snapshot.pc_location.complete, "PC placeholder must stay incomplete until Keil readback exists")
+    _assert(snapshot.remote_breakpoint_snapshot is not None, "snapshot should carry remote breakpoint evidence")
+    if args.attempt_existing and snapshot.connection_established:
+        _assert(
+            snapshot.remote_breakpoint_snapshot.complete or snapshot.remote_breakpoint_snapshot.error,
+            "connected snapshot should either enumerate remote breakpoints or report an error",
+        )
+    else:
+        _assert(not snapshot.remote_breakpoint_snapshot.complete, "remote breakpoint placeholder must stay incomplete")
     _assert(snapshot.remote_breakpoint_snapshot_id == snapshot.remote_breakpoint_snapshot.snapshot_id, "remote breakpoint id mismatch")
 
     print(

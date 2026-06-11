@@ -5387,3 +5387,95 @@ sync.
 - Add stepping controls backed by Keil commands and refresh PC/source markers.
 - Keep TI MSPM0G3507 queued after Keil debug basics; start with offline adapter
   parsing from `D:\ti`.
+
+## Milestone 59 Update - Keil PC Readback And Step
+
+### Goal
+
+Make Keil source-level debugging visibly real in LoopMaster: read the actual PC
+from Keil/uVision, map it back to source, and execute a real single-step while
+refreshing the PC/source marker.
+
+### Completed
+
+- Added Keil PC readback.
+  - New module: `src/core/keil/pc_location.py`.
+  - Uses `LOG+EVAL PC` because direct UVSOCK expression evaluation rejects
+    Keil system variables such as `$`/`PC`/`R15`.
+  - Parses output such as `0x0800015A 134218074`.
+  - Maps the PC address back to source using existing AXF/DWARF line mapping.
+- Connected PC evidence into backend snapshots.
+  - When the target is paused, `read_only_session_snapshot()` now attempts PC
+    readback.
+  - Snapshot diagnostics now show concrete PC text such as
+    `0x08000164 / main.c:62`.
+  - Running targets do not get implicitly halted just to read PC.
+- Added Keil step execution.
+  - `KeilUvscLiveSession.step_target()` executes Keil `T`.
+  - Step now polls target status until it returns to paused, because Keil can
+    briefly report running after the step command returns.
+  - `KeilUvSockBackendAdapter.step_target()` reuses the runtime-control path and
+    refreshes snapshot/PC after execution.
+- Exposed step through the Debug Workbench action path.
+  - `step` now uses the same explicit confirmation and backend execution path
+    as Halt/Run.
+  - The action is enabled only from the paused Keil state in the UI layer.
+- Recorded architecture requirement from user.
+  - Debug and scope must remain selectable by mode:
+    - original non-invasive/light-invasive variable and serial scope,
+    - Keil-driven debug mode,
+    - future OpenOCD/pyOCD/GDB/TI OCD modes,
+    - all able to feed the same scope surface through acquisition sources.
+  - This is now documented in `docs/debug_workbench_plan.md`.
+
+### Verified
+
+- `python -m py_compile src\core\keil\pc_location.py src\core\keil\uvsock.py src\core\keil\backend.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\keil_pc_location_probe.py`
+  - PASS.
+- `python tools\keil_pc_location_probe.py --json`
+  - PASS; fake `LOG+EVAL PC` maps `0x0800015A -> main.c:26`.
+- `python tools\keil_pc_location_probe.py --live --step --keil-root D:\Keil --json`
+  - PASS on connected ST-Link/F401.
+  - Live PC read example: `0x08000124 -> main.c:32`.
+  - Step result: `UVSOCK 单步成功，目标已暂停`.
+  - After-step PC example: `0x08000134 -> main.c:35`.
+- Backend snapshot live check:
+  - PASS by evidence.
+  - `connection_established=true`.
+  - `target_running=false`.
+  - `pc_location.complete=true`.
+  - Example diagnostic: `PC 位置 = 0x0800015A / main.c:26`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-pc-step-final --width 1440 --height 900`
+  - PASS; screenshot reviewed.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+
+### Notes
+
+- Official Keil command behavior observed locally:
+  - `UVSC_DBG_EVAL_EXPRESSION_TO_STR("$"/"PC"/"R15")` returns command error.
+  - `UVSC_DBG_EXEC_CMD("EVAL PC")` only echoes directly.
+  - `LOG > file` + `EVAL PC` + `LOG OFF` captures the real PC output.
+- Step command `T` is asynchronous enough that immediate status can be
+  misleading. The backend now polls for paused before declaring step success.
+- The current step implementation is trace/single-step only. Step-over and
+  step-out remain separate work.
+- Test-created `UV4.exe` was cleaned up after verification.
+
+### Next Target
+
+- Add step-over/step-out candidates and verify which Keil commands are reliable
+  through UVSOCK.
+- Improve the debug-workbench top action layout for narrower widths.
+- Start extracting acquisition/source-mode selection so non-invasive scope,
+  Keil scope, and future OCD scope can coexist without UI crowding.

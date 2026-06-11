@@ -116,7 +116,7 @@ class UvscRuntimeControlResult:
     error: str = ""
 
     def summary(self) -> str:
-        label = "运行" if self.action == "run" else "暂停" if self.action == "halt" else self.action
+        label = "运行" if self.action == "run" else "暂停" if self.action == "halt" else "单步" if self.action == "step" else self.action
         state = "运行中" if self.target_running is True else "已暂停" if self.target_running is False else "未知"
         if self.succeeded:
             return f"UVSOCK {label}成功，目标{state}"
@@ -384,6 +384,42 @@ class KeilUvscLiveSession:
 
     def run_target(self) -> UvscRuntimeControlResult:
         return self._runtime_control("run", "UVSC_DBG_START_EXECUTION", expected_running=True)
+
+    def step_target(self, command: str = "T") -> UvscRuntimeControlResult:
+        try:
+            self.execute_command(command, echo=True)
+        except Exception as exc:
+            return UvscRuntimeControlResult(
+                attempted=True,
+                action="step",
+                succeeded=False,
+                error=str(exc),
+            )
+        target_running = None
+        error = ""
+        deadline = time.perf_counter() + 2.0
+        while time.perf_counter() < deadline:
+            try:
+                target_running = self.target_running()
+            except Exception as exc:
+                error = str(exc)
+                break
+            if target_running is False:
+                break
+            time.sleep(0.05)
+        succeeded = target_running is False
+        if not succeeded and not error:
+            actual = "运行中" if target_running is True else "未知"
+            error = f"状态回读不一致：期望已暂停，实际{actual}"
+        return UvscRuntimeControlResult(
+            attempted=True,
+            action="step",
+            succeeded=bool(succeeded),
+            status_code=0 if succeeded else None,
+            status_name="UVSC_STATUS_SUCCESS" if succeeded else "",
+            target_running=target_running,
+            error=error,
+        )
 
     def _runtime_control(
         self,

@@ -8,6 +8,10 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - LoopMaster 通过 Keil Debug Commands、UVSOCK 或命令桥接读写变量，避免和 Keil 抢同一个 SWD/JTAG 调试口。
 - OpenOCD、pyOCD、GDB server 直连模式保留为并列调试后端，用于不打开 Keil、跨 IDE、跨探针或需要直接控制调试链的场景。
 - 串口、USB、SWO/RTT、网络、文件回放等数据源进入统一采集架构，不再只围绕 CAN 或单一协议设计。
+- 调试和示波必须是可选模式，不允许被单一后端绑死：
+  - 保留原来的非侵入/轻侵入式变量示波和串口示波模式，适合只看数据、不接管调试链的场景。
+  - Keil / OpenOCD / pyOCD / GDB server 等 OCD 调试模式作为并列选择，适合断点、单步、PC/source、变量读写和调试态示波。
+  - 同一个示波界面要能消费不同来源的数据：轻量采集流、Keil 变量读数、OCD memory/watch、串口/RTT/SWO/USB、文件回放。
 - UI 保持 PCL/Cockpit 风格的现代轻量工作台，目标是稳定、流畅、中文化、适合长时间调参。
 
 ## 当前基线
@@ -60,6 +64,11 @@ LoopMaster 的主方向调整为现代化嵌入式调试工作台。优先支持
 - 后端能力用 capability 暴露：attach、halt、run、step、read_variables、write_variables、breakpoint_sync、pc_location、memory_read、trace_stream。
 - 断点、变量写入和运行控制统一先走 transaction/dry-run，再由后端决定是否可以执行，防止 UI 直接调用某个后端的危险动作。
 - OpenOCD/pyOCD 优先走 GDB remote 或各自稳定 API；Keil 优先走 UVSOCK/Debug Commands；高速波形仍优先使用串口、SWO/ITM、RTT、USB 或网络流。
+- Scope/采集层要独立于 DebugBackend：
+  - `DebugBackend` 负责调试状态、断点、PC/source、step/run/halt、变量/内存读写。
+  - `AcquisitionSession` 负责连续采样、时间戳、缓存、降采样和错误状态。
+  - 一个后端可以提供一个或多个 acquisition source，但示波器也必须能在没有调试后端时独立运行。
+  - UI 应显式区分“轻量示波模式”和“调试链示波模式”，避免用户以为普通示波会接管 ST-Link/SWD。
 
 ### 近期架构拆分要求
 

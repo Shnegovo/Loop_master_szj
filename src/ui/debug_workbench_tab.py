@@ -1962,6 +1962,11 @@ class DebugWorkbenchTab(QWidget):
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.state.value == "paused"
+            ) or (
+                key == "step"
+                and self._backend_controls_ready
+                and status.backend.value == "keil"
+                and status.state.value == "paused"
             )
             enabled = bool(
                 (
