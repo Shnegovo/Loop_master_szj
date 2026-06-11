@@ -367,7 +367,10 @@ class KeilUvscLiveSession:
         options = _UvsockOptions(flags=1 if enabled else 0)
         status = int(self.library.UVSC_GEN_SET_OPTIONS(self.handle, ctypes.byref(options)))
         if status != 0:
-            raise UvscError("UVSC_GEN_SET_OPTIONS", status, self.last_error_text())
+            detail = self.last_error_text()
+            if "Target is in debug mode" in detail:
+                return
+            raise UvscError("UVSC_GEN_SET_OPTIONS", status, detail)
 
     def target_running(self) -> bool | None:
         running = ctypes.c_int(0)

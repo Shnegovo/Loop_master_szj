@@ -4592,3 +4592,99 @@ local Keil uVision help.
   from the UI for verified complete snapshots.
 - Start the source debugger view pass: PC readback, current-line marker, break
   hit feedback, and a compact VSCode-like debug side panel.
+
+## Milestone 51 Update - Real Keil F401 Live Write Proof
+
+### Goal
+
+Move the Keil work from "the bridge exists" to a repeatable real hardware proof:
+LoopMaster must start or reuse Keil/UVSOCK, connect to the attached ST-Link/F401
+probe project, write a RAM variable, and independently read it back.
+
+### Completed
+
+- Added an auto-debug device guard.
+  - `KeilAutoDebugRequest.expected_device` defaults to the F401 CLI smoke path.
+  - `--execute` is blocked when the project device does not match unless
+    `--allow-device-mismatch` is explicitly passed.
+  - The user-provided balance-car reference project is STM32F103C8, so it is
+    kept as a reference/preset sample, not the current F401 hardware target.
+- Fixed a real UVSOCK debug-mode edge case.
+  - `UVSC_GEN_SET_OPTIONS` can return "Target is in debug mode" after uVision
+    is already attached.
+  - `set_extended_stack()` now treats that state as idempotent, matching
+    `UVSC_DBG_ENTER`.
+- Made auto-debug reuse existing UVSOCK sessions.
+  - `prefer_existing_session=True` now checks the current port before launching
+    a new UV4 process.
+  - If the connection is reusable, auto-debug records `reuse` and skips launch.
+  - Connection polling no longer asks for breakpoint enumeration; this avoids
+    an extra UVSOCK debug session and fixed the native DLL exit-code crash seen
+    after a successful write.
+- Added read-only/diagnostic tools.
+  - `tools/keil_balance_reference_probe.py` summarizes the F103 balance-car
+    project, presets, debug adapter, and warnings without touching hardware.
+  - `tools/keil_breakpoint_live_smoke.py` records live `BL`/`BS` command
+    behavior against the F401 probe.
+
+### Verified
+
+- `python tools/keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on the connected ST-Link/F401 setup.
+  - Reused an existing UVSOCK session and skipped launching a new UV4 process.
+  - Wrote `debug_setpoint` at `0x20000008`.
+  - Read back `6000` through the memory path.
+  - Process exit code was `0`.
+- Earlier first live run also proved launch/connect/write when no reusable
+  session was used:
+  - uVision launched.
+  - UVSOCK attached.
+  - `debug_setpoint` changed from `1000` to `6000`.
+- F103 mismatch guard:
+  - `python tools/keil_auto_debug_smoke.py --keil-root D:\Keil --project "<balance Project.uvprojx>" --target "Target 1" --expected-device STM32F401 --execute --no-build --no-launch --no-write --json`
+  - PASS as a deliberate failure: blocked before build, launch, connect, or
+    write because project device is `STM32F103C8`.
+- `python tools/keil_balance_reference_probe.py`
+  - PASS; confirms Target `Target 1`, device `STM32F103C8`, ST-Link/SWD,
+    default write `SpeedLevel=5`, scope presets including `Angle`,
+    `AveSpeed`, `PWML/PWMR`, and PID fields.
+- `python tools/keil_breakpoint_live_smoke.py --json`
+  - PASS; `BL` executes but only echoes `BL`.
+- `python tools/keil_breakpoint_live_smoke.py --set-breakpoint --json`
+  - PASS; `BS \D:\LoopMaster_v2.1\firmware\keil_f401_variable_probe\main.c\62`
+    is accepted and echoed by Keil.
+- `python -m py_compile src/core/keil/backend.py src/core/keil/auto_debug.py src/core/keil/uvsock.py tools/keil_auto_debug_transaction_probe.py tools/keil_auto_debug_smoke.py tools/keil_balance_reference_probe.py tools/keil_breakpoint_live_smoke.py tools/keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools/keil_auto_debug_transaction_probe.py`
+  - PASS.
+- `python tools/keil_live_variable_write_probe.py`
+  - PASS.
+- `python tools/keil_live_write_service_probe.py`
+  - PASS.
+- `python tools/keil_backend_adapter_probe.py --keil-root D:\Keil --project firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx --target "STM32F401CCU6 Variable Probe"`
+  - PASS.
+
+### Notes
+
+- This milestone proves real Keil live variable modification through the
+  attached F401/ST-Link setup.
+- The balance-car reference is valuable for the product workflow and PID/scope
+  presets, but it is an STM32F103C8 project. It must not be auto-executed
+  against the currently attached F401 board.
+- `UVSC_DBG_EXEC_CMD("BL")` only returns the echoed command text on this setup.
+  Full remote breakpoint enumeration still needs a UVSOCK callback, output
+  capture, or Keil command-window logging path.
+- `BS` was accepted with the current absolute Windows path source expression,
+  but because `BL` output is unavailable, automatic remote cleanup/id mapping is
+  still not unlocked.
+
+### Next Target
+
+- Add a harder auto-debug ready check before writes:
+  - verify project/debug options,
+  - read the seed variable before write,
+  - require AXF/RAM/readback for smoke success.
+- Investigate UVSOCK callbacks or another output-capture path for command
+  window text so `BL` can produce real remote breakpoint ids.
+- Continue the modern debugger UI pass: source current line, breakpoint gutter
+  feedback, compact debug side panel, and later OpenOCD/pyOCD/GDB adapters.

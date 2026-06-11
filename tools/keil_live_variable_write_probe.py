@@ -51,6 +51,7 @@ class FakeUvscLibrary:
         self.UVSC_GetLastError = FakeFunction(self._last_error)
         self.memory = bytearray(b"\xE8\x03\x00\x00")
         self.running = False
+        self.options_debug_mode_error = False
 
     def _init(self, *_args) -> int:
         self.calls.append(("init", None))
@@ -94,6 +95,8 @@ class FakeUvscLibrary:
 
     def _set_options(self, handle: int, options) -> int:
         self.calls.append(("options", (handle, options._obj.flags)))
+        if self.options_debug_mode_error:
+            return 9
         return 0
 
     def _calc(self, handle: int, vset_ptr, length: int) -> int:
@@ -126,6 +129,13 @@ class FakeUvscLibrary:
 
     def _last_error(self, handle: int, msg_type, status, buffer, max_len: int) -> int:
         self.calls.append(("last_error", handle))
+        if self.options_debug_mode_error:
+            msg_type._obj.value = 0xD
+            status._obj.value = 10
+            text = b"Target is in debug mode"
+            ctypes.memset(buffer, 0, max_len)
+            ctypes.memmove(buffer, text, min(len(text), max_len - 1))
+            return 0
         msg_type._obj.value = 0
         status._obj.value = 0
         ctypes.memset(buffer, 0, max_len)
@@ -184,6 +194,15 @@ def run() -> int:
     _assert(names == expected, f"call order mismatch: {names!r}")
     calc_payload = fake.calls[7][1]
     _assert(calc_payload[1] == "debug_setpoint = 5000", f"calc payload mismatch: {calc_payload!r}")
+
+    already_debug = FakeUvscLibrary()
+    already_debug.options_debug_mode_error = True
+    already_debug_session = KeilUvscLiveSession(already_debug, 7, owns_uvsc=False)
+    already_debug_session.set_extended_stack(True)
+    _assert(
+        [name for name, _payload in already_debug.calls] == ["options", "last_error"],
+        f"already-debug options should be idempotent: {already_debug.calls!r}",
+    )
 
     failed = session.write_expression_value("debug_gain", "")
     _assert(not failed.attempted and not failed.written, "empty write should be rejected before UVSC call")

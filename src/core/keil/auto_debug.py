@@ -64,6 +64,9 @@ class KeilAutoDebugBackend(Protocol):
 class KeilAutoDebugRequest:
     project_path: Path
     target_name: str = ""
+    expected_device: str = ""
+    allow_device_mismatch: bool = False
+    prefer_existing_session: bool = True
     build_if_missing: bool = True
     launch_if_needed: bool = True
     wait_seconds: float = 20.0
@@ -120,7 +123,11 @@ class KeilAutoDebugResult:
             ("自动调试工程", str(self.request.project_path)),
             ("自动调试 Target", self.request.target_name or "--"),
         ]
+        if self.request.expected_device:
+            rows.append(("期望芯片", self.request.expected_device))
         if self.profile is not None:
+            if self.profile.debug_options is not None:
+                rows.append(("工程芯片", self.profile.debug_options.device or "--"))
             rows.extend(
                 [
                     ("自动调试 AXF", str(self.profile.axf_path or "--")),
@@ -177,6 +184,9 @@ def run_keil_auto_debug_transaction(
         state.error = _step_error(state.steps, "调试档案未就绪")
         return _result(request, state)
 
+    if not _device_guard_passed(request, state):
+        return _result(request, state)
+
     if request.build_if_missing and not state.profile.axf_exists:
         state.build = _timed_step(
             state,
@@ -214,41 +224,61 @@ def run_keil_auto_debug_transaction(
             return _result(request, state)
 
     if request.launch_if_needed:
+        if request.prefer_existing_session:
+            state.snapshot = _try_reuse_existing_connection(
+                backend,
+                request,
+                state,
+                target_name=state.profile.target_name or request.target_name,
+            )
+        if state.snapshot is not None and state.snapshot.connection_established:
+            state.steps.append(
+                KeilAutoDebugStep(
+                    key="launch",
+                    title="启动 Keil",
+                    attempted=False,
+                    succeeded=True,
+                    detail="已有 UVSOCK 连接可用，跳过启动",
+                )
+            )
+        else:
+            state.launch = _timed_step(
+                state,
+                "launch",
+                "启动 Keil",
+                monotonic,
+                lambda: backend.launch_uvsock(
+                    project_path=request.project_path,
+                    target_name=state.profile.target_name or request.target_name,
+                ),
+                lambda launch: launch.launched,
+                lambda launch: f"PID={launch.pid or '--'}" if launch.launched else (launch.error or "启动失败"),
+                skipped=False,
+            )
+            if state.launch is None or not state.launch.launched:
+                state.error = _step_error(state.steps, "uVision/UVSOCK 启动失败")
+                return _result(request, state)
+    else:
         state.launch = _timed_step(
             state,
             "launch",
             "启动 Keil",
             monotonic,
-            lambda: backend.launch_uvsock(
-                project_path=request.project_path,
-                target_name=state.profile.target_name or request.target_name,
-            ),
-            lambda launch: launch.launched,
-            lambda launch: f"PID={launch.pid or '--'}" if launch.launched else (launch.error or "启动失败"),
+            lambda: None,
+            lambda _value: True,
+            lambda _value: "按请求跳过启动，尝试连接现有 uVision",
             skipped=False,
         )
-        if state.launch is None or not state.launch.launched:
-            state.error = _step_error(state.steps, "uVision/UVSOCK 启动失败")
-            return _result(request, state)
-    else:
-        state.steps.append(
-            KeilAutoDebugStep(
-                key="launch",
-                title="启动 Keil",
-                attempted=False,
-                succeeded=True,
-                detail="按请求跳过启动，尝试连接现有 uVision",
-            )
-        )
 
-    state.snapshot = _wait_for_connection(
-        backend,
-        request,
-        state,
-        monotonic=monotonic,
-        sleep=sleep,
-        target_name=state.profile.target_name or request.target_name,
-    )
+    if state.snapshot is None or not state.snapshot.connection_established:
+        state.snapshot = _wait_for_connection(
+            backend,
+            request,
+            state,
+            monotonic=monotonic,
+            sleep=sleep,
+            target_name=state.profile.target_name or request.target_name,
+        )
     if state.snapshot is None or not state.snapshot.connection_established:
         state.error = _step_error(state.steps, "UVSOCK 连接未就绪")
         return _result(request, state)
@@ -296,11 +326,10 @@ def _wait_for_connection(
     while monotonic() <= deadline:
         attempts += 1
         try:
-            last_snapshot = backend.read_only_session_snapshot(
-                project_path=request.project_path,
+            last_snapshot = _read_connection_snapshot(
+                backend,
+                request,
                 target_name=target_name,
-                attempt_connection=True,
-                query_status=True,
             )
         except Exception as exc:
             last_error = str(exc)
@@ -333,6 +362,85 @@ def _wait_for_connection(
         )
     )
     return last_snapshot
+
+
+def _try_reuse_existing_connection(
+    backend: KeilAutoDebugBackend,
+    request: KeilAutoDebugRequest,
+    state: _AutoDebugState,
+    *,
+    target_name: str,
+) -> DebugBackendSessionSnapshot | None:
+    try:
+        snapshot = _read_connection_snapshot(
+            backend,
+            request,
+            target_name=target_name,
+        )
+    except Exception as exc:
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="reuse",
+                title="复用连接",
+                attempted=True,
+                succeeded=True,
+                detail=f"现有连接不可用，继续启动：{exc}",
+            )
+        )
+        return None
+    if snapshot.connection_established:
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="reuse",
+                title="复用连接",
+                attempted=True,
+                succeeded=True,
+                detail=f"已复用现有 UVSOCK 连接：state={snapshot.status.state.value}",
+            )
+        )
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="connect",
+                title="连接",
+                attempted=True,
+                succeeded=True,
+                detail=f"reused state={snapshot.status.state.value}",
+            )
+        )
+        return snapshot
+    state.steps.append(
+        KeilAutoDebugStep(
+            key="reuse",
+            title="复用连接",
+            attempted=True,
+            succeeded=True,
+            detail=f"未发现可复用连接，继续启动：{_snapshot_error(snapshot) or 'not connected'}",
+        )
+    )
+    return None
+
+
+def _read_connection_snapshot(
+    backend: KeilAutoDebugBackend,
+    request: KeilAutoDebugRequest,
+    *,
+    target_name: str,
+) -> DebugBackendSessionSnapshot:
+    try:
+        return backend.read_only_session_snapshot(
+            project_path=request.project_path,
+            target_name=target_name,
+            attempt_connection=True,
+            query_status=True,
+            include_breakpoints=False,
+        )
+    except TypeError:
+        return backend.read_only_session_snapshot(
+            project_path=request.project_path,
+            target_name=target_name,
+            attempt_connection=True,
+            query_status=True,
+        )
 
 
 def _timed_step(
@@ -387,6 +495,67 @@ def _write_seed(request: KeilAutoDebugRequest, profile: KeilDebugProfile | None)
     )
     expression, value_text = keil_live_write_seed(preset_profile)
     return expression, request.value_text or value_text
+
+
+def _device_guard_passed(request: KeilAutoDebugRequest, state: _AutoDebugState) -> bool:
+    expected = _normalize_device_text(request.expected_device)
+    if not expected:
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="device_guard",
+                title="芯片匹配",
+                attempted=False,
+                succeeded=True,
+                detail="未设置期望芯片，跳过匹配护栏",
+            )
+        )
+        return True
+
+    actual = ""
+    if state.profile is not None and state.profile.debug_options is not None:
+        actual = state.profile.debug_options.device
+    actual_norm = _normalize_device_text(actual)
+    matched = bool(actual_norm and (expected in actual_norm or actual_norm in expected))
+    if matched:
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="device_guard",
+                title="芯片匹配",
+                attempted=True,
+                succeeded=True,
+                detail=f"工程芯片 {actual or '--'} 匹配期望 {request.expected_device}",
+            )
+        )
+        return True
+
+    detail = f"工程芯片 {actual or '--'} 与期望 {request.expected_device} 不一致"
+    if request.allow_device_mismatch:
+        state.steps.append(
+            KeilAutoDebugStep(
+                key="device_guard",
+                title="芯片匹配",
+                attempted=True,
+                succeeded=True,
+                detail=detail + "，已按请求允许继续",
+            )
+        )
+        return True
+
+    state.steps.append(
+        KeilAutoDebugStep(
+            key="device_guard",
+            title="芯片匹配",
+            attempted=True,
+            succeeded=False,
+            detail=detail,
+        )
+    )
+    state.error = detail
+    return False
+
+
+def _normalize_device_text(value: str) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
 
 
 def _profile_detail(profile: KeilDebugProfile) -> str:

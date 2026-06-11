@@ -127,6 +127,7 @@ class KeilUvSockBackendAdapter:
         previous_status: DebugWorkbenchStatus | None = None,
         attempt_connection: bool = True,
         query_status: bool = True,
+        include_breakpoints: bool = True,
     ) -> DebugBackendSessionSnapshot:
         launch_plan: UvscLaunchPlan | None = None
         if attempt_connection:
@@ -157,12 +158,14 @@ class KeilUvSockBackendAdapter:
                 target_name=target_name or status.target_name,
                 capabilities=status.capabilities,
             )
-        breakpoint_snapshot = self._breakpoint_snapshot_from_connection(
-            project_path=project_path or status.project_path,
-            target_name=target_name or status.target_name,
-            captured_at=None,
-            attempt=bool(connection and connection.connected),
-        )
+        breakpoint_snapshot = None
+        if include_breakpoints:
+            breakpoint_snapshot = self._breakpoint_snapshot_from_connection(
+                project_path=project_path or status.project_path,
+                target_name=target_name or status.target_name,
+                captured_at=None,
+                attempt=bool(connection and connection.connected),
+            )
         return self._snapshot(
             status=status,
             preflight=preflight,

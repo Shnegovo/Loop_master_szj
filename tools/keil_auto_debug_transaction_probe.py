@@ -92,6 +92,7 @@ class _FakeBackend:
         previous_status=None,
         attempt_connection: bool = True,
         query_status: bool = True,
+        include_breakpoints: bool = True,
     ):
         self.calls.append("connect")
         self.connect_calls += 1
@@ -156,7 +157,12 @@ def _step_map(result):
 def main() -> int:
     clock = _Clock()
     backend = _FakeBackend(axf_exists=True, connect_after=2)
-    request = KeilAutoDebugRequest(project_path=PROJECT, target_name=TARGET, poll_interval=0.1)
+    request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        poll_interval=0.1,
+        prefer_existing_session=False,
+    )
     result = run_keil_auto_debug_transaction(
         backend,
         request,
@@ -172,6 +178,75 @@ def main() -> int:
     rows = dict(result.diagnostic_rows())
     _assert(rows.get("自动调试") == "成功", f"diagnostics mismatch: {rows!r}")
     _assert(rows.get("自动写入变量") == "debug_setpoint", f"write diagnostic mismatch: {rows!r}")
+
+    reuse_backend = _FakeBackend(axf_exists=True, connect_after=1)
+    reuse_request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        poll_interval=0.1,
+        prefer_existing_session=True,
+    )
+    reuse_result = run_keil_auto_debug_transaction(
+        reuse_backend,
+        reuse_request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(reuse_result.succeeded, reuse_result.summary())
+    reuse_steps = _step_map(reuse_result)
+    _assert(reuse_steps["reuse"].succeeded, f"reuse step mismatch: {reuse_steps['reuse']!r}")
+    _assert(reuse_steps["launch"].attempted is False, f"reuse should skip launch: {reuse_steps['launch']!r}")
+    _assert("launch" not in reuse_backend.calls, f"reuse must not launch: {reuse_backend.calls!r}")
+
+    guarded_backend = _FakeBackend(axf_exists=True, connect_after=1)
+    guarded_request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        expected_device="STM32F401",
+        poll_interval=0.1,
+    )
+    guarded_result = run_keil_auto_debug_transaction(
+        guarded_backend,
+        guarded_request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(guarded_result.succeeded, guarded_result.summary())
+    _assert(_step_map(guarded_result)["device_guard"].succeeded, "F401 device guard should pass")
+
+    mismatch_backend = _FakeBackend(axf_exists=True, connect_after=1)
+    mismatch_request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        expected_device="STM32F103",
+        poll_interval=0.1,
+    )
+    mismatch_result = run_keil_auto_debug_transaction(
+        mismatch_backend,
+        mismatch_request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(not mismatch_result.succeeded, "device mismatch should block auto-debug")
+    _assert(_step_map(mismatch_result)["device_guard"].succeeded is False, "device guard step should fail")
+    _assert("write:debug_setpoint=6000" not in mismatch_backend.calls, f"mismatch must not write: {mismatch_backend.calls!r}")
+
+    allowed_backend = _FakeBackend(axf_exists=True, connect_after=1)
+    allowed_request = KeilAutoDebugRequest(
+        project_path=PROJECT,
+        target_name=TARGET,
+        expected_device="STM32F103",
+        allow_device_mismatch=True,
+        poll_interval=0.1,
+    )
+    allowed_result = run_keil_auto_debug_transaction(
+        allowed_backend,
+        allowed_request,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    _assert(allowed_result.succeeded, allowed_result.summary())
+    _assert("write:debug_setpoint=6000" in allowed_backend.calls, f"allowed mismatch should continue: {allowed_backend.calls!r}")
 
     build_backend = _FakeBackend(axf_exists=False, connect_after=1)
     build_result = run_keil_auto_debug_transaction(

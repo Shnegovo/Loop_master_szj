@@ -43,6 +43,8 @@ def main() -> int:
     parser.add_argument("--no-build", action="store_true", help="Fail if AXF is missing instead of building.")
     parser.add_argument("--no-launch", action="store_true", help="Connect to an already running uVision instance.")
     parser.add_argument("--no-write", action="store_true", help="Stop after UVSOCK connection/status readback.")
+    parser.add_argument("--expected-device", default="STM32F401", help="Require the Keil project device to match before --execute.")
+    parser.add_argument("--allow-device-mismatch", action="store_true", help="Allow --execute even if project device does not match --expected-device.")
     parser.add_argument("--execute", action="store_true", help="Actually start Keil/connect/write the target.")
     parser.add_argument("--json", action="store_true", help="Print JSON records.")
     args = parser.parse_args()
@@ -84,6 +86,8 @@ def main() -> int:
         write_smoke=not args.no_write,
         expression=expression,
         value_text=write_value,
+        expected_device=str(args.expected_device or ""),
+        allow_device_mismatch=bool(args.allow_device_mismatch),
         build_timeout=float(args.build_timeout),
         connection_name="LoopMasterAutoSmoke",
     )
@@ -97,6 +101,8 @@ def main() -> int:
             "port": port,
             "project": str(project),
             "target": target,
+            "expected_device": request.expected_device,
+            "allow_device_mismatch": request.allow_device_mismatch,
             "profile_ready": profile.ready,
             "profile_reasons": list(profile.reasons),
             "axf": str(profile.axf_path or ""),
