@@ -6888,3 +6888,73 @@ of a generic "already read back" message.
   - or read `D:\ti` to build the first MSPM0G3507 debugger profile plan.
   Keil remains the reference implementation for real variable writes,
   breakpoint sync, run-to-cursor, and PC/runtime evidence.
+
+## Milestone 80 - TI MSPM0G3507 Local Toolchain Profile
+
+### Goal
+
+Turn the local `D:\ti` installation into structured, testable debugger metadata
+without touching TI hardware. This keeps the future TI adapter grounded in real
+CCS/SDK/targetdb facts while Keil remains the live reference backend.
+
+### Completed
+
+- Added a read-only TI MSPM0G3507 profile module:
+  - discovers CCS, SDK, SysConfig, DebugServer/DSLite, GDB agent, DSS, and
+    TI ARM LLVM compiler paths,
+  - parses `MSPM0G3507.xml` for Cortex-M0+, TICLANG, XDS110, AP designator,
+    GEL files, compiler/linker options, startup file, and key peripheral bases,
+  - parses `mspm0g3507.cmd` for FLASH, SRAM, BCR, and BSL linker ranges,
+  - parses the SDK SysConfig example for device/package/spin identity.
+- Added `tools\ti_mspm0_profile_probe.py`:
+  - asserts exact MSPM0G3507 identity,
+  - verifies the local TI tool executables exist,
+  - verifies FLASH `0x00000000..0x0001FFFF`,
+  - verifies linker SRAM `0x20200000..0x20207FFF`,
+  - verifies targetdb SYSMEM base `0x20000000`,
+  - verifies the warning that linker SRAM and targetdb SYSMEM use different
+    bases and must be checked before live variable writes.
+- Updated the debugger toolchain descriptor:
+  - TI is now described as CCS DebugServer/XDS110/MSPM0G3507 metadata already
+    identified locally,
+  - still explicitly safe: no probe enumeration, no target attach, no write.
+- Recorded the user requirement that debug/scope data sources must stay
+  selectable:
+  - original non/light-intrusive memory sampling,
+  - serial/VOFA-style waveform,
+  - Keil/UVSOCK debugger mode,
+  - future OpenOCD/GDB, pyOCD, and TI MSPM0G3507 modes.
+
+### Verified
+
+- `python -m py_compile src\core\ti_mspm0\profile.py src\core\debug_toolchains.py tools\ti_mspm0_profile_probe.py tools\debug_toolchains_probe.py`
+  - PASS.
+- `python tools\debug_toolchains_probe.py`
+  - PASS.
+- `python tools\ti_mspm0_profile_probe.py --json`
+  - PASS.
+  - Device: `MSPM0G3507`.
+  - CPU: `Cortex M0+ CPU`.
+  - Connection: `TIXDS110_Connection.xml`.
+  - FLASH: `0x00000000-0x0001FFFF`.
+  - SRAM: `0x20200000-0x20207FFF`.
+  - targetdb SYSMEM base: `0x20000000`.
+  - Missing TI tools: none.
+
+### Notes
+
+- This milestone is intentionally no-hardware and no-process. It does not launch
+  CCS, DSLite, GDB agent, or DSS.
+- The SRAM base mismatch is not treated as failure; it is surfaced as a safety
+  warning so live TI variable access must resolve the address alias before any
+  write is allowed.
+
+### Next Target
+
+- Continue the Keil basics first:
+  - make breakpoint operations and remote evidence easier to use from the UI,
+  - keep variable write/read and Halt/Run/Step paths verified,
+  - then add a shared debugger/scope source selector so debugger-backed waveforms
+    and non-intrusive/serial waveforms can coexist cleanly.
+- After Keil basics are solid, start no-process OpenOCD/GDB command preview and
+  TI MSPM0G3507 command/profile preview, with hardware writes still gated.
