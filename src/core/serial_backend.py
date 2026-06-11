@@ -25,6 +25,9 @@ from src.core.decoders.serial import (  # noqa: F401
     _split_tokens,
     _strip_firewater_noise,
 )
+from src.core.acquisition_sources import SCOPE_SOURCE_SERIAL_WAVEFORM
+from src.core.acquisition_session import AcquisitionBatch
+from src.core.serial_waveform_batch import serial_waveform_batch_from_series
 
 try:
     import serial
@@ -197,6 +200,17 @@ class SerialCollector:
             for name, buffer in self._buffers.items():
                 result[name] = buffer.get(tail_seconds)
             return result
+
+    def get_acquisition_batch(
+        self,
+        source_key: str = SCOPE_SOURCE_SERIAL_WAVEFORM,
+        tail_seconds: Optional[float] = None,
+    ) -> AcquisitionBatch:
+        """Return buffered serial waveform data as a neutral acquisition batch."""
+        return serial_waveform_batch_from_series(
+            self.get_data(tail_seconds),
+            source_key=source_key,
+        )
 
     def get_logs(self, max_lines: Optional[int] = None) -> list[tuple[float, str]]:
         with self._lock:

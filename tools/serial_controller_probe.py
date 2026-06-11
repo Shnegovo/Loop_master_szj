@@ -17,6 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 
+from src.core.acquisition_sources import SCOPE_SOURCE_SERIAL_WAVEFORM  # noqa: E402
 from src.ui.serial_controller import SerialController  # noqa: E402
 
 
@@ -116,6 +117,7 @@ class Recorder:
         self.send_enabled: list[bool] = []
         self.send_accepted = 0
         self.scope_data: list[object] = []
+        self.acquisition_batches: list[object] = []
 
     def bind(self, controller: SerialController) -> None:
         controller.portsChanged.connect(lambda ports: self.ports.extend(list(ports)))
@@ -125,6 +127,7 @@ class Recorder:
         controller.sendEnabledChanged.connect(lambda enabled: self.send_enabled.append(bool(enabled)))
         controller.sendAccepted.connect(lambda: setattr(self, "send_accepted", self.send_accepted + 1))
         controller.scopeDataChanged.connect(lambda data: self.scope_data.append(data))
+        controller.acquisitionBatchChanged.connect(lambda batch: self.acquisition_batches.append(batch))
 
 
 def _app() -> QCoreApplication:
@@ -178,6 +181,11 @@ def main() -> int:
     _pump()
     _assert(any("fake opened" in text for text, _level in recorder.logs), "runtime log missing")
     _assert(recorder.scope_data and "speed.feedback" in recorder.scope_data[-1], "scope data signal missing")
+    _assert(recorder.acquisition_batches, "acquisition batch signal missing")
+    batch = recorder.acquisition_batches[-1]
+    _assert(batch.source_key == SCOPE_SOURCE_SERIAL_WAVEFORM, f"serial batch source mismatch: {batch!r}")
+    _assert(batch.sample_count == 3, f"serial batch sample count mismatch: {batch.sample_count}")
+    _assert("speed.feedback" in batch.variable_names, f"serial batch variables mismatch: {batch.variable_names!r}")
 
     controller.send("ping\r\n", "ascii")
     _wait_for("collector send", lambda: len(collector.sends) == 1)

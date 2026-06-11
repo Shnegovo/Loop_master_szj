@@ -7582,3 +7582,73 @@ label and see which source produced the current buffered samples.
   - identify the current serial collector/parser shape,
   - add a no-hardware parser-to-`AcquisitionBatch` bridge,
   - keep serial UI behavior unchanged until the bridge has probes.
+
+## Milestone 91 - Serial Waveform Batch Bridge
+
+### Goal
+
+Bring the serial assistant waveform path into the same acquisition batch model
+used by SWD and Keil Watch, without changing the current serial UI behavior.
+This records the product requirement that debugging and scope can choose
+between:
+
+- the original non/light-intrusive SWD mode,
+- debugger-backed modes such as Keil/OpenOCD/pyOCD/TI OCD,
+- serial active-report waveform mode.
+
+### Completed
+
+- Added `src\core\serial_waveform_batch.py`:
+  - converts serial parser sample rows into `AcquisitionBatch`,
+  - converts existing serial scope series `{channel: (x, y)}` into
+    `AcquisitionBatch`,
+  - preserves channel names and sample sequence,
+  - infers sample interval from timestamps when possible,
+  - coerces invalid numeric values to `NaN` instead of crashing the scope path.
+- Added `SerialCollector.get_acquisition_batch()` as a read-only export bridge
+  for buffered serial waveform data.
+- Added `SerialController.acquisitionBatchChanged` and
+  `current_acquisition_batch()` so UI/diagnostic layers can subscribe to serial
+  waveform batches later.
+- Extended `tools\serial_controller_probe.py` to assert the serial controller
+  emits a `serial_waveform` acquisition batch while keeping the old
+  `scopeDataChanged` signal intact.
+- Added `tools\serial_waveform_batch_probe.py` for no-hardware parser and
+  series conversion coverage.
+
+### Verified
+
+- `python -m py_compile src\core\serial_waveform_batch.py src\core\serial_backend.py src\ui\serial_controller.py tools\serial_waveform_batch_probe.py tools\serial_controller_probe.py`
+  - PASS.
+- `python tools\serial_waveform_batch_probe.py`
+  - PASS.
+- `python tools\serial_parser_probe.py`
+  - PASS.
+- `python tools\serial_controller_probe.py`
+  - PASS.
+- `python tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-serial-batch --width 1440 --height 900`
+  - PASS.
+- `python tools\ui_serial_integration_probe.py --output-dir tools\ui-serial-integration-batch-rerun`
+  - PASS.
+- Screenshots checked manually:
+  - `tools\ui-serial-integration-batch\ui-serial-integration.png`
+  - `tools\ui-debug-workbench-serial-batch\01_debug_workbench_project.png`
+
+### Notes
+
+- This is still a low-risk bridge. It does not change serial read timing,
+  parser behavior, plot drawing, or hardware access.
+- The main scope selector still protects route-only serial by navigating to the
+  serial assistant rather than forcing it into the SWD/Keil sampling thread.
+
+### Next Target
+
+- Return to debugger fundamentals before more architecture polish:
+  - make Keil breakpoint state/actions more concrete,
+  - keep UI wording honest about verified vs pending breakpoint evidence,
+  - then use the same backend-neutral contracts for future OpenOCD/pyOCD/TI
+    adapters.

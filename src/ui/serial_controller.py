@@ -9,6 +9,7 @@ from collections.abc import Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from src.core.serial_backend import SerialCollector, SerialConfig, list_serial_ports
+from src.core.serial_waveform_batch import serial_waveform_batch_from_series
 
 
 class SerialController(QObject):
@@ -21,6 +22,7 @@ class SerialController(QObject):
     sendEnabledChanged = Signal(bool)
     sendAccepted = Signal()
     scopeDataChanged = Signal(object)
+    acquisitionBatchChanged = Signal(object)
 
     _connectFinished = Signal(bool, object, str)
     _disconnectFinished = Signal(str)
@@ -160,6 +162,7 @@ class SerialController(QObject):
         data = self._collector.get_data(tail_seconds=10.0)
         if data:
             self.scopeDataChanged.emit(data)
+            self.acquisitionBatchChanged.emit(self._current_acquisition_batch(data))
 
         if self._connected and not self._collector.is_running:
             error = self._collector.last_error
@@ -173,6 +176,10 @@ class SerialController(QObject):
             return len(self._collector.get_data(tail_seconds=tail_seconds))
         except Exception:
             return 0
+
+    def current_acquisition_batch(self, tail_seconds: float = 10.0):
+        data = self._collector.get_data(tail_seconds=tail_seconds)
+        return self._current_acquisition_batch(data, tail_seconds=tail_seconds)
 
     def start_worker(self, target, name: str) -> None:
         if self._shutting_down:
@@ -261,6 +268,17 @@ class SerialController(QObject):
             return
         self._connected = connected
         self.connectedChanged.emit(connected)
+
+    def _current_acquisition_batch(self, data: object, tail_seconds: float = 10.0):
+        if hasattr(self._collector, "get_acquisition_batch"):
+            try:
+                return self._collector.get_acquisition_batch(tail_seconds=tail_seconds)
+            except TypeError as exc:
+                message = str(exc)
+                if "tail_seconds" not in message and "argument" not in message:
+                    raise
+                return self._collector.get_acquisition_batch()
+        return serial_waveform_batch_from_series(data if isinstance(data, dict) else {})
 
 
 def serial_protocol_key(label: str) -> str:
