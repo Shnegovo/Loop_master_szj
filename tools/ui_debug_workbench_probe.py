@@ -691,6 +691,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"scope acquisition diagnostics mismatch: {diag!r}")
                 if diag.get("采集模式") != "非/轻侵入式" or diag.get("调试接管") != "不接管调试链":
                     issues.append(f"scope acquisition mode boundary mismatch: {diag!r}")
+                if diag.get("采集批次来源") != "swd" or diag.get("采集批次样本") != "0":
+                    issues.append(f"empty acquisition batch diagnostics mismatch: {diag!r}")
                 compile_index = tab.source_provider_combo.findData("compile_commands")
                 if compile_index < 0:
                     issues.append("source provider selector missing compile_commands data")

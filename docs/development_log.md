@@ -7456,3 +7456,70 @@ legacy `get_data()` API used by the current plots.
 
 - Use `get_acquisition_batch()` in one UI/probe-only path first so scope
   diagnostics can show batch/source metadata without changing render behavior.
+
+## Milestone 89 - Acquisition Batch Diagnostics Bridge
+
+### Goal
+
+Make the new acquisition batch contract visible in the Debug Workbench without
+changing plotting or sampling behavior. The UI should be able to distinguish
+source capability from actual buffered sample evidence.
+
+### Completed
+
+- Added acquisition batch rows to Debug Workbench diagnostics:
+  - `采集批次来源`,
+  - `采集批次样本`,
+  - `采集批次变量`,
+  - `采集批次频率`,
+  - `采集批次时长`,
+  - `采集批次变量名` when variables exist.
+- The diagnostics use `DataCollector.get_acquisition_batch()` as a read-only
+  bridge:
+  - stopped/empty collectors report zero-sample metadata safely,
+  - running Keil Watch sampling reports `keil_watch` as the batch source,
+  - the current plot/render path remains unchanged.
+- Extended probes:
+  - full Debug Workbench probe now asserts empty SWD batch diagnostics,
+  - Keil Watch scope probe now starts the fake Watch collector and asserts
+    `keil_watch`, nonzero samples, and `Angle` in batch variable names.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_debug_workbench_probe.py tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-acquisition-batch --width 1440 --height 900`
+  - PASS.
+  - Screenshot checked manually:
+    - `tools\ui-debug-workbench-acquisition-batch\01_debug_workbench_project.png`
+- Regression probes:
+  - `python tools\ui_keil_runtime_control_probe.py`
+    - PASS.
+  - `python tools\ui_keil_breakpoint_sync_probe.py`
+    - PASS.
+  - `python tools\debug_backend_adapter_probe.py`
+    - PASS.
+  - `python tools\debug_session_controller_probe.py`
+    - PASS.
+  - `python tools\ti_mspm0_profile_probe.py --json`
+    - PASS.
+
+### Notes
+
+- This remains a read-only UI/evidence bridge. No sampling thread, plot drawing,
+  Keil command execution, serial parser, or hardware path was changed.
+- The distinction is now visible in diagnostics: source capability rows describe
+  what a source can do, while batch rows describe what data is actually buffered.
+
+### Next Target
+
+- Move acquisition batch metadata closer to the main scope surface:
+  - add a compact scope status chip or tooltip using the same batch data,
+  - keep the old plot path intact,
+  - then wire serial waveform batches after the parser contract is ready.

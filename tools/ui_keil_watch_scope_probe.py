@@ -196,10 +196,19 @@ def main() -> int:
 
         window._rate_combo.setCurrentIndex(window._rate_combo.findData(0))
         window._on_start()
-        _pump(app, 0.1)
+        _pump(app, 0.25)
         _assert(window._collector.is_running, "collector should start with fake Keil Watch backend")
         _assert(window._collector._sample_rate == watch.max_hz, f"sample rate should clamp to {watch.max_hz}")
         _assert("降到" in window._scope_rate_note, f"rate note missing clamp warning: {window._scope_rate_note!r}")
+        window._refresh_debug_workbench_diagnostics()
+        diagnostics = {
+            tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+            for row in range(tab.diagnostics_table.rowCount())
+            if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+        }
+        _assert(diagnostics.get("采集批次来源") == "keil_watch", f"Keil Watch batch source mismatch: {diagnostics!r}")
+        _assert(int(diagnostics.get("采集批次样本", "0")) > 0, f"Keil Watch batch sample count mismatch: {diagnostics!r}")
+        _assert("Angle" in diagnostics.get("采集批次变量名", ""), f"Keil Watch batch variable names mismatch: {diagnostics!r}")
         window._on_stop()
         watch.connect()
         _assert(watch.connected, "fake watch should reconnect before close check")

@@ -4836,6 +4836,7 @@ class MainWindow(QMainWindow):
             + self._keil_run_to_cursor_diagnostics()
             + self._remote_breakpoint_snapshot_diagnostics()
             + self._acquisition_source_diagnostics()
+            + self._acquisition_batch_diagnostics()
             + self._debug_pc_evidence_diagnostics()
             + self._keil_live_write_diagnostics()
         )
@@ -4870,6 +4871,31 @@ class MainWindow(QMainWindow):
             include_planned=True,
         )
         return descriptor.diagnostic_rows()
+
+    def _acquisition_batch_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        collector = getattr(self, "_collector", None)
+        if collector is None or not hasattr(collector, "get_acquisition_batch"):
+            return ()
+        source = getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD)
+        try:
+            batch = collector.get_acquisition_batch(source, tail_seconds=1.0 if collector.is_running else None)
+        except Exception as exc:
+            return (("采集批次", f"不可用：{exc}"),)
+        rate = batch.actual_rate_hz or float(getattr(collector, "actual_rate", 0.0) or 0.0)
+        duration = batch.duration_s
+        rows = [
+            ("采集批次来源", batch.source_key),
+            ("采集批次样本", str(batch.sample_count)),
+            ("采集批次变量", str(len(batch.variable_names))),
+            ("采集批次频率", self._format_sample_rate(rate) if rate > 0 else "--"),
+            ("采集批次时长", f"{duration:.3f}s" if duration > 0 else "--"),
+        ]
+        if batch.variable_names:
+            preview = ", ".join(batch.variable_names[:4])
+            if len(batch.variable_names) > 4:
+                preview += f", +{len(batch.variable_names) - 4}"
+            rows.append(("采集批次变量名", preview))
+        return tuple(rows)
 
     def _debug_pc_evidence_diagnostics(self) -> tuple[tuple[str, str], ...]:
         record = getattr(self, "_debug_backend_snapshot_record", None)
