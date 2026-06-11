@@ -133,6 +133,26 @@ def main() -> int:
         _assert(remove_result.succeeded, remove_result.summary())
         _assert(remove_session.commands == ["BK 7", "BK 4"], f"remove order must be descending: {remove_session.commands!r}")
 
+        f401_axf = ROOT / "firmware" / "keil_f401_variable_probe" / "Objects" / "f401_variable_probe.axf"
+        f401_main = ROOT / "firmware" / "keil_f401_variable_probe" / "main.c"
+        if f401_axf.exists() and f401_main.exists():
+            f401_request = build_keil_breakpoint_sync_request_from_state(
+                project_path=ROOT / "firmware" / "keil_f401_variable_probe" / "F401VariableProbe.uvprojx",
+                target_name="STM32F401CCU6 Variable Probe",
+                local_breakpoints=(KeilBreakpointIntent(f401_main, 62, enabled=True),),
+                remote_breakpoints=(),
+                source_paths=(f401_main,),
+                transaction_id="f401-address-breakpoint",
+                axf_path=f401_axf,
+            )
+            add_operation = next(operation for operation in f401_request.operations if operation.action == KeilBreakpointSyncAction.ADD)
+            _assert(add_operation.address is not None, f"F401 breakpoint address was not resolved: {add_operation!r}")
+            f401_command = keil_breakpoint_command(add_operation)
+            _assert(f401_command.startswith("BS 0x0800"), f"F401 breakpoint should use flash address: {f401_command!r}")
+            f401_result = execute_keil_breakpoint_sync(FakeSession(), f401_request)
+            rows = dict(f401_result.diagnostic_rows())
+            _assert("已解析" in rows.get("断点地址解析", ""), f"address diagnostics missing: {rows!r}")
+
     print("PASS Keil breakpoint sync probe")
     return 0
 

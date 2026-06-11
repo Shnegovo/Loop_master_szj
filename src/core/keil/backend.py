@@ -372,7 +372,11 @@ class KeilUvSockBackendAdapter:
                     session,
                     project_path=request.project_path,
                     target_name=request.target_name,
-                    fallback=remote_snapshot_from_operations(request, complete=True),
+                    fallback=remote_snapshot_from_operations(
+                        request,
+                        complete=False,
+                        error="Keil 已执行断点命令，但 BL 未返回可解析断点列表",
+                    ),
                 )
                 return KeilBreakpointSyncResult(
                     request=result.request,

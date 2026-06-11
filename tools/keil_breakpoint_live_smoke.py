@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,13 +17,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core.keil.breakpoint_list import keil_breakpoint_list_command, parse_keil_breakpoint_list  # noqa: E402
-from src.core.keil.breakpoint_sync import keil_breakpoint_command  # noqa: E402
-from src.core.keil.commands import KeilBreakpointSyncAction, KeilBreakpointSyncOperation  # noqa: E402
+from src.core.keil.breakpoint_sync import build_keil_breakpoint_sync_request_from_state, keil_breakpoint_command  # noqa: E402
+from src.core.keil.commands import KeilBreakpointIntent, KeilBreakpointSyncAction  # noqa: E402
 from src.core.keil.uvsock import KeilUvscLiveSession  # noqa: E402
 
 
 DEFAULT_PROJECT = ROOT / "firmware" / "keil_f401_variable_probe" / "F401VariableProbe.uvprojx"
 DEFAULT_SOURCE = ROOT / "firmware" / "keil_f401_variable_probe" / "main.c"
+DEFAULT_AXF = ROOT / "firmware" / "keil_f401_variable_probe" / "Objects" / "f401_variable_probe.axf"
 DEFAULT_TARGET = "STM32F401CCU6 Variable Probe"
 
 
@@ -33,17 +35,21 @@ def main() -> int:
     parser.add_argument("--project", default=str(DEFAULT_PROJECT))
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE))
+    parser.add_argument("--axf", default=str(DEFAULT_AXF))
     parser.add_argument("--line", type=int, default=62)
     parser.add_argument("--set-breakpoint", action="store_true", help="Actually execute BS at --source/--line.")
+    parser.add_argument("--verify-hit", action="store_true", help="Run the target after setting the breakpoint and poll for a stop.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     project = Path(args.project).expanduser().resolve()
     source = Path(args.source).expanduser().resolve()
+    axf = Path(args.axf).expanduser().resolve() if args.axf else None
     record: dict[str, object] = {
         "project": str(project),
         "target": args.target,
         "source": str(source),
+        "axf": str(axf or ""),
         "line": int(args.line),
         "set_breakpoint": bool(args.set_breakpoint),
     }
@@ -69,17 +75,42 @@ def main() -> int:
         record["before_error"] = before_parse.snapshot.error
 
         if args.set_breakpoint:
-            operation = KeilBreakpointSyncOperation(
-                action=KeilBreakpointSyncAction.ADD,
-                path=source,
-                line=int(args.line),
-                local_enabled=True,
-                valid=True,
+            request = build_keil_breakpoint_sync_request_from_state(
+                project_path=project,
+                target_name=args.target,
+                local_breakpoints=(KeilBreakpointIntent(source, int(args.line), enabled=True),),
+                remote_breakpoints=(),
+                source_paths=(source,),
+                transaction_id="live-breakpoint-smoke",
+                axf_path=axf if axf and axf.exists() else None,
             )
+            operation = next(item for item in request.operations if item.action == KeilBreakpointSyncAction.ADD)
             command = keil_breakpoint_command(operation)
             output = session.execute_command(command, echo=True)
             record["set_command"] = command
+            record["set_address"] = f"0x{operation.address:08X}" if operation.address is not None else ""
+            record["set_address_source"] = operation.address_source
+            record["set_address_exact"] = operation.address_exact
             record["set_output"] = output
+            if args.verify_hit:
+                run_result = session.run_target()
+                record["run_after_set"] = run_result.succeeded
+                record["run_after_set_error"] = run_result.error
+                hit_detected = False
+                status_samples: list[bool | None] = []
+                deadline = time.perf_counter() + 5.0
+                while time.perf_counter() < deadline:
+                    try:
+                        running = session.target_running()
+                    except Exception:
+                        running = None
+                    status_samples.append(running)
+                    if running is False:
+                        hit_detected = True
+                        break
+                    time.sleep(0.15)
+                record["hit_detected"] = hit_detected
+                record["status_samples"] = status_samples[:12]
 
         after_text = session.execute_command(keil_breakpoint_list_command(), echo=True)
         after_parse = parse_keil_breakpoint_list(

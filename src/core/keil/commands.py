@@ -77,6 +77,9 @@ class KeilBreakpointSyncOperation:
     valid: bool = True
     reason: str = ""
     remote_id: str = ""
+    address: int | None = None
+    address_source: str = ""
+    address_exact: bool = False
 
 
 @dataclass(frozen=True)
@@ -926,7 +929,7 @@ def _breakpoint_summary_digest(
     payload = {
         "local": [(str(item.path), item.line, item.enabled, item.condition, item.verified, item.message) for item in local_breakpoints],
         "remote": [(str(item.path), item.line, item.enabled, item.condition) for item in remote_breakpoints],
-        "ops": [(op.action.value, str(op.path), op.line, op.valid, op.reason) for op in operations],
+        "ops": [(op.action.value, str(op.path), op.line, op.valid, op.reason, op.address, op.address_exact) for op in operations],
         "complete": snapshot_complete,
         "error": snapshot_error,
     }
@@ -952,6 +955,8 @@ def _breakpoint_snapshot_digest(
 
 def _breakpoint_operation_command(operation: KeilBreakpointSyncOperation) -> str:
     line = _keil_source_line_expression(operation.path, operation.line)
+    if operation.address is not None:
+        line = f"0x{int(operation.address):08X}"
     if operation.action == KeilBreakpointSyncAction.ADD:
         return f'UVSC_DBG_EXEC_CMD(handle, "BS {line}")'
     if operation.action == KeilBreakpointSyncAction.REMOVE:

@@ -69,7 +69,7 @@ class FakeKeilBackend:
 
     def sync_breakpoints(self, request):
         self.requests.append(request)
-        snapshot = remote_snapshot_from_operations(request, complete=True)
+        snapshot = remote_snapshot_from_operations(request, complete=False, error="fake BL did not return breakpoint text")
         return execute_keil_breakpoint_sync(self.session, request, remote_snapshot=snapshot)
 
 
@@ -197,12 +197,12 @@ def main() -> int:
         rows = _diagnostics(tab)
         _assert(rows.get("断点同步") == "成功", f"sync diagnostics mismatch: {rows!r}")
         _assert(rows.get("断点同步模式") == "推送本地", f"sync mode mismatch: {rows!r}")
-        verification_texts = [
-            tab.breakpoint_table.item(row, 4).text()
-            for row in range(tab.breakpoint_table.rowCount())
-            if tab.breakpoint_table.item(row, 4) is not None
-        ]
-        _assert(any("已验证" in text for text in verification_texts), f"breakpoint not verified: {verification_texts!r}")
+        breakpoint_rows = tab.local_breakpoints()
+        _assert(any(not item.verified for item in breakpoint_rows), f"breakpoint should wait for remote readback: {breakpoint_rows!r}")
+        _assert(
+            any("等待断点列表回读" in item.message for item in breakpoint_rows),
+            f"accepted-command evidence missing: {breakpoint_rows!r}",
+        )
         audit_lines = (output_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines()
         _assert(audit_lines, "breakpoint sync audit log missing")
         record = json.loads(audit_lines[-1])

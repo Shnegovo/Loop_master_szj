@@ -3285,6 +3285,8 @@ class MainWindow(QMainWindow):
         remote_complete = bool(remote_snapshot is not None and getattr(remote_snapshot, "complete", False))
         remote_breakpoints = getattr(remote_snapshot, "breakpoints", ()) if remote_complete else ()
         transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
+        profile = self._make_current_keil_profile()
+        axf_path = profile.axf_path if profile is not None and profile.axf_exists else None
         request = build_keil_breakpoint_sync_request_from_state(
             project_path=status.project_path,
             target_name=status.target_name,
@@ -3294,6 +3296,7 @@ class MainWindow(QMainWindow):
             transaction_id=getattr(transaction, "transaction_id", ""),
             connection_name="LoopMasterBreakpointSync",
             remote_snapshot_complete=remote_complete,
+            axf_path=axf_path,
         )
         if not self._confirm_keil_breakpoint_sync(request, status):
             return
@@ -3400,10 +3403,11 @@ class MainWindow(QMainWindow):
                 succeeded_by_key.add(key)
                 continue
             failed_by_key[key] = command.error or command.operation.reason or "Keil 未接受该断点命令"
+        remote_complete = bool(getattr(result.remote_snapshot, "complete", False))
         remote_keys = {
             self._keil_breakpoint_sync_key(item.path, item.line)
             for item in getattr(result.remote_snapshot, "breakpoints", ()) or ()
-            if getattr(item, "path", None) is not None and getattr(item, "line", 0)
+            if remote_complete and getattr(item, "path", None) is not None and getattr(item, "line", 0)
         }
         for breakpoint in tab.local_breakpoints():
             key = self._keil_breakpoint_sync_key(breakpoint.path, breakpoint.line)
@@ -3414,12 +3418,19 @@ class MainWindow(QMainWindow):
                     verified=False,
                     message=failed_by_key[key],
                 )
-            elif result.succeeded and (key in remote_keys or key in succeeded_by_key):
+            elif result.succeeded and key in remote_keys:
                 tab.set_breakpoint_verification(
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=True,
-                    message="Keil 已同步",
+                    message="Keil 已回读该断点",
+                )
+            elif result.succeeded and key in succeeded_by_key:
+                tab.set_breakpoint_verification(
+                    breakpoint.line,
+                    path=breakpoint.path,
+                    verified=remote_complete,
+                    message="Keil 已接受命令，等待断点列表回读" if not remote_complete else "Keil 已同步",
                 )
 
     @staticmethod

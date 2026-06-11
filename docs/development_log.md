@@ -5077,3 +5077,117 @@ inspection.
   - Keil Debug Commands/UVSOCK status,
   - AXF symbol and DWARF line mapping,
   - GDB/MI-compatible PC readback for OpenOCD and pyOCD.
+
+## Milestone 56 Update - Keil Breakpoints Use AXF Line Addresses
+
+### Goal
+
+Move Keil breakpoint sync from source-path command strings toward a real,
+verifiable debug chain: resolve local source lines through AXF/DWARF, send
+address breakpoints to Keil, and do not claim remote breakpoint readback when
+UVSOCK only echoes `BL`.
+
+### Completed
+
+- Added AXF/DWARF source-line address resolution.
+  - New module: `src/core/keil/source_line_address.py`.
+  - Parses `arm-none-eabi-readelf -wl` text.
+  - Resolves `source.c:line` to flash code addresses.
+  - F401 probe verified `main.c:62 -> 0x08000164`.
+- Extended Keil breakpoint operations with address evidence.
+  - `KeilBreakpointSyncOperation` now carries:
+    - `address`
+    - `address_source`
+    - `address_exact`
+  - `keil_breakpoint_command()` now emits `BS 0x...` when an address is
+    available, falling back to the source-line expression only when unresolved.
+- Passed AXF profile data into UI breakpoint sync.
+  - The workbench builds breakpoint sync requests with the current Keil
+    profile's AXF when available.
+  - Sync diagnostics now show the AXF path and address-resolution counts.
+- Fixed breakpoint evidence honesty.
+  - Keil backend no longer treats a fallback snapshot as a complete remote
+    breakpoint enumeration.
+  - If `BL` only echoes and does not return a parseable list, the snapshot is
+    incomplete with error:
+    `Keil 已执行断点命令，但 BL 未返回可解析断点列表`.
+  - The UI now distinguishes:
+    - remote breakpoint list confirms the breakpoint: `Keil 已回读该断点`
+    - command was accepted but no list readback exists:
+      `Keil 已接受命令，等待断点列表回读`
+- Updated live smoke tooling.
+  - `tools/keil_breakpoint_live_smoke.py` now resolves AXF line addresses.
+  - Added `--verify-hit` to run the target after setting a breakpoint and poll
+    for a stop.
+- Recorded TI follow-up constraints without interrupting Keil work.
+  - TI path: `D:\ti`.
+  - TI target scope: MSPM0G3507 only.
+  - No TI debug hardware is currently available, so later TI work should start
+    with offline CCS/SysConfig/SDK project parsing and ELF/source/variable
+    mapping, not hardware claims.
+
+### Verified
+
+- `python -m py_compile src\core\keil\source_line_address.py src\core\keil\breakpoint_sync.py src\core\keil\backend.py src\core\keil\commands.py src\ui\gui.py tools\keil_breakpoint_live_smoke.py tools\ui_keil_breakpoint_sync_probe.py tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_source_line_address_probe.py`
+  - PASS; `main.c:62 -> 0x08000164`.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS; verifies address-backed `BS 0x...` command generation.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS; verifies command-accepted-but-not-read-back evidence remains
+    unverified.
+- `python tools\keil_breakpoint_live_smoke.py --keil-root D:\Keil --line 62 --set-breakpoint --verify-hit --json`
+  - PASS on connected ST-Link/F401.
+  - Sent `BS 0x08000164`.
+  - `hit_detected=true` after running the target.
+  - `BL` still only echoed `BL`, so remote breakpoint list enumeration remains
+    incomplete.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS; variable read/write still works after the breakpoint changes.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-keil-breakpoint-address --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-keil-breakpoint-address\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-keil-breakpoint-address\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-keil-breakpoint-address\03_debug_workbench_narrow.png`
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- `python tools\keil_variable_presets_probe.py`
+  - PASS.
+- `python tools\keil_balance_reference_probe.py --json`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS.
+
+### Notes
+
+- The Keil breakpoint base chain is now real enough to set an address
+  breakpoint and observe the target stop on F401 hardware.
+- Full remote breakpoint enumeration is not solved because UVSOCK
+  `UVSC_DBG_EXEC_CMD("BL")` returns only the echoed command in current testing.
+  The UI and diagnostics now reflect that limitation instead of overstating it.
+- No big-version packaging was done for this milestone.
+- No `UV4.exe`/`uVision` process remained after cleanup.
+
+### Next Target
+
+- Finish Keil breakpoint usability:
+  - investigate an alternate way to read Keil breakpoint IDs/list state,
+  - add a safer clear/remove workflow once IDs are available,
+  - surface address evidence in the UI confirmation/details,
+  - add a dedicated hardware breakpoint smoke that leaves the target in a known
+    paused/running state.
+- After Keil breakpoints are stable, start TI MSPM0G3507 offline adapter work
+  from `D:\ti` without claiming live debug support until hardware is available.

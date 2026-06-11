@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -14,6 +14,7 @@ from src.core.keil.commands import (
     diff_keil_breakpoints,
 )
 from src.core.debug_snapshots import RemoteBreakpoint
+from src.core.keil.source_line_address import resolve_source_line_address
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class KeilBreakpointSyncRequest:
     connection_name: str = "LoopMasterBreakpointSync"
     verify_after: bool = True
     remote_snapshot_complete: bool = True
+    axf_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,19 @@ class KeilBreakpointSyncResult:
             ("断点命令", f"{self.succeeded_count}/{self.attempted_count} 成功"),
             ("断点同步模式", "完整差分" if self.request.remote_snapshot_complete else "推送本地"),
         ]
+        address_resolved = sum(1 for item in self.commands if item.operation.address is not None)
+        address_unresolved = sum(
+            1 for item in self.commands
+            if item.attempted and item.operation.action in {KeilBreakpointSyncAction.ADD, KeilBreakpointSyncAction.UPDATE_CONDITION}
+            and item.operation.address is None
+        )
+        if self.request.axf_path is not None:
+            rows.extend(
+                [
+                    ("断点 AXF", str(self.request.axf_path)),
+                    ("断点地址解析", f"{address_resolved} 已解析 / {address_unresolved} 未解析"),
+                ]
+            )
         if self.remote_snapshot is not None:
             rows.extend(
                 [
@@ -91,6 +106,7 @@ class KeilBreakpointSyncResult:
             "project_path": str(self.request.project_path or ""),
             "target_name": self.request.target_name,
             "remote_snapshot_complete": self.request.remote_snapshot_complete,
+            "axf_path": str(self.request.axf_path or ""),
             "succeeded": self.succeeded,
             "attempted_count": self.attempted_count,
             "succeeded_count": self.succeeded_count,
@@ -102,6 +118,9 @@ class KeilBreakpointSyncResult:
                     "line": item.operation.line,
                     "remote_id": item.operation.remote_id,
                     "command": item.command,
+                    "address": f"0x{item.operation.address:08X}" if item.operation.address is not None else "",
+                    "address_source": item.operation.address_source,
+                    "address_exact": item.operation.address_exact,
                     "attempted": item.attempted,
                     "succeeded": item.succeeded,
                     "status_code": item.status_code,
@@ -150,12 +169,16 @@ def build_keil_breakpoint_sync_request_from_state(
     transaction_id: str = "",
     connection_name: str = "LoopMasterBreakpointSync",
     remote_snapshot_complete: bool = True,
+    axf_path: str | Path | None = None,
 ) -> KeilBreakpointSyncRequest:
     operations = diff_keil_breakpoints(
         local_breakpoints,
         remote_breakpoints,
         source_paths=source_paths,
     )
+    source_path_tuple = tuple(source_paths)
+    axf = Path(axf_path).expanduser().resolve() if axf_path else None
+    operations = _with_source_line_addresses(operations, axf, source_path_tuple)
     return KeilBreakpointSyncRequest(
         project_path=Path(project_path).expanduser().resolve() if project_path else None,
         target_name=target_name,
@@ -163,6 +186,7 @@ def build_keil_breakpoint_sync_request_from_state(
         transaction_id=transaction_id,
         connection_name=connection_name,
         remote_snapshot_complete=bool(remote_snapshot_complete),
+        axf_path=axf,
     )
 
 
@@ -335,7 +359,51 @@ def _active_operations_from_transaction(transaction: KeilCommandTransaction) -> 
 
 
 def _location(operation: KeilBreakpointSyncOperation) -> str:
+    if operation.address is not None:
+        return f"0x{int(operation.address):08X}"
     return f"\\{operation.path}\\{operation.line}"
+
+
+def _with_source_line_addresses(
+    operations: tuple[KeilBreakpointSyncOperation, ...],
+    axf_path: Path | None,
+    source_paths: tuple[str | Path, ...],
+) -> tuple[KeilBreakpointSyncOperation, ...]:
+    if axf_path is None or not axf_path.exists():
+        return operations
+    resolved: list[KeilBreakpointSyncOperation] = []
+    for operation in operations:
+        if operation.action not in {KeilBreakpointSyncAction.ADD, KeilBreakpointSyncAction.UPDATE_CONDITION}:
+            resolved.append(operation)
+            continue
+        if not operation.valid:
+            resolved.append(operation)
+            continue
+        result = resolve_source_line_address(
+            axf_path,
+            operation.path,
+            operation.line,
+            source_roots=source_paths,
+        )
+        if result.address is None:
+            resolved.append(
+                replace(
+                    operation,
+                    address=None,
+                    address_source=f"unresolved:{result.error}",
+                    address_exact=False,
+                )
+            )
+            continue
+        resolved.append(
+            replace(
+                operation,
+                address=int(result.address),
+                address_source=result.resolved_from or "readelf_debug_line",
+                address_exact=bool(result.exact),
+            )
+        )
+    return tuple(resolved)
 
 
 def _snapshot_record(snapshot: KeilBreakpointRemoteSnapshot | None) -> dict[str, Any] | None:
