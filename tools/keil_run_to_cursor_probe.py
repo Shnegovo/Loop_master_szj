@@ -170,6 +170,9 @@ def main() -> int:
     _assert(fake_result.temp_remote_id == "0", f"fake temp breakpoint id mismatch: {fake_result.to_record()!r}")
     _assert(fake_result.cleanup_succeeded, "fake temporary breakpoint cleanup did not succeed")
     _assert(not fake.breakpoints, f"fake temporary breakpoint leaked: {fake.breakpoints!r}")
+    fake_diagnostics = dict(fake_result.diagnostic_rows())
+    _assert(fake_diagnostics.get("临时断点残留") == "否", f"fake leak diagnostics mismatch: {fake_diagnostics!r}")
+    _assert(fake_diagnostics.get("清理后断点数") == "0", f"fake cleanup count mismatch: {fake_diagnostics!r}")
 
     existing = FakeRunToCursorSession(target_address, initial_breakpoints={"7": target_address})
     existing_result = run_keil_to_cursor_transaction(existing, request)
@@ -178,6 +181,8 @@ def main() -> int:
     _assert(existing_result.temp_remote_id == "", f"existing breakpoint should not become temp: {existing_result.to_record()!r}")
     _assert(existing.breakpoints == {"7": target_address}, f"existing breakpoint should remain: {existing.breakpoints!r}")
     _assert(not any(command.startswith("BK ") for command in existing.commands), f"existing breakpoint must not be removed: {existing.commands!r}")
+    existing_diagnostics = dict(existing_result.diagnostic_rows())
+    _assert(existing_diagnostics.get("临时断点残留") == "复用已有断点", f"existing leak diagnostics mismatch: {existing_diagnostics!r}")
 
     timeout_request = replace(request, timeout_s=0.2)
     timeout = FakeRunToCursorSession(target_address, hit_on_run=False)

@@ -79,6 +79,10 @@ class KeilRunToCursorResult:
             ("目标地址", f"0x{self.address:08X}" if self.address is not None else "--"),
             ("临时断点", self.temp_remote_id or ("复用已有断点" if self.used_existing_breakpoint else "--")),
             ("清理结果", "成功" if self.cleanup_succeeded else ("无需清理" if self.used_existing_breakpoint else "未完成")),
+            ("运行前断点数", _breakpoint_count_text(self.before_snapshot)),
+            ("设置后断点数", _breakpoint_count_text(self.after_set_snapshot)),
+            ("清理后断点数", _breakpoint_count_text(self.after_cleanup_snapshot)),
+            ("临时断点残留", _temp_breakpoint_leak_text(self)),
         ]
         if self.hit_pc is not None:
             rows.append(("命中 PC", _pc_text(self.hit_pc)))
@@ -481,6 +485,28 @@ def _pc_text(pc: DebugPcLocation) -> str:
     address = f"0x{pc.address:08X}" if pc.address is not None else "--"
     location = f"{pc.path}:{pc.line}" if pc.path is not None and pc.line is not None else "--"
     return f"{address} / {location}"
+
+
+def _breakpoint_count_text(snapshot: RemoteBreakpointSnapshot | None) -> str:
+    if snapshot is None:
+        return "--"
+    suffix = "" if snapshot.complete else "（不完整）"
+    return f"{len(snapshot.breakpoints)}{suffix}"
+
+
+def _temp_breakpoint_leak_text(result: KeilRunToCursorResult) -> str:
+    if result.used_existing_breakpoint:
+        return "复用已有断点"
+    if not result.temp_remote_id:
+        return "--"
+    snapshot = result.after_cleanup_snapshot
+    if snapshot is None:
+        return "未知"
+    leaked = [
+        item for item in snapshot.breakpoints
+        if item.remote_id == result.temp_remote_id
+    ]
+    return "是" if leaked else "否"
 
 
 def _failed(

@@ -4620,6 +4620,7 @@ class MainWindow(QMainWindow):
             + self._keil_auto_debug_diagnostics()
             + self._keil_breakpoint_sync_diagnostics()
             + self._keil_run_to_cursor_diagnostics()
+            + self._remote_breakpoint_snapshot_diagnostics()
             + self._acquisition_source_diagnostics()
             + self._debug_pc_evidence_diagnostics()
             + self._keil_live_write_diagnostics()
@@ -4632,6 +4633,20 @@ class MainWindow(QMainWindow):
             ("可执行命令", ", ".join(executable) if executable else "无"),
         )
         return rows
+
+    def _remote_breakpoint_snapshot_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        snapshot = getattr(self, "_debug_remote_breakpoint_snapshot", None)
+        if snapshot is None:
+            return ()
+        rows = [
+            ("远端断点证据", str(getattr(snapshot, "snapshot_id", "") or "--")),
+            ("远端断点完整", "是" if getattr(snapshot, "complete", False) else "否"),
+            ("远端断点计数", str(len(getattr(snapshot, "breakpoints", ()) or ()))),
+        ]
+        error = str(getattr(snapshot, "error", "") or "")
+        if error:
+            rows.append(("远端断点错误", error))
+        return tuple(rows)
 
     def _acquisition_source_diagnostics(self) -> tuple[tuple[str, str], ...]:
         descriptor = active_acquisition_source(

@@ -6212,3 +6212,78 @@ into one crowded panel:
   - keep variable write/readback strict,
   - then expose the minimum useful "breakpoint + run/halt + variable write"
     workflow as a coherent first live-debug loop.
+
+## Milestone 70 - Breakpoint Evidence Diagnostics
+
+### Goal
+
+Make Keil breakpoint evidence visible enough that the UI does not merely say
+"done"; it should show what was actually observed:
+
+- whether the remote Keil breakpoint snapshot is complete,
+- how many remote breakpoints were observed,
+- whether run-to-cursor created a temporary breakpoint,
+- whether that temporary breakpoint was cleaned up,
+- whether PC was truly read back at the requested source line.
+
+### Completed
+
+- Extended `KeilRunToCursorResult.diagnostic_rows()` with:
+  - running-before breakpoint count,
+  - after-set breakpoint count,
+  - after-cleanup breakpoint count,
+  - temporary breakpoint leak status.
+- Added Debug Workbench diagnostics for the current remote breakpoint snapshot:
+  - snapshot id,
+  - completeness,
+  - breakpoint count,
+  - snapshot error text when present.
+- Updated probes so incomplete Keil BL/read-only snapshot states are surfaced as
+  evidence instead of disappearing behind a generic status.
+
+### Verified
+
+- `python -m py_compile src\core\keil\run_to_cursor.py src\ui\gui.py tools\keil_run_to_cursor_probe.py tools\ui_keil_run_to_cursor_probe.py tools\ui_debug_workbench_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_run_to_cursor_probe.py --json`
+  - PASS.
+  - Fake temporary breakpoint created and cleaned.
+  - Existing breakpoint reused without `BK`.
+  - Timeout and PC mismatch paths both cleaned temporary breakpoints.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-evidence --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-breakpoint-evidence\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-breakpoint-evidence\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-breakpoint-evidence\03_debug_workbench_narrow.png`
+- Real F401/Keil live smoke:
+  - `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json --no-write`
+    - PASS.
+    - Launched Keil PID `40904`, connected in 3 attempts, did not write variables.
+  - `python tools\keil_run_to_cursor_probe.py --live --keil-root D:\Keil --json`
+    - PASS.
+    - Target address `0x08000164`.
+    - Temporary breakpoint id `0`.
+    - Hit PC mapped to `main.c:62`.
+    - Cleanup command `BK 0`.
+    - After-cleanup snapshot contained 0 breakpoints.
+  - Confirmed no `UV4/uVision` process remained after the live probe.
+
+### Notes
+
+- Keil `BL` can return address-only breakpoints; those snapshots are now shown
+  as incomplete rather than treated as silently source-mapped.
+- This improves trust in the first live-debug loop without changing the command
+  execution path.
+
+### Next Target
+
+- Keep pushing the first useful live Keil workflow:
+  - make breakpoint sync and run-to-cursor feel like one coherent user flow,
+  - ensure run/halt/reset status always refreshes PC and remote breakpoint
+    evidence,
+  - then tighten the variable write path inside the same live session.

@@ -197,6 +197,8 @@ def main() -> int:
         rows = _diagnostics(tab)
         _assert(rows.get("断点同步") == "成功", f"sync diagnostics mismatch: {rows!r}")
         _assert(rows.get("断点同步模式") == "推送本地", f"sync mode mismatch: {rows!r}")
+        _assert(rows.get("远端断点完整") == "否", f"remote breakpoint completeness mismatch: {rows!r}")
+        _assert(rows.get("远端断点错误") == "fake BL did not return breakpoint text", f"remote breakpoint error mismatch: {rows!r}")
         breakpoint_rows = tab.local_breakpoints()
         _assert(any(not item.verified for item in breakpoint_rows), f"breakpoint should wait for remote readback: {breakpoint_rows!r}")
         _assert(

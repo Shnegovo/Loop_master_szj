@@ -841,9 +841,13 @@ Raw dump of debug contents of section .debug_line:
                 ("PC 证据", "未验证"),
                 ("PC 来源", "keil_uvsock"),
                 ("PC 说明", "Keil PC 位置读取尚未实现"),
+                ("远端断点证据", "keil-ui-fake-read-only-incomplete"),
+                ("远端断点完整", "否"),
+                ("远端断点计数", "0"),
+                ("远端断点错误", "Keil 只读快照尚未实现断点枚举解析"),
             ):
                 if diag.get(key) != expected:
-                    issues.append(f"read-only attach PC evidence diagnostic mismatch {key}: {diag!r}")
+                    issues.append(f"read-only attach evidence diagnostic mismatch {key}: {diag!r}")
             for key in ("Keil 档案", "AXF", "AXF 状态", "构建命令", "构建状态", "启动命令", "启动状态"):
                 if key not in diag:
                     issues.append(f"read-only attach profile diagnostic missing {key}: {diag!r}")
