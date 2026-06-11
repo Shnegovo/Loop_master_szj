@@ -44,6 +44,11 @@ from src.core.keil.profile import (
     launch_keil_uvsock_from_profile,
     run_keil_project_build,
 )
+from src.core.keil.run_to_cursor import (
+    KeilRunToCursorRequest,
+    KeilRunToCursorResult,
+    run_keil_to_cursor_transaction,
+)
 from src.core.keil.project import parse_keil_project, source_paths
 from src.core.debug_workbench import (
     DebugBackendKind,
@@ -381,6 +386,48 @@ class KeilUvSockBackendAdapter:
             project_path=project_path,
             target_name=target_name,
         )
+
+    def run_to_cursor(
+        self,
+        *,
+        source_path: str | Path,
+        line: int,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+        timeout_s: float = 5.0,
+        reset_before_run: bool = False,
+    ) -> KeilRunToCursorResult:
+        profile = make_keil_debug_profile(
+            root=self.config.root,
+            project_path=project_path,
+            target_name=target_name,
+            port=self.config.port,
+        )
+        request = KeilRunToCursorRequest(
+            project_path=profile.project_path,
+            target_name=profile.target_name,
+            source_path=Path(source_path).expanduser().resolve(),
+            line=int(line),
+            axf_path=profile.axf_path if profile.axf_exists else None,
+            source_roots=_source_roots_for_project_target(profile.project_path, profile.target_name),
+            timeout_s=float(timeout_s),
+            reset_before_run=bool(reset_before_run),
+        )
+        try:
+            with KeilUvscLiveSession.connect_existing(
+                root=self.config.root,
+                port=self.config.port,
+                connection_name=f"{self.config.connection_name}RunToCursor",
+                require_debug=True,
+            ) as session:
+                return run_keil_to_cursor_transaction(session, request)
+        except Exception as exc:
+            return KeilRunToCursorResult(
+                request=request,
+                attempted=True,
+                succeeded=False,
+                error=str(exc),
+            )
 
     def create_watch_transport(
         self,

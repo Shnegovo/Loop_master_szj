@@ -129,6 +129,11 @@ from src.core.keil.auto_debug import (
     KeilAutoDebugStep,
     run_keil_auto_debug_transaction,
 )
+from src.core.keil.run_to_cursor import (
+    KeilRunToCursorRequest,
+    KeilRunToCursorResult,
+    run_keil_to_cursor_transaction,
+)
 
 __all__ = [
     "IMPORTANT_UVSC_EXPORTS",
@@ -168,6 +173,8 @@ __all__ = [
     "KeilAutoDebugRequest",
     "KeilAutoDebugResult",
     "KeilAutoDebugStep",
+    "KeilRunToCursorRequest",
+    "KeilRunToCursorResult",
     "KeilUvSockWatchBackend",
     "KeilVariablePreset",
     "KeilVariablePresetProfile",
@@ -226,6 +233,7 @@ __all__ = [
     "run_keil_live_variable_smoke",
     "run_keil_live_variable_smoke_existing",
     "run_keil_auto_debug_transaction",
+    "run_keil_to_cursor_transaction",
     "run_uvsock_smoke",
     "run_keil_project_build",
     "save_keil_profile_store",

@@ -5683,3 +5683,95 @@ known state, and refresh PC/source evidence.
 - Start defining the acquisition-source model so lightweight scope, serial
   scope, Keil polling and later OpenOCD/pyOCD/TI polling can share waveform UI
   without sharing debugger state.
+
+## Milestone 62 - Keil Run-to-Cursor Temporary Breakpoint Transaction
+
+### Goal
+
+Prove `run-to-cursor` as a real Keil debugger operation without adding a UI
+button yet. The core requirement is strict temporary-breakpoint hygiene: resolve
+the cursor line to an address, set a temporary breakpoint, run, verify the PC at
+the target source line, remove only the temporary breakpoint, and verify it is
+gone.
+
+### Completed
+
+- Live-tested the transaction manually on the connected ST-Link/F401 probe.
+  - Target line: `firmware/keil_f401_variable_probe/main.c:62`.
+  - DWARF/AXF resolved the line to `0x08000164`.
+  - `BS 0x08000164` created remote breakpoint id `0`.
+  - Run stopped with PC at `main.c:62`.
+  - `BK 0` removed the temporary breakpoint.
+  - Final `BL` showed no remaining breakpoints.
+- Added reusable Keil run-to-cursor transaction.
+  - New module: `src/core/keil/run_to_cursor.py`.
+  - `KeilRunToCursorRequest` describes project, target, source line, AXF,
+    source roots, timeout and optional deterministic reset.
+  - `run_keil_to_cursor_transaction()` performs:
+    1. exact source-line address resolution,
+    2. preflight `BL`,
+    3. temporary `BS`,
+    4. `Run`,
+    5. target paused polling,
+    6. `LOG+EVAL PC` source verification,
+    7. `BK` cleanup,
+    8. final `BL` cleanup verification.
+  - Failure paths also attempt cleanup when a temporary breakpoint was created.
+  - Existing user breakpoints at the target address can be reused without being
+    deleted by the transaction.
+- Exposed the transaction through the Keil backend adapter.
+  - `KeilUvSockBackendAdapter.run_to_cursor()` exists for future UI/DAP use.
+  - The Debug Workbench UI does not expose a run-to-cursor button yet.
+- Added probe coverage.
+  - New `tools/keil_run_to_cursor_probe.py`.
+  - Default mode uses a fake session and validates command order and cleanup.
+  - `--live` mode executes the real transaction against Keil/UVSOCK.
+
+### Verified
+
+- Manual inline live probe:
+  - PASS.
+  - `BS 0x08000164`, `Run`, PC `0x08000164 -> main.c:62`, `BK 0`,
+    final `BL` empty.
+- `python -m py_compile src\core\keil\run_to_cursor.py src\core\keil\backend.py src\core\keil\__init__.py tools\keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\keil_run_to_cursor_probe.py --json`
+  - PASS.
+  - Fake command order: `BL -> BS -> BL -> EVAL PC -> BK -> BL`.
+- `python tools\keil_run_to_cursor_probe.py --live --keil-root D:\Keil --json`
+  - PASS on connected ST-Link/F401.
+  - Live temporary breakpoint id: `0`.
+  - Hit PC: `0x08000164 / main.c:62`.
+  - Cleanup command: `BK 0`.
+  - Final cleanup snapshot contains no temporary breakpoint.
+- Regression checks:
+  - `python tools\keil_command_transaction_probe.py` PASS.
+  - `python tools\keil_breakpoint_sync_probe.py` PASS.
+  - `python tools\debug_backend_adapter_probe.py` PASS.
+  - `python tools\debug_backend_registry_probe.py` PASS.
+  - `python tools\debug_variable_access_probe.py` PASS.
+  - `python tools\keil_backend_live_write_probe.py` PASS.
+  - `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+    PASS with exit code `0`; live `debug_setpoint` write/readback still works.
+- Keil/uVision cleanup check:
+  - Closed the test-created UV4 session.
+  - `Get-Process UV4,uVision` returned no remaining process.
+
+### Notes
+
+- This milestone intentionally does not add a visible UI button. The transaction
+  is real but still needs more edge-case coverage before user-facing exposure.
+- `run-to-cursor` does not reset the target by default. The live probe uses
+  `reset_before_run=True` only to make the test deterministic.
+- Address-only Keil `BL` output is still acceptable for transaction hygiene
+  because the AXF/DWARF layer verifies the hit PC/source line.
+
+### Next Target
+
+- Add edge probes for run-to-cursor when a user breakpoint already exists at the
+  target address, when timeout happens, and when cleanup must run after a failed
+  PC verification.
+- After those pass, expose run-to-cursor in UI as an explicit high-risk action
+  tied to the current editor line.
+- Then return to the acquisition-source model boundary so debugger polling and
+  lightweight/serial scope can share the waveform UI safely.
