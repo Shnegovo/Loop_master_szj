@@ -7,6 +7,8 @@ from typing import Optional
 
 import numpy as np
 
+from src.core.acquisition_session import AcquisitionBatch, AcquisitionSample
+from src.core.acquisition_sources import SCOPE_SOURCE_SWD, normalize_known_acquisition_source_key
 from src.core.models import TypeInfo
 from src.core.transports import VariableReadTransport
 
@@ -223,6 +225,35 @@ class DataCollector:
                 n = min(len(ts_arr), len(vals_arr))
                 result[name] = (ts_arr[:n], vals_arr[:n])
             return result
+
+    def get_acquisition_batch(
+        self,
+        source_key: str = SCOPE_SOURCE_SWD,
+        tail_seconds: float = None,
+    ) -> AcquisitionBatch:
+        """Return recent collector buffers as a backend-neutral acquisition batch."""
+        data = self.get_data(tail_seconds)
+        source = normalize_known_acquisition_source_key(source_key)
+        names = tuple(name for name in self.variable_names if name in data)
+        if not names:
+            names = tuple(data.keys()) or tuple(self.variable_names)
+        sample_interval = 1.0 / max(1, int(self._sample_rate))
+        if not data or not names:
+            return AcquisitionBatch(source, names, (), sample_interval_s=sample_interval)
+        sample_count = min(len(data[name][0]) for name in names)
+        sample_count = min(sample_count, *(len(data[name][1]) for name in names))
+        if sample_count <= 0:
+            return AcquisitionBatch(source, names, (), sample_interval_s=sample_interval)
+        timestamps = data[names[0]][0]
+        samples = tuple(
+            AcquisitionSample(
+                timestamp_s=float(timestamps[index]),
+                values={name: float(data[name][1][index]) for name in names},
+                sequence=index,
+            )
+            for index in range(sample_count)
+        )
+        return AcquisitionBatch(source, names, samples, sample_interval_s=sample_interval)
 
     def _sample_loop(self):
         t0 = time.perf_counter()

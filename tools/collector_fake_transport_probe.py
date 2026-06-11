@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core.collector import DataCollector
+from src.core.acquisition_sources import SCOPE_SOURCE_KEIL_WATCH
 from src.core.models import BaseType
 from src.core.transports import VariableSpec
 
@@ -72,6 +73,19 @@ def main() -> None:
     feedback = data["speed.feedback"][1]
     if len(feedback) >= 2 and not bool((feedback[1:] >= feedback[:-1]).all()):
         raise SystemExit("fake transport samples are not monotonic")
+
+    batch = collector.get_acquisition_batch(SCOPE_SOURCE_KEIL_WATCH)
+    if batch.source_key != SCOPE_SOURCE_KEIL_WATCH:
+        raise SystemExit(f"collector acquisition batch source mismatch: {batch.source_key}")
+    if batch.sample_count != min(lengths.values()):
+        raise SystemExit(f"collector acquisition batch count mismatch: {batch.sample_count} vs {lengths}")
+    if set(batch.variable_names) != {"speed.feedback", "speed.target"}:
+        raise SystemExit(f"collector acquisition batch variables mismatch: {batch.variable_names!r}")
+    series = batch.series()
+    if set(series) != {"speed.feedback", "speed.target"}:
+        raise SystemExit(f"collector acquisition batch series mismatch: {series.keys()!r}")
+    if batch.to_record()["sample_count"] != batch.sample_count:
+        raise SystemExit("collector acquisition batch record count mismatch")
 
     print(
         "PASS collector fake transport "

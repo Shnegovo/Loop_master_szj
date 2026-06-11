@@ -7407,3 +7407,52 @@ can feed one scope surface cleanly.
   - likely the fake transport / collector probe path,
   - then Keil Watch batch conversion,
   - finally serial waveform samples once the parser/plot contract is ready.
+
+## Milestone 88 - Collector Acquisition Batch Export
+
+### Goal
+
+Connect the new acquisition sample contract to an existing low-risk producer
+without changing sampling behavior. The current `DataCollector` should be able
+to expose its ring-buffer data as an `AcquisitionBatch` while preserving the
+legacy `get_data()` API used by the current plots.
+
+### Completed
+
+- Added `DataCollector.get_acquisition_batch()`:
+  - preserves source identity through `normalize_known_acquisition_source_key()`,
+  - exports current variable order,
+  - converts ring-buffer arrays into `AcquisitionSample` rows,
+  - returns an empty batch safely when no data is available,
+  - keeps the existing sampling thread, timing, and `get_data()` path unchanged.
+- Extended `tools\collector_fake_transport_probe.py` to assert:
+  - acquisition batch source identity,
+  - sample count equals collected series length,
+  - variable names and series keys are preserved,
+  - `to_record()` reports the same sample count.
+
+### Verified
+
+- `python -m py_compile src\core\collector.py src\core\acquisition_session.py tools\collector_fake_transport_probe.py tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+
+### Notes
+
+- This is a read-only export bridge. It does not alter collector scheduling,
+  ring-buffer writes, UI plotting, Keil Watch transport behavior, or serial
+  parsing.
+- Git warned that `src\core\collector.py` may be normalized from CRLF to LF when
+  committed, but the actual diff remains scoped to the new import and method.
+
+### Next Target
+
+- Use `get_acquisition_batch()` in one UI/probe-only path first so scope
+  diagnostics can show batch/source metadata without changing render behavior.
