@@ -188,6 +188,8 @@ def main() -> int:
         _assert(button.text() == "同步断点", f"sync breakpoint action label mismatch: {button.text()!r}")
         _assert("推送本地" in button.toolTip(), f"sync breakpoint tooltip should expose push-local mode: {button.toolTip()!r}")
         _assert(tab.breakpoint_editor_status.text() == "待同步", f"new local breakpoint should be marked pending: {tab.breakpoint_editor_status.text()!r}")
+        _assert(tab.breakpoint_sync_command_label.text() == "命令 1", f"command plan chip mismatch: {tab.breakpoint_sync_command_label.text()!r}")
+        _assert("UVSC_DBG_EXEC_CMD" in tab.breakpoint_sync_command_label.toolTip(), f"command plan tooltip mismatch: {tab.breakpoint_sync_command_label.toolTip()!r}")
 
         confirm_calls, restore_confirmation = _patch_confirmation()
         try:
@@ -223,6 +225,7 @@ def main() -> int:
         tab._refresh_breakpoint_views(select_path=source_path, select_line=5)
         window._debug_remote_breakpoint_snapshot = None
         window._sync_debug_command_preview()
+        _assert("受限1" in tab.breakpoint_sync_command_label.text(), f"limited command chip mismatch: {tab.breakpoint_sync_command_label.text()!r}")
         limited_confirm_calls, restore_limited_confirmation = _patch_confirmation()
         try:
             window._on_debug_workbench_action("sync_breakpoints")

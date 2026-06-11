@@ -1121,6 +1121,9 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_sync_verify_label = QLabel("验证 --")
         self.breakpoint_sync_verify_label.setObjectName("debugBreakpointSyncChip")
         row.addWidget(self.breakpoint_sync_verify_label)
+        self.breakpoint_sync_command_label = QLabel("命令 --")
+        self.breakpoint_sync_command_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.breakpoint_sync_command_label)
         row.addStretch(1)
         self._refresh_breakpoint_sync_preview()
         return strip
@@ -2218,10 +2221,12 @@ class DebugWorkbenchTab(QWidget):
             mode_text = "同步 等待交易"
             ops_text = f"本地 {local_count}"
             verify_text = "验证 --"
+            command_text = "命令 --"
             tooltip = f"本地断点: {local_count}\n等待调试后端生成断点同步交易"
             mode_state = "idle"
             ops_state = "idle"
             verify_state = "idle"
+            command_state = "idle"
         else:
             mode = "完整差分" if summary.snapshot_complete else "推送本地"
             if summary.snapshot_stale and summary.reason:
@@ -2258,6 +2263,11 @@ class DebugWorkbenchTab(QWidget):
                     f"说明: {summary.reason or '断点计划已生成'}",
                 )
             )
+            command_text, command_tooltip, command_state = self._breakpoint_command_plan_preview(
+                transaction,
+                tooltip,
+            )
+            tooltip = command_tooltip
             mode_state = "warn" if not summary.snapshot_complete else "ready"
             ops_state = "active" if summary.operation_count else "idle"
             verify_state = "warn" if summary.invalid_count or summary.unverified_count or summary.pending_verify_count else "ready"
@@ -2265,6 +2275,7 @@ class DebugWorkbenchTab(QWidget):
             (self.breakpoint_sync_mode_label, mode_text, mode_state),
             (self.breakpoint_sync_ops_label, ops_text, ops_state),
             (self.breakpoint_sync_verify_label, verify_text, verify_state),
+            (self.breakpoint_sync_command_label, command_text, command_state),
         )
         for label, text, state in updates:
             label.setText(text)
@@ -2274,8 +2285,43 @@ class DebugWorkbenchTab(QWidget):
             self.breakpoint_sync_mode_label,
             self.breakpoint_sync_ops_label,
             self.breakpoint_sync_verify_label,
+            self.breakpoint_sync_command_label,
         )
         self._refresh_breakpoint_action_hint(summary, tooltip)
+
+    @staticmethod
+    def _breakpoint_command_plan_preview(
+        transaction: KeilCommandTransaction | DebugCommandTransaction | None,
+        tooltip: str,
+    ) -> tuple[str, str, str]:
+        if transaction is None:
+            return "命令 --", tooltip, "idle"
+        preview = tuple(str(line) for line in getattr(transaction, "command_preview", ()) or ())
+        summary = getattr(transaction, "breakpoint_diff_summary", None)
+        invalid_count = int(getattr(summary, "invalid_count", 0) or 0)
+        command_lines = [
+            line
+            for line in preview
+            if "UVSC_DBG_EXEC_CMD" in line or line.startswith("# noop")
+        ]
+        command_count = sum(1 for line in command_lines if "UVSC_DBG_EXEC_CMD" in line)
+        executable_count = max(0, command_count - invalid_count)
+        if executable_count or invalid_count:
+            text = f"命令 {executable_count}"
+            if invalid_count:
+                text += f" 受限{invalid_count}"
+        elif preview:
+            text = "命令 预览"
+        else:
+            text = "命令 --"
+        plan_lines = ["干跑命令计划:"]
+        for line in preview[:8]:
+            plan_lines.append(f"- {line}")
+        if len(preview) > 8:
+            plan_lines.append(f"- ... 还有 {len(preview) - 8} 条")
+        plan_lines.append("真实执行会在确认后使用 AXF 解析源码行地址；执行后诊断显示实际 command_plan。")
+        state = "warn" if invalid_count else "active" if executable_count else "idle"
+        return text, tooltip + "\n\n" + "\n".join(plan_lines), state
 
     def _refresh_breakpoint_action_hint(self, summary, tooltip: str) -> None:
         button = self._action_buttons.get("sync_breakpoints") if hasattr(self, "_action_buttons") else None

@@ -1152,6 +1152,7 @@ Raw dump of debug contents of section .debug_line:
         sync_mode_text = getattr(tab, "breakpoint_sync_mode_label", None).text() if hasattr(tab, "breakpoint_sync_mode_label") else ""
         sync_ops_text = getattr(tab, "breakpoint_sync_ops_label", None).text() if hasattr(tab, "breakpoint_sync_ops_label") else ""
         sync_verify_text = getattr(tab, "breakpoint_sync_verify_label", None).text() if hasattr(tab, "breakpoint_sync_verify_label") else ""
+        sync_command_text = getattr(tab, "breakpoint_sync_command_label", None).text() if hasattr(tab, "breakpoint_sync_command_label") else ""
         if "完整差分" not in sync_mode_text:
             issues.append(f"breakpoint sync mode strip mismatch: {sync_mode_text!r}")
         for phrase in ("+1", "-1", "启1", "停1", "条1"):
@@ -1160,8 +1161,15 @@ Raw dump of debug contents of section .debug_line:
         for phrase in ("已1", "未1", "待3"):
             if phrase not in sync_verify_text:
                 issues.append(f"breakpoint sync verify strip missing {phrase}: {sync_verify_text!r}")
+        if "命令 1" not in sync_command_text or "受限4" not in sync_command_text:
+            issues.append(f"breakpoint sync command strip mismatch: {sync_command_text!r}")
         sync_strip_tooltip = getattr(tab, "breakpoint_sync_mode_label", None).toolTip() if hasattr(tab, "breakpoint_sync_mode_label") else ""
-        if "keil-ui-remote-breakpoint-snapshot-demo" not in sync_strip_tooltip or "完整差分同步" not in sync_strip_tooltip:
+        if (
+            "keil-ui-remote-breakpoint-snapshot-demo" not in sync_strip_tooltip
+            or "完整差分同步" not in sync_strip_tooltip
+            or "干跑命令计划" not in sync_strip_tooltip
+            or "UVSC_DBG_EXEC_CMD" not in sync_strip_tooltip
+        ):
             issues.append(f"breakpoint sync strip tooltip mismatch: {sync_strip_tooltip!r}")
         sync_button = getattr(tab, "_action_buttons", {}).get("sync_breakpoints")
         if sync_button is None or sync_button.text() != "同步断点":

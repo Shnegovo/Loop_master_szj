@@ -7720,3 +7720,64 @@ against a real Keil debug session.
   - keep limited conditional/disabled-new breakpoint reasons visible,
   - make the verified F401 ordinary breakpoint path feel like a first-class
     debugger feature before adding OpenOCD/pyOCD/TI adapters.
+
+## Milestone 93 - Debug Workbench Breakpoint Command Plan UI
+
+### Goal
+
+Make Keil breakpoint sync feel less like a hidden backend action. Before the
+user confirms sync, the Debug Workbench should show how many breakpoint commands
+are actually sendable and how many are limited.
+
+### Completed
+
+- Added a compact `命令` chip to the Debug Workbench breakpoint sync strip.
+- The chip summarizes the dry-run breakpoint command plan, for example:
+  - `命令 1 受限4` in the mixed probe scenario,
+  - `命令 1` for a single ordinary local breakpoint push.
+- Extended the sync strip tooltip with a dry-run command plan:
+  - includes `diff_breakpoints(...)`,
+  - lists the `UVSC_DBG_EXEC_CMD(...)` previews,
+  - notes that real execution resolves source lines through AXF and that the
+    post-execution diagnostics contain the actual `command_plan`.
+- Kept the UI compact: no new large table, no extra layout band.
+- Extended probes:
+  - full Debug Workbench UI probe asserts the command chip and tooltip,
+  - Keil breakpoint sync UI probe asserts ordinary breakpoint and limited
+    conditional states.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py tools\ui_debug_workbench_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-command-plan-rerun --width 1440 --height 900`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- Screenshots checked manually:
+  - `tools\ui-debug-workbench-breakpoint-command-plan-rerun\01_debug_workbench_project.png`
+  - `tools\ui-debug-workbench-breakpoint-command-plan-rerun\03_debug_workbench_narrow.png`
+  - `tools\ui-debug-workbench-breakpoint-command-plan-rerun\04_debug_breakpoint_sync_strip.png`
+
+### Notes
+
+- The pre-confirmation UI still shows dry-run commands. This is intentional:
+  actual addresses can depend on the selected AXF and are proven at execution
+  time by the backend `command_plan`.
+- The chip is a lightweight surface; richer per-breakpoint command details can
+  later move into a side panel only if the workflow needs it.
+
+### Next Target
+
+- Keep pushing Keil basics:
+  - improve ordinary breakpoint sync ergonomics around source-line address
+    evidence,
+  - consider showing the last live `BS/BK` command plan in diagnostics/history,
+  - then move to OpenOCD/pyOCD/TI adapter skeletons after Keil line breakpoints,
+    run/halt, and variable write are all coherent.
