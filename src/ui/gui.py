@@ -2153,6 +2153,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.profileSaveRequested.connect(self._save_current_keil_debug_profile)
         self._tab_debug_workbench.profileLoadRequested.connect(self._load_default_keil_debug_profile)
         self._tab_debug_workbench.keilProfileConfigureRequested.connect(self._configure_keil_debug_runtime)
+        self._tab_debug_workbench.remoteBreakpointRefreshRequested.connect(self._refresh_remote_breakpoints_from_workbench)
         self._refresh_debug_backend_options()
         self._refresh_debug_source_provider_options()
         self._refresh_debug_scope_acquisition_status()
@@ -3016,6 +3017,15 @@ class MainWindow(QMainWindow):
         self._refresh_hero()
 
     def _connect_keil_read_only_for_debug_workbench(self):
+        self._connect_debug_backend_read_only_for_workbench()
+
+    def _refresh_remote_breakpoints_from_workbench(self):
+        if self._debug_backend_kind != DebugBackendKind.KEIL:
+            self._show_warning("远端断点刷新", "当前调试后端不是 Keil / UVSOCK。")
+            return
+        if not hasattr(self._debug_backend, "read_only_session_snapshot"):
+            self._show_warning("远端断点刷新", "当前后端尚未提供只读断点快照。")
+            return
         self._connect_debug_backend_read_only_for_workbench()
 
     def _control_keil_runtime_from_workbench(self, action_key: str):

@@ -325,6 +325,7 @@ class DebugWorkbenchTab(QWidget):
     profileSaveRequested = Signal()
     profileLoadRequested = Signal()
     keilProfileConfigureRequested = Signal()
+    remoteBreakpointRefreshRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1143,6 +1144,12 @@ class DebugWorkbenchTab(QWidget):
         self.remote_breakpoint_count_label = QLabel("远端 0")
         self.remote_breakpoint_count_label.setObjectName("debugBreakpointSyncChip")
         row.addWidget(self.remote_breakpoint_count_label)
+        self.remote_breakpoint_refresh_button = QPushButton("刷新")
+        self.remote_breakpoint_refresh_button.setObjectName("debugMiniButton")
+        self.remote_breakpoint_refresh_button.setCursor(Qt.PointingHandCursor)
+        self.remote_breakpoint_refresh_button.setToolTip("重新读取调试后端的远端断点快照")
+        self.remote_breakpoint_refresh_button.clicked.connect(self.remoteBreakpointRefreshRequested.emit)
+        row.addWidget(self.remote_breakpoint_refresh_button)
         row.addStretch(1)
         layout.addLayout(row)
 

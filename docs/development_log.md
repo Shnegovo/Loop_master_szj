@@ -7021,3 +7021,59 @@ latest remote breakpoint evidence read back from Keil.
   - add a clearer manual refresh path for remote breakpoint snapshots,
   - keep Halt/Run/Step/Run-to-cursor evidence visible beside PC and breakpoints,
   - then move debugger-backed watch/scope into the shared acquisition selector.
+
+## Milestone 82 - Remote Breakpoint Snapshot Refresh
+
+### Goal
+
+Let users explicitly refresh the Keil remote breakpoint mirror without hunting
+for the generic connect action. The action must stay read-only and use the
+existing safe snapshot path.
+
+### Completed
+
+- Added a `刷新` button in the `Keil 远端` breakpoint mirror.
+- Added `remoteBreakpointRefreshRequested` from the Debug Workbench to the main
+  window.
+- Wired the refresh button to the existing read-only Keil snapshot flow:
+  - reads target/session state,
+  - reads remote breakpoint snapshot evidence,
+  - does not send breakpoint mutation commands,
+  - still validates backend kind and executor availability.
+- Extended the full UI probe:
+  - clicks the remote refresh button,
+  - asserts the fake backend receives a second read-only snapshot request,
+  - asserts incomplete remote evidence is shown as `快照 未完整 / 远端 0`,
+  - later re-injects a complete snapshot and verifies full-diff breakpoint
+    planning continues to work.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-remote-refresh --width 1440 --height 900`
+  - PASS.
+  - Screenshot checked manually:
+    - `tools\ui-debug-workbench-remote-refresh\05_debug_remote_breakpoint_mirror.png`
+    - The `刷新` button fits beside `快照 完整` and `远端 5` without crowding.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+### Notes
+
+- This gives users a clear "read Keil again" affordance while keeping the sync
+  button reserved for actual breakpoint mutations.
+
+### Next Target
+
+- Continue Keil basics by improving runtime action evidence:
+  - show the latest Halt/Run/Step/Run-to-cursor result in the live-loop strip and
+    diagnostics,
+  - make PC evidence and target state transitions easier to verify from the UI,
+  - then wire debugger-backed watch/scope into the shared acquisition selector.

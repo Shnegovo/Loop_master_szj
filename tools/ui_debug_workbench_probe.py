@@ -914,6 +914,18 @@ Raw dump of debug contents of section .debug_line:
                 issues.append("read-only attach should expose explicit Keil breakpoint sync action")
             elif "确认" not in sync_button.toolTip() and "显式" not in sync_button.toolTip():
                 issues.append(f"Keil breakpoint sync tooltip should mention explicit confirmation: {sync_button.toolTip()!r}")
+            remote_refresh = getattr(tab, "remote_breakpoint_refresh_button", None)
+            if remote_refresh is None:
+                issues.append("remote breakpoint refresh button missing")
+            else:
+                remote_refresh.click()
+                _pump(app, 0.15)
+                if fake_backend.calls != 2:
+                    issues.append(f"remote breakpoint refresh should request a second read-only snapshot: {fake_backend.calls}")
+                if tab.remote_breakpoint_state_label.text() != "快照 未完整":
+                    issues.append(f"remote breakpoint refresh state mismatch: {tab.remote_breakpoint_state_label.text()!r}")
+                if tab.remote_breakpoint_count_label.text() != "远端 0":
+                    issues.append(f"remote breakpoint refresh count mismatch: {tab.remote_breakpoint_count_label.text()!r}")
             halt_button = getattr(tab, "_action_buttons", {}).get("halt")
             if halt_button is None or not halt_button.isEnabled():
                 issues.append("read-only attach should expose explicit Keil halt action while target is running")
