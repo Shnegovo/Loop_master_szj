@@ -253,7 +253,7 @@ def _sync_command_transactions(
         target_name=status.target_name,
         breakpoints=tab.local_breakpoints(),
         source_paths=tab.local_source_paths(),
-        remote_breakpoint_snapshot=getattr(tab, "_debug_remote_breakpoint_snapshot", None),
+        remote_breakpoint_snapshot=getattr(tab, "_remote_breakpoint_snapshot", None),
         backend_snapshot=getattr(tab, "_debug_backend_snapshot_record", None),
         execution_gate=False,
     )
@@ -826,7 +826,7 @@ Raw dump of debug contents of section .debug_line:
                         issues.append(f"Keil summary was not restored: {tab.summary_label.text()!r}")
         source_dir = project_path.parent.parent / "Core" / "Src"
         remote_snapshot = _remote_snapshot(project_path, source_dir)
-        tab._debug_remote_breakpoint_snapshot = remote_snapshot
+        tab.set_remote_breakpoint_snapshot(remote_snapshot)
         window._debug_remote_breakpoint_snapshot = remote_snapshot
         discover_button = getattr(tab, "_action_buttons", {}).get("discover")
         if discover_button is None or not discover_button.isEnabled():
@@ -1077,6 +1077,8 @@ Raw dump of debug contents of section .debug_line:
             ),
             controls_ready=False,
         )
+        tab.set_remote_breakpoint_snapshot(remote_snapshot)
+        window._debug_remote_breakpoint_snapshot = remote_snapshot
         _sync_command_transactions(tab, history)
         _sync_command_transactions(tab, history)
         _sync_command_transactions(tab, history, history_key="sync_breakpoints")
@@ -1129,12 +1131,38 @@ Raw dump of debug contents of section .debug_line:
         sync_strip_tooltip = getattr(tab, "breakpoint_sync_mode_label", None).toolTip() if hasattr(tab, "breakpoint_sync_mode_label") else ""
         if "keil-ui-remote-breakpoint-snapshot-demo" not in sync_strip_tooltip or "完整差分同步" not in sync_strip_tooltip:
             issues.append(f"breakpoint sync strip tooltip mismatch: {sync_strip_tooltip!r}")
+        remote_state_text = getattr(tab, "remote_breakpoint_state_label", None).text() if hasattr(tab, "remote_breakpoint_state_label") else ""
+        remote_count_text = getattr(tab, "remote_breakpoint_count_label", None).text() if hasattr(tab, "remote_breakpoint_count_label") else ""
+        if "完整" not in remote_state_text:
+            issues.append(f"remote breakpoint state chip mismatch: {remote_state_text!r}")
+        if remote_count_text != "远端 5":
+            issues.append(f"remote breakpoint count chip mismatch: {remote_count_text!r}")
+        if not hasattr(tab, "remote_breakpoint_table") or tab.remote_breakpoint_table.rowCount() != 5:
+            row_count = tab.remote_breakpoint_table.rowCount() if hasattr(tab, "remote_breakpoint_table") else -1
+            issues.append(f"remote breakpoint table row count mismatch: {row_count}")
+        else:
+            first_remote_id = tab.remote_breakpoint_table.item(0, 0).text()
+            first_remote_file = tab.remote_breakpoint_table.item(0, 1).text()
+            first_remote_line = tab.remote_breakpoint_table.item(0, 2).text()
+            if first_remote_id != "bp-1" or first_remote_file != "main.c" or first_remote_line != "3":
+                issues.append(
+                    "remote breakpoint table first row mismatch: "
+                    f"{first_remote_id!r}, {first_remote_file!r}, {first_remote_line!r}"
+                )
         if hasattr(tab, "breakpoint_sync_mode_label"):
             screenshots.append(
                 _save_widget(
                     tab.breakpoint_sync_mode_label.parentWidget(),
                     output_dir,
                     "04_debug_breakpoint_sync_strip",
+                )
+            )
+        if hasattr(tab, "remote_breakpoint_table"):
+            screenshots.append(
+                _save_widget(
+                    tab.remote_breakpoint_table.parentWidget(),
+                    output_dir,
+                    "05_debug_remote_breakpoint_mirror",
                 )
             )
         if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():

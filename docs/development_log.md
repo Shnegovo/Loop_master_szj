@@ -6958,3 +6958,66 @@ CCS/SDK/targetdb facts while Keil remains the live reference backend.
     and non-intrusive/serial waveforms can coexist cleanly.
 - After Keil basics are solid, start no-process OpenOCD/GDB command preview and
   TI MSPM0G3507 command/profile preview, with hardware writes still gated.
+
+## Milestone 81 - Keil Remote Breakpoint Mirror in Debug Workbench
+
+### Goal
+
+Make Keil breakpoint sync feel like a real debugger workflow in the UI: users
+should see not only the local visual breakpoints and the sync plan, but also the
+latest remote breakpoint evidence read back from Keil.
+
+### Completed
+
+- Added a compact `Keil 远端` mirror to the Debug Workbench:
+  - shows remote snapshot completeness,
+  - shows remote breakpoint count,
+  - lists remote id, file, line/address, enabled state, and a short raw location,
+  - keeps full evidence in tooltips so long Windows paths do not make the UI
+    look broken.
+- Added `DebugWorkbenchTab.set_remote_breakpoint_snapshot()` and connected it
+  from `MainWindow._sync_debug_command_preview()` and the explicit setter path.
+- Updated the UI probes:
+  - the full Debug Workbench screenshot probe now asserts the remote mirror
+    chips and table rows,
+  - the Keil breakpoint sync probe now asserts the remote mirror displays id
+    `11` after a complete remote snapshot.
+- Reworked the screenshot probe helper so full-diff breakpoint tests use the
+  new workbench remote snapshot field instead of the old internal placeholder.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-remote-breakpoints --width 1440 --height 900`
+  - PASS.
+  - Screenshot checked manually:
+    - `tools\ui-debug-workbench-remote-breakpoints\05_debug_remote_breakpoint_mirror.png`
+    - The mirror shows `快照 完整`, `远端 5`, `bp-1`, `main.c`, line `3`, and
+      `main.c:3` without the ugly truncated full path.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\keil_backend_breakpoint_list_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\ti_mspm0_profile_probe.py --json`
+  - PASS.
+
+### Notes
+
+- This stage is UI/evidence work. It does not send new Keil commands beyond the
+  existing explicit breakpoint sync path.
+- During probe iteration, a real state-flow issue was clarified: quick local
+  breakpoint edits trigger command preview regeneration, so tests that simulate
+  a complete remote snapshot must update both the workbench and the main window
+  remote snapshot source.
+
+### Next Target
+
+- Continue Keil basics:
+  - add a clearer manual refresh path for remote breakpoint snapshots,
+  - keep Halt/Run/Step/Run-to-cursor evidence visible beside PC and breakpoints,
+  - then move debugger-backed watch/scope into the shared acquisition selector.

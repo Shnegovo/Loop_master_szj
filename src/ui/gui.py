@@ -4718,6 +4718,8 @@ class MainWindow(QMainWindow):
                 reason=f"{self._debug_backend_display_name()} 后端尚未接入执行器",
                 backend_snapshot=getattr(self, "_debug_backend_snapshot_record", None),
             )
+        if hasattr(tab, "set_remote_breakpoint_snapshot"):
+            tab.set_remote_breakpoint_snapshot(getattr(self, "_debug_remote_breakpoint_snapshot", None))
         tab.set_command_transactions(transactions)
         focused = self._focused_debug_transaction(transactions)
         if focused is not None:
@@ -4726,6 +4728,8 @@ class MainWindow(QMainWindow):
 
     def set_debug_remote_breakpoint_snapshot(self, snapshot):
         self._debug_remote_breakpoint_snapshot = snapshot
+        if hasattr(self, "_tab_debug_workbench") and hasattr(self._tab_debug_workbench, "set_remote_breakpoint_snapshot"):
+            self._tab_debug_workbench.set_remote_breakpoint_snapshot(snapshot)
         self._mark_local_breakpoints_from_remote_snapshot(snapshot)
         self._sync_debug_command_preview()
 

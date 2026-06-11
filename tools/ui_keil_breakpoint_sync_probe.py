@@ -264,6 +264,12 @@ def main() -> int:
             any(item.line == 5 and item.verified and "id 11" in item.message for item in verified_rows),
             f"remote id evidence missing from verified breakpoint: {verified_rows!r}",
         )
+        _assert(tab.remote_breakpoint_count_label.text() == "远端 1", f"remote mirror count mismatch: {tab.remote_breakpoint_count_label.text()!r}")
+        _assert(tab.remote_breakpoint_table.rowCount() == 1, f"remote mirror table row count mismatch: {tab.remote_breakpoint_table.rowCount()}")
+        _assert(
+            tab.remote_breakpoint_table.item(0, 0).text() == "11",
+            f"remote mirror id mismatch: {tab.remote_breakpoint_table.item(0, 0).text()!r}",
+        )
 
         window._debug_remote_breakpoint_snapshot = complete_snapshot
         tab._remove_breakpoint(source_path, 5)

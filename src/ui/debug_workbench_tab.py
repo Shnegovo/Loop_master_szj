@@ -41,7 +41,7 @@ from src.core.debug_workbench import (
     load_code_document,
     search_document,
 )
-from src.core.debug_snapshots import DebugPcLocation
+from src.core.debug_snapshots import DebugPcLocation, RemoteBreakpointSnapshot
 from src.core.debug_sources import (
     SourceManifest,
     source_manifest_from_keil_project,
@@ -345,6 +345,8 @@ class DebugWorkbenchTab(QWidget):
         self._plan_rows: tuple[DebugCommandPlan, ...] = ()
         self._command_transactions: tuple[KeilCommandTransaction | DebugCommandTransaction, ...] = ()
         self._command_history_entries: tuple[DebugCommandHistoryEntry, ...] = ()
+        self._remote_breakpoint_snapshot: RemoteBreakpointSnapshot | None = None
+        self._remote_breakpoint_rows = ()
         self._breakpoint_table_syncing = False
         self._breakpoint_quick_syncing = False
         self._session = DebugWorkbenchSession()
@@ -648,6 +650,13 @@ class DebugWorkbenchTab(QWidget):
     ) -> None:
         self._command_history_entries = tuple(entries)
         self._refresh_command_history_preview()
+
+    def set_remote_breakpoint_snapshot(self, snapshot) -> None:
+        self._remote_breakpoint_snapshot = (
+            RemoteBreakpointSnapshot.from_record(snapshot) if snapshot is not None else None
+        )
+        self._refresh_remote_breakpoint_view()
+        self._refresh_breakpoint_sync_preview()
 
     def add_breakpoint(
         self,
@@ -988,10 +997,15 @@ class DebugWorkbenchTab(QWidget):
         preset_actions.addStretch(1)
         layout.addLayout(preset_actions)
 
-        bp_title = QLabel("本地断点")
+        bp_title = QLabel("断点同步")
         bp_title.setObjectName("debugSectionTitle")
         layout.addWidget(bp_title)
         layout.addWidget(self._build_breakpoint_sync_strip())
+        layout.addWidget(self._build_remote_breakpoint_panel())
+
+        local_bp_title = QLabel("本地断点")
+        local_bp_title.setObjectName("debugSectionTitle")
+        layout.addWidget(local_bp_title)
 
         self.breakpoint_table = QTableWidget()
         self.breakpoint_table.setObjectName("debugBreakpointTable")
@@ -1109,6 +1123,50 @@ class DebugWorkbenchTab(QWidget):
         row.addStretch(1)
         self._refresh_breakpoint_sync_preview()
         return strip
+
+    def _build_remote_breakpoint_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("debugRemoteBreakpointPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 7, 8, 8)
+        layout.setSpacing(6)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        title = QLabel("Keil 远端")
+        title.setObjectName("debugBreakpointSyncTitle")
+        row.addWidget(title)
+        self.remote_breakpoint_state_label = QLabel("快照 --")
+        self.remote_breakpoint_state_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.remote_breakpoint_state_label)
+        self.remote_breakpoint_count_label = QLabel("远端 0")
+        self.remote_breakpoint_count_label.setObjectName("debugBreakpointSyncChip")
+        row.addWidget(self.remote_breakpoint_count_label)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.remote_breakpoint_table = QTableWidget()
+        self.remote_breakpoint_table.setObjectName("debugRemoteBreakpointTable")
+        self.remote_breakpoint_table.setColumnCount(5)
+        self.remote_breakpoint_table.setHorizontalHeaderLabels(["id", "文件", "行/地址", "状态", "原始位置"])
+        self.remote_breakpoint_table.horizontalHeader().setStretchLastSection(True)
+        self.remote_breakpoint_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.remote_breakpoint_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.remote_breakpoint_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.remote_breakpoint_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.remote_breakpoint_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.remote_breakpoint_table.verticalHeader().setVisible(False)
+        self.remote_breakpoint_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.remote_breakpoint_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.remote_breakpoint_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.remote_breakpoint_table.setAlternatingRowColors(True)
+        self.remote_breakpoint_table.setMinimumHeight(78)
+        self.remote_breakpoint_table.setMaximumHeight(126)
+        layout.addWidget(self.remote_breakpoint_table)
+
+        self._refresh_remote_breakpoint_view()
+        return panel
 
     def _build_live_loop_strip(self) -> QFrame:
         strip = QFrame()
@@ -1429,6 +1487,120 @@ class DebugWorkbenchTab(QWidget):
         self.breakpoint_table.blockSignals(False)
         self._breakpoint_table_syncing = False
         self._refresh_breakpoint_quick_editor()
+
+    def _refresh_remote_breakpoint_view(self) -> None:
+        if not hasattr(self, "remote_breakpoint_table"):
+            return
+        snapshot = self._remote_breakpoint_snapshot
+        if snapshot is None:
+            self._remote_breakpoint_rows = ()
+            state_text = "快照 --"
+            count_text = "远端 0"
+            tooltip = "尚未读取 Keil 远端断点快照"
+            state = "idle"
+            self.remote_breakpoint_table.setRowCount(0)
+        else:
+            breakpoints = tuple(snapshot.breakpoints)
+            self._remote_breakpoint_rows = breakpoints
+            state_text = "快照 完整" if snapshot.complete else "快照 未完整"
+            count_text = f"远端 {len(breakpoints)}"
+            tooltip = self._remote_breakpoint_snapshot_tooltip(snapshot)
+            state = "ready" if snapshot.complete and not snapshot.error else "warn"
+            self.remote_breakpoint_table.setRowCount(len(breakpoints))
+            for row, breakpoint in enumerate(breakpoints):
+                self._set_remote_breakpoint_item(row, 0, str(breakpoint.remote_id or "--"), tooltip=tooltip)
+                self._set_remote_breakpoint_item(row, 1, self._remote_breakpoint_file_text(breakpoint), tooltip=tooltip)
+                self._set_remote_breakpoint_item(row, 2, self._remote_breakpoint_location_text(breakpoint), tooltip=tooltip)
+                self._set_remote_breakpoint_item(row, 3, self._remote_breakpoint_state_text(breakpoint), tooltip=tooltip)
+                self._set_remote_breakpoint_item(row, 4, self._remote_breakpoint_raw_text(breakpoint), tooltip=tooltip)
+        self.remote_breakpoint_state_label.setText(state_text)
+        self.remote_breakpoint_count_label.setText(count_text)
+        for label in (self.remote_breakpoint_state_label, self.remote_breakpoint_count_label):
+            label.setToolTip(tooltip)
+            label.setProperty("state", state)
+        self._repolish(self.remote_breakpoint_state_label, self.remote_breakpoint_count_label)
+
+    def _set_remote_breakpoint_item(self, row: int, column: int, text: str, *, tooltip: str = "") -> None:
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        if tooltip:
+            item.setToolTip(tooltip)
+        if text in {"停用", "异常"}:
+            item.setForeground(QColor("#b45309"))
+        elif text == "启用":
+            item.setForeground(QColor("#166534"))
+        self.remote_breakpoint_table.setItem(row, column, item)
+
+    @staticmethod
+    def _remote_breakpoint_file_text(breakpoint) -> str:
+        path = getattr(breakpoint, "path", None)
+        if path is None:
+            return "--"
+        return Path(path).name
+
+    @staticmethod
+    def _remote_breakpoint_location_text(breakpoint) -> str:
+        path = getattr(breakpoint, "path", None)
+        line = int(getattr(breakpoint, "line", 0) or 0)
+        address = getattr(breakpoint, "address", None)
+        if path is not None and line > 0:
+            return str(line)
+        if address is not None:
+            try:
+                return f"0x{int(address):08X}"
+            except (TypeError, ValueError):
+                return str(address)
+        return "--"
+
+    @staticmethod
+    def _remote_breakpoint_state_text(breakpoint) -> str:
+        if not getattr(breakpoint, "verified", True):
+            return "异常"
+        enabled = getattr(breakpoint, "enabled", None)
+        if enabled is True:
+            return "启用"
+        if enabled is False:
+            return "停用"
+        return "未知"
+
+    @staticmethod
+    def _remote_breakpoint_raw_text(breakpoint) -> str:
+        path = getattr(breakpoint, "path", None)
+        line = int(getattr(breakpoint, "line", 0) or 0)
+        if path is not None and line > 0:
+            return f"{Path(path).name}:{line}"
+        raw_location = str(getattr(breakpoint, "raw_location", "") or "")
+        if not raw_location:
+            return "--"
+        if len(raw_location) <= 36:
+            return raw_location
+        return "..." + raw_location[-33:]
+
+    @staticmethod
+    def _remote_breakpoint_snapshot_tooltip(snapshot: RemoteBreakpointSnapshot) -> str:
+        lines = [
+            f"快照: {snapshot.snapshot_id or '--'}",
+            f"完整: {'是' if snapshot.complete else '否'}",
+            f"远端断点: {len(snapshot.breakpoints)}",
+        ]
+        if snapshot.error:
+            lines.append(f"错误: {snapshot.error}")
+        for breakpoint in snapshot.breakpoints[:8]:
+            parts = [str(breakpoint.remote_id or "--")]
+            if breakpoint.path is not None and breakpoint.line:
+                parts.append(f"{Path(breakpoint.path).name}:{breakpoint.line}")
+            if breakpoint.address is not None:
+                try:
+                    parts.append(f"0x{int(breakpoint.address):08X}")
+                except (TypeError, ValueError):
+                    parts.append(str(breakpoint.address))
+            parts.append("启用" if breakpoint.enabled else "停用" if breakpoint.enabled is False else "未知")
+            if breakpoint.raw_location:
+                parts.append(breakpoint.raw_location)
+            lines.append("- " + " · ".join(parts))
+        if len(snapshot.breakpoints) > 8:
+            lines.append(f"- 另有 {len(snapshot.breakpoints) - 8} 条")
+        return "\n".join(lines)
 
     def _on_search_changed(self) -> None:
         self._active_search_line = None
@@ -2524,6 +2696,11 @@ class DebugWorkbenchTab(QWidget):
                 border: 1px solid #d2deea;
                 border-radius: 7px;
             }
+            QFrame#debugRemoteBreakpointPanel {
+                background: #fbfdff;
+                border: 1px solid #d2deea;
+                border-radius: 7px;
+            }
             QLabel#debugBreakpointSyncTitle {
                 color: #64748b;
                 font-size: 9pt;
@@ -2725,6 +2902,7 @@ class DebugWorkbenchTab(QWidget):
             }
             QTreeWidget#debugSourceTree, QTableWidget#debugBreakpointTable,
             QTableWidget#debugDiagnosticsTable, QTableWidget#debugVariablePresetTable,
+            QTableWidget#debugRemoteBreakpointTable,
             QPlainTextEdit#debugCodeEditor {
                 background: #fbfdff;
                 border: 1px solid #d2deea;
@@ -2756,6 +2934,7 @@ class DebugWorkbenchTab(QWidget):
                 padding: 3px 6px;
             }
             QTableWidget#debugDiagnosticsTable::item,
+            QTableWidget#debugRemoteBreakpointTable::item,
             QTableWidget#debugVariablePresetTable::item {
                 padding: 3px 6px;
             }
