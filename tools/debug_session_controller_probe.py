@@ -270,6 +270,7 @@ def main() -> int:
     state = fake.set_safety_policy(run_policy)
     _assert(_command(state, "run").execution_enabled, "run should enable when run-control policy allows")
     _assert(_command(state, "step").execution_enabled, "step should enable when run-control policy allows")
+    _assert(_command(state, "step_over").execution_enabled, "step_over should enable when run-control policy allows")
     _assert(_command(state, "sync_breakpoints").execution_enabled, "breakpoint sync should follow run-control policy")
     _assert(not _command(state, "write_variables").execution_enabled, "write should remain blocked without write policy")
     _assert_data_only(state.to_record())

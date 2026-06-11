@@ -438,6 +438,7 @@ def debug_actions_for_status(status: DebugWorkbenchStatus) -> tuple[DebugAction,
         DebugAction("halt", "暂停", caps.can_halt and running, _disabled_reason(caps.can_halt and running, status)),
         DebugAction("run", "运行", caps.can_run and (paused or attached), _disabled_reason(caps.can_run and (paused or attached), status)),
         DebugAction("step", "单步", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
+        DebugAction("step_over", "跨过", caps.can_step and paused, _disabled_reason(caps.can_step and paused, status)),
         DebugAction(
             "sync_breakpoints",
             "同步断点",
@@ -560,6 +561,20 @@ def debug_command_plans_for_status(status: DebugWorkbenchStatus) -> tuple[DebugC
             ),
             safety_notes=("单步可能进入中断、库函数或外设等待路径，需要清晰提示",),
             preview_steps=("发送 Step 命令", "读取 PC", "刷新当前行和调用上下文"),
+        ),
+        _command_plan(
+            actions,
+            "step_over",
+            "跨过",
+            DebugPlanRisk.HIGH,
+            f"请求{control_backend}跨过当前源码行或函数调用",
+            requirements=(
+                "目标处于暂停状态",
+                "当前 PC 已尽量回读到源码位置",
+                "跨过后读取 PC 并重新定位源码",
+            ),
+            safety_notes=("跨过仍会真实执行当前语句，函数内副作用、外设访问和等待路径必须按真实目标处理",),
+            preview_steps=("发送 Step Over 命令", "读取 PC", "刷新当前行和调用上下文"),
         ),
         _command_plan(
             actions,

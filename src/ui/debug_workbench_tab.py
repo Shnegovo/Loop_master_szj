@@ -701,19 +701,21 @@ class DebugWorkbenchTab(QWidget):
         for key, title in (
             ("discover", "发现后端"),
             ("build_project", "构建"),
-            ("launch_uvsock", "启动Keil"),
-            ("auto_debug", "自动调试"),
+            ("launch_uvsock", "启动"),
+            ("auto_debug", "调试"),
             ("attach", "连接"),
             ("disconnect", "断开"),
             ("halt", "暂停"),
             ("run", "运行"),
-            ("sync_breakpoints", "同步断点"),
-            ("write_variables", "写变量"),
+            ("step", "单步"),
+            ("step_over", "跨过"),
+            ("sync_breakpoints", "断点"),
+            ("write_variables", "写入"),
         ):
             button = QPushButton(title)
             button.setObjectName("debugActionButton")
             button.setCursor(Qt.PointingHandCursor)
-            button.setMinimumWidth(58)
+            button.setMinimumWidth(50)
             button.setEnabled(False)
             button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
             self._action_buttons[key] = button
@@ -1963,7 +1965,7 @@ class DebugWorkbenchTab(QWidget):
                 and status.backend.value == "keil"
                 and status.state.value == "paused"
             ) or (
-                key == "step"
+                key in {"step", "step_over"}
                 and self._backend_controls_ready
                 and status.backend.value == "keil"
                 and status.state.value == "paused"

@@ -299,6 +299,7 @@ def _focused_transaction(transactions):
         "halt",
         "run",
         "step",
+        "step_over",
         "sync_breakpoints",
         "write_variables",
         "disconnect",
@@ -736,7 +737,7 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"OpenOCD placeholder history missing generic entry: {placeholder_history_tip!r}")
                 unsafe_actions = [
                     key
-                    for key in ("halt", "run", "step", "sync_breakpoints", "write_variables")
+                    for key in ("halt", "run", "step", "step_over", "sync_breakpoints", "write_variables")
                     if getattr(tab, "_action_buttons", {}).get(key) is not None
                     and getattr(tab, "_action_buttons", {})[key].isEnabled()
                 ]
@@ -826,7 +827,7 @@ Raw dump of debug contents of section .debug_line:
                     issues.append(f"read-only attach should keep {key} action enabled")
             blocked_actions = [
                 key
-                for key in ("run", "step")
+                for key in ("run", "step", "step_over")
                 if getattr(tab, "_action_buttons", {}).get(key) is not None
                 and getattr(tab, "_action_buttons", {})[key].isEnabled()
             ]
@@ -1183,6 +1184,8 @@ Raw dump of debug contents of section .debug_line:
             issues.append(f"run plan should be ready but disabled while paused: {paused_plans.get('继续运行')!r}")
         if paused_plans.get("单步", {}).get("status") != "计划就绪":
             issues.append(f"step plan should be ready but disabled while paused: {paused_plans.get('单步')!r}")
+        if paused_plans.get("跨过", {}).get("status") != "计划就绪":
+            issues.append(f"step-over plan should be ready but disabled while paused: {paused_plans.get('跨过')!r}")
         if paused_plans.get("写变量", {}).get("status") != "计划就绪":
             issues.append(f"write variable plan should surface readiness without execution: {paused_plans.get('写变量')!r}")
         write_plan_tip = paused_plans.get("写变量", {}).get("tooltip", "")

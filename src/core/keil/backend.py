@@ -358,6 +358,18 @@ class KeilUvSockBackendAdapter:
             target_name=target_name,
         )
 
+    def step_over_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> KeilRuntimeControlResult:
+        return self._runtime_control(
+            "step_over",
+            project_path=project_path,
+            target_name=target_name,
+        )
+
     def create_watch_transport(
         self,
         *,
@@ -436,6 +448,8 @@ class KeilUvSockBackendAdapter:
                     uvsc_result = session.run_target()
                 elif action == "step":
                     uvsc_result = session.step_target()
+                elif action == "step_over":
+                    uvsc_result = session.step_over_target()
                 else:
                     raise ValueError(f"unsupported Keil runtime action: {action}")
         except Exception as exc:
@@ -464,8 +478,9 @@ class KeilUvSockBackendAdapter:
             error = "暂停后状态回读仍不是已暂停"
         elif action == "run" and snapshot.target_running is not True:
             error = "运行后状态回读仍不是运行中"
-        elif action == "step" and snapshot.target_running is not False:
-            error = "单步后状态回读仍不是已暂停"
+        elif action in {"step", "step_over"} and snapshot.target_running is not False:
+            label = _runtime_action_label(action)
+            error = f"{label}后状态回读仍不是已暂停"
         return KeilRuntimeControlResult(
             action=action,
             uvsc=uvsc_result,
@@ -851,6 +866,8 @@ def _runtime_action_label(action: str) -> str:
         return "Keil 暂停"
     if action == "step":
         return "Keil 单步"
+    if action == "step_over":
+        return "Keil 跨过"
     return f"Keil {action}"
 
 

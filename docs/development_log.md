@@ -5479,3 +5479,105 @@ refreshing the PC/source marker.
 - Improve the debug-workbench top action layout for narrower widths.
 - Start extracting acquisition/source-mode selection so non-invasive scope,
   Keil scope, and future OCD scope can coexist without UI crowding.
+
+## Milestone 60 - Keil Step-Over and Scope/Debug Mode Boundary
+
+### Goal
+
+Make the next Keil runtime-control action real instead of only planned: expose a
+verified Step Over path from UI -> backend -> UVSOCK -> target -> PC/source
+readback. Also record the user requirement that debug and scope must remain
+mode-selectable instead of forcing every waveform through a debugger.
+
+### Completed
+
+- Added Keil Step Over runtime control.
+  - `KeilUvscLiveSession.step_over_target()` sends Keil debug command `P`.
+  - `KeilUvSockBackendAdapter.step_over_target()` uses the same explicit
+    runtime-control path as Halt/Run/Step and refreshes snapshot evidence after
+    execution.
+  - `UvscRuntimeControlResult.summary()` and Keil runtime labels now render
+    `step_over` as `跨过`.
+- Exposed Step Over in backend-neutral planning.
+  - `DebugAction("step_over", "跨过", ...)` is enabled only when the target is
+    paused and runtime-control capability is present.
+  - `DebugCommandKind` and `KeilCommandKind` now both include `step_over`.
+  - Generic debug session command matrix includes `step_over`, so future
+    OpenOCD/GDB, pyOCD, GDB server and TI OCD adapters can expose the same
+    action without inventing another UI path.
+- Exposed Step/Step Over in the Debug Workbench UI.
+  - Added `单步` and `跨过` action buttons.
+  - Shortened several action labels (`启动`, `调试`, `断点`, `写入`) and reduced
+    button minimum width to keep the top toolbar usable at 1440px and narrower
+    probe sizes.
+- Extended Keil PC probe.
+  - `tools/keil_pc_location_probe.py` now supports `--step-over`.
+  - The probe asserts Step Over succeeds, leaves the target paused, and has a
+    valid after-step PC/source readback.
+- Recorded debug/scope mode boundary.
+  - LoopMaster must support the original non-invasive/light-invasive scope and
+    serial scope modes independently from debugger-driven modes.
+  - Keil/OpenOCD/pyOCD/GDB/TI OCD modes may feed the same scope surface, but the
+    scope/acquisition layer must stay separate from debug backend state.
+  - Debug backend owns target state, PC/source, breakpoints and variable/memory
+    access. Acquisition sessions own sample timing, buffering, decimation and
+    waveform health.
+
+### Verified
+
+- `python -m py_compile src\core\keil\uvsock.py src\core\keil\backend.py src\core\debug_workbench.py src\core\debug_transactions.py src\core\debug_session_contract.py src\core\keil\commands.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\keil_pc_location_probe.py tools\debug_workbench_model_probe.py tools\debug_session_contract_probe.py tools\debug_session_controller_probe.py tools\keil_command_transaction_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\debug_session_contract_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- `python tools\keil_pc_location_probe.py --json`
+  - PASS; fake `LOG+EVAL PC` still maps `0x0800015A -> main.c:26`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-step-over --width 1440 --height 900`
+  - PASS.
+  - Screenshot reviewed: new `单步` / `跨过` buttons fit the action row without
+    overlapping the source toolbar or plan strip.
+- `python tools\keil_pc_location_probe.py --live --step --step-over --keil-root D:\Keil --json`
+  - PASS on connected ST-Link/F401.
+  - Live PC example before stepping: `0x08000144 -> main.c:38`.
+  - Step result: `UVSOCK 单步成功，目标已暂停`, after PC `main.c:39`.
+  - Step Over result: `UVSOCK 跨过成功，目标已暂停`, after PC `main.c:64`.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on connected ST-Link/F401.
+  - Reused the paused UVSOCK session and verified live variable access.
+  - `debug_setpoint @ 0x20000008 = 6000`; baseline read and readback both
+    succeeded through memory write path.
+- Keil/uVision cleanup check:
+  - Closed the test-created UV4 session.
+  - `Get-Process UV4,uVision` returned no remaining process.
+
+### Notes
+
+- Keil command `O` was tested as a Step Out candidate in the current F401 probe
+  context. It did not produce a safe paused-after-action result and left the
+  target running, so Step Out is intentionally not exposed in the UI yet.
+- `P` Step Over is reliable in the tested F401 probe context and now has the
+  same confirmation/readback pattern as other runtime-control actions.
+- No package was built for this milestone because it is not a large version
+  release boundary.
+
+### Next Target
+
+- Keep hardening Keil debugger basics before returning to broad architecture:
+  reset/run-to-cursor candidates, richer breakpoint status, and a clearer
+  source/debug action layout.
+- Start the acquisition-source boundary work: define a small neutral model for
+  original lightweight scope, serial scope, Keil watch polling, future
+  OpenOCD/pyOCD/TI watch polling and file replay.
+- Continue avoiding Step Out until a live probe can prove a consistent
+  paused-after-action result across source locations.

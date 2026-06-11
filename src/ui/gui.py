@@ -2166,7 +2166,7 @@ class MainWindow(QMainWindow):
         if action_key == "attach":
             self._connect_debug_backend_read_only_for_workbench()
             return
-        if action_key in {"halt", "run", "step"}:
+        if action_key in {"halt", "run", "step", "step_over"}:
             self._control_keil_runtime_from_workbench(action_key)
             return
         if action_key == "sync_breakpoints":
@@ -2964,6 +2964,7 @@ class MainWindow(QMainWindow):
             "halt": "halt_target",
             "run": "run_target",
             "step": "step_target",
+            "step_over": "step_over_target",
         }.get(action_key, "")
         if not hasattr(self._debug_backend, method_name):
             self._show_warning("Keil 运行控制", "当前 Keil 后端尚未提供运行控制执行器。")
@@ -2979,7 +2980,15 @@ class MainWindow(QMainWindow):
         if action_key == "step" and status.state != DebugRuntimeState.PAUSED:
             self._show_warning("Keil 单步", "目标当前不是暂停状态。")
             return
-        label = "暂停" if action_key == "halt" else "运行" if action_key == "run" else "单步"
+        if action_key == "step_over" and status.state != DebugRuntimeState.PAUSED:
+            self._show_warning("Keil 跨过", "目标当前不是暂停状态。")
+            return
+        label = {
+            "halt": "暂停",
+            "run": "运行",
+            "step": "单步",
+            "step_over": "跨过",
+        }.get(action_key, action_key)
         message = (
             f"工程：{status.project_path or '--'}\n"
             f"Target：{status.target_name or '--'}\n"

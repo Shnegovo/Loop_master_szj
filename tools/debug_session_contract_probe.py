@@ -146,9 +146,10 @@ def main() -> int:
     _assert(commands["disconnect"].enabled_by_state, "disconnect should be enabled while attached")
     _assert(commands["run"].enabled_by_state, "run should be enabled while paused")
     _assert(commands["step"].enabled_by_state, "step should be enabled while paused")
+    _assert(commands["step_over"].enabled_by_state, "step_over should be enabled while paused")
     _assert(commands["sync_breakpoints"].enabled_by_state, "breakpoint sync should reflect capability")
     _assert(commands["write_variables"].enabled_by_state, "write variables should reflect declared capability")
-    for key in ("run", "step", "sync_breakpoints", "write_variables"):
+    for key in ("run", "step", "step_over", "sync_breakpoints", "write_variables"):
         _assert(not commands[key].execution_enabled, f"{key} must stay execution-disabled under default policy")
         _assert(not commands[key].ready, f"{key} must not be ready under default policy")
     event = event_from_session(paused, kind="preview", detail="dry-run matrix generated")

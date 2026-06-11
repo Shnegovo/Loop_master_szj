@@ -24,6 +24,7 @@ class KeilCommandKind(str, Enum):
     HALT = "halt"
     RUN = "run"
     STEP = "step"
+    STEP_OVER = "step_over"
     SYNC_BREAKPOINTS = "sync_breakpoints"
     WRITE_VARIABLES = "write_variables"
 
@@ -757,7 +758,13 @@ def _guards_for(
         guards.append(_port_guard(port))
         guards.append(_project_guard(project_path))
         guards.append(_target_guard(target_name))
-    if kind in {KeilCommandKind.HALT, KeilCommandKind.RUN, KeilCommandKind.STEP, KeilCommandKind.DISCONNECT}:
+    if kind in {
+        KeilCommandKind.HALT,
+        KeilCommandKind.RUN,
+        KeilCommandKind.STEP,
+        KeilCommandKind.STEP_OVER,
+        KeilCommandKind.DISCONNECT,
+    }:
         guards.append(
             _guard(
                 "attached_session",
@@ -798,7 +805,9 @@ def _command_preview(
     if kind == KeilCommandKind.RUN:
         return ("UVSC_DBG_START_EXECUTION(handle)", "UVSC_DBG_STATUS(handle)")
     if kind == KeilCommandKind.STEP:
-        return ('UVSC_DBG_EXEC_CMD(handle, "<single-step debug command>")', "read_pc_location()")
+        return ('UVSC_DBG_EXEC_CMD(handle, "T")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
+    if kind == KeilCommandKind.STEP_OVER:
+        return ('UVSC_DBG_EXEC_CMD(handle, "P")', "UVSC_DBG_STATUS(handle)", "read_pc_location()")
     if kind == KeilCommandKind.SYNC_BREAKPOINTS:
         counts = _breakpoint_operation_counts(breakpoint_ops)
         summary = breakpoint_diff_summary or build_keil_breakpoint_diff_summary(breakpoints, (), breakpoint_ops)
@@ -1019,6 +1028,7 @@ def _expected_effect(kind: KeilCommandKind) -> str:
         KeilCommandKind.HALT: "让目标暂停并刷新 PC/source marker",
         KeilCommandKind.RUN: "让目标继续运行并刷新运行状态",
         KeilCommandKind.STEP: "执行一次单步并刷新 PC/source marker",
+        KeilCommandKind.STEP_OVER: "执行一次跨过并刷新 PC/source marker",
         KeilCommandKind.SYNC_BREAKPOINTS: "将本地断点差异同步到 Keil 并回读验证",
         KeilCommandKind.WRITE_VARIABLES: "写入变量后立即回读验证并记录审计",
     }

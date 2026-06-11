@@ -82,6 +82,7 @@ def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
         "halt",
         "run",
         "step",
+        "step_over",
         "sync_breakpoints",
         "write_variables",
     }
@@ -100,7 +101,7 @@ def _assert_plan_shape(plans: dict[str, DebugCommandPlan]) -> None:
 
 
 def _assert_risky_plans_disabled(plans: dict[str, DebugCommandPlan]) -> None:
-    for key in ("attach", "disconnect", "halt", "run", "step", "sync_breakpoints", "write_variables"):
+    for key in ("attach", "disconnect", "halt", "run", "step", "step_over", "sync_breakpoints", "write_variables"):
         plan = plans[key]
         _assert(not plan.execution_enabled, f"{key} must remain execution-disabled")
         _assert(plan.requirements, f"{key} should explain requirements")
@@ -221,12 +222,14 @@ def main() -> int:
         actions = _action_map(session)
         _assert(actions["run"], "run should be enabled while paused")
         _assert(actions["step"], "step should be enabled while paused with runtime control")
+        _assert(actions["step_over"], "step_over should be enabled while paused with runtime control")
         _assert(not actions["halt"], "halt should be disabled while paused")
         plans = _plan_map(session)
         _assert_plan_shape(plans)
         _assert_risky_plans_disabled(plans)
         _assert(plans["run"].preconditions_met, "run plan should be ready while paused")
         _assert(plans["step"].preconditions_met, "step plan should be ready while paused")
+        _assert(plans["step_over"].preconditions_met, "step-over plan should be ready while paused")
         _assert(not plans["halt"].preconditions_met, "halt plan should be blocked while paused")
 
         session.mark_attached(running=False, runtime_control=True, breakpoint_sync=True, variable_write=True)
@@ -312,6 +315,7 @@ def main() -> int:
         actions = _action_map(session)
         _assert(actions["run"], "run should be enabled after connected paused state")
         _assert(actions["step"], "step should be enabled after connected paused state")
+        _assert(actions["step_over"], "step_over should be enabled after connected paused state")
         _assert(not actions["write_variables"], "write variables must stay disabled after UVSOCK projection")
 
     print("PASS debug workbench model probe")

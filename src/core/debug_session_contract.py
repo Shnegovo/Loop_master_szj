@@ -369,6 +369,7 @@ def command_matrix_for_session(snapshot: DebugSessionSnapshot) -> tuple[DebugSes
         _session_command(snapshot, "halt", "暂停目标", DebugCommandSafety.RUN_CONTROL, caps.can_halt, ("发送 Halt", "读取 PC")),
         _session_command(snapshot, "run", "继续运行", DebugCommandSafety.RUN_CONTROL, caps.can_run, ("发送 Run", "轮询状态")),
         _session_command(snapshot, "step", "单步", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step", "读取 PC")),
+        _session_command(snapshot, "step_over", "跨过", DebugCommandSafety.RUN_CONTROL, caps.can_step, ("发送 Step Over", "读取 PC")),
         _session_command(snapshot, "sync_breakpoints", "同步断点", DebugCommandSafety.RUN_CONTROL, caps.can_sync_breakpoints, ("生成断点差异", "回读验证")),
         _session_command(snapshot, "write_variables", "写变量", DebugCommandSafety.TARGET_WRITE, caps.can_write_variables, ("校验类型/RAM", "写入后回读")),
     )

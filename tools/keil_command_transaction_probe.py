@@ -209,12 +209,13 @@ def main() -> int:
             "halt",
             "run",
             "step",
+            "step_over",
             "sync_breakpoints",
             "write_variables",
         }
         _assert(set(disconnected) == expected, f"transaction keys changed: {sorted(disconnected)}")
         _assert_all_dry_run(disconnected)
-        for key in ("attach", "halt", "run", "step", "sync_breakpoints", "write_variables"):
+        for key in ("attach", "halt", "run", "step", "step_over", "sync_breakpoints", "write_variables"):
             _assert(not disconnected[key].preconditions_met, f"{key} should be blocked while disconnected")
 
         session.mark_discovered(can_attach=True)
@@ -259,6 +260,7 @@ def main() -> int:
         _assert(running["halt"].preconditions_met, "halt should be precondition-ready while running")
         _assert(not running["run"].preconditions_met, "run should be blocked while already running")
         _assert(not running["step"].preconditions_met, "step should be blocked while running")
+        _assert(not running["step_over"].preconditions_met, "step_over should be blocked while running")
         _assert(running["sync_breakpoints"].preconditions_met, "breakpoint sync capability should surface readiness")
         _assert(running["sync_breakpoints"].breakpoint_diff_summary is not None, "sync transaction should carry breakpoint diff summary")
         _assert(running["attach"].breakpoint_diff_summary is None, "non-sync transactions should not carry breakpoint diff summary")
@@ -383,6 +385,7 @@ def main() -> int:
         _assert_all_dry_run(paused)
         _assert(paused["run"].preconditions_met, "run should be precondition-ready while paused")
         _assert(paused["step"].preconditions_met, "step should be precondition-ready while paused")
+        _assert(paused["step_over"].preconditions_met, "step_over should be precondition-ready while paused")
         _assert(not paused["halt"].preconditions_met, "halt should be blocked while paused")
 
         session.mark_attached(running=False, runtime_control=True, breakpoint_sync=True, variable_write=True)

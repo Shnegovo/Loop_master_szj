@@ -116,7 +116,12 @@ class UvscRuntimeControlResult:
     error: str = ""
 
     def summary(self) -> str:
-        label = "运行" if self.action == "run" else "暂停" if self.action == "halt" else "单步" if self.action == "step" else self.action
+        label = {
+            "run": "运行",
+            "halt": "暂停",
+            "step": "单步",
+            "step_over": "跨过",
+        }.get(self.action, self.action)
         state = "运行中" if self.target_running is True else "已暂停" if self.target_running is False else "未知"
         if self.succeeded:
             return f"UVSOCK {label}成功，目标{state}"
@@ -385,13 +390,13 @@ class KeilUvscLiveSession:
     def run_target(self) -> UvscRuntimeControlResult:
         return self._runtime_control("run", "UVSC_DBG_START_EXECUTION", expected_running=True)
 
-    def step_target(self, command: str = "T") -> UvscRuntimeControlResult:
+    def step_target(self, command: str = "T", *, action: str = "step") -> UvscRuntimeControlResult:
         try:
             self.execute_command(command, echo=True)
         except Exception as exc:
             return UvscRuntimeControlResult(
                 attempted=True,
-                action="step",
+                action=action,
                 succeeded=False,
                 error=str(exc),
             )
@@ -413,13 +418,16 @@ class KeilUvscLiveSession:
             error = f"状态回读不一致：期望已暂停，实际{actual}"
         return UvscRuntimeControlResult(
             attempted=True,
-            action="step",
+            action=action,
             succeeded=bool(succeeded),
             status_code=0 if succeeded else None,
             status_name="UVSC_STATUS_SUCCESS" if succeeded else "",
             target_running=target_running,
             error=error,
         )
+
+    def step_over_target(self) -> UvscRuntimeControlResult:
+        return self.step_target(command="P", action="step_over")
 
     def _runtime_control(
         self,

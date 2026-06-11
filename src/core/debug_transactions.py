@@ -18,6 +18,7 @@ class DebugCommandKind(str, Enum):
     HALT = "halt"
     RUN = "run"
     STEP = "step"
+    STEP_OVER = "step_over"
     SYNC_BREAKPOINTS = "sync_breakpoints"
     WRITE_VARIABLES = "write_variables"
 
