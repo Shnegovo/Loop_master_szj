@@ -77,8 +77,16 @@ def main() -> int:
         snapshot = remote_snapshot_from_operations(request, complete=True)
         session = FakeSession()
         result = execute_keil_breakpoint_sync(session, request, remote_snapshot=snapshot)
-        _assert(not result.succeeded, "guarded conditional breakpoint should make the batch fail")
+        _assert(not result.succeeded, "guarded conditional breakpoint should prevent full success")
+        _assert(result.completed, "guarded conditional breakpoint should count as partial completion")
+        _assert(result.partial, "guarded conditional breakpoint should be marked partial")
         _assert(result.attempted_count == 4, f"attempted count mismatch: {result.attempted_count}")
+        _assert(result.skipped_count == 1, f"skipped count mismatch: {result.skipped_count}")
+        _assert(result.failed_count == 0, f"guarded operation should not be an attempted failure: {result.failed_count}")
+        rows = dict(result.diagnostic_rows())
+        _assert(rows.get("断点同步") == "部分完成", f"partial diagnostics mismatch: {rows!r}")
+        _assert(rows.get("断点受限") == "1 未发送", f"limited diagnostics mismatch: {rows!r}")
+        _assert("条件断点" in rows.get("断点受限原因", ""), f"limited reason missing: {rows!r}")
         _assert(result.remote_snapshot is not None and result.remote_snapshot.complete, "snapshot should be complete")
         _assert(any(command.startswith("BS ") for command in session.commands), f"commands missing BS: {session.commands!r}")
 
@@ -93,6 +101,21 @@ def main() -> int:
         safe_result = execute_keil_breakpoint_sync(FakeSession(), safe_request)
         _assert(safe_result.succeeded, safe_result.summary())
         _assert(safe_result.attempted_count == 4, f"safe attempted mismatch: {safe_result.attempted_count}")
+
+        limited_only_request = build_keil_breakpoint_sync_request_from_state(
+            project_path=root / "Project.uvprojx",
+            target_name="Target 1",
+            local_breakpoints=(KeilBreakpointIntent(pid_c, 60, enabled=True, condition="angle > 10"),),
+            remote_breakpoints=(),
+            source_paths=(pid_c,),
+            transaction_id="limited-only",
+        )
+        limited_only_result = execute_keil_breakpoint_sync(FakeSession(), limited_only_request)
+        _assert(not limited_only_result.succeeded, "limited-only batch must not be full success")
+        _assert(not limited_only_result.completed, "limited-only batch must not be completed")
+        _assert(limited_only_result.blocked_by_limits, "limited-only batch should be blocked by limits")
+        limited_rows = dict(limited_only_result.diagnostic_rows())
+        _assert(limited_rows.get("断点同步") == "受限未执行", f"limited-only diagnostics mismatch: {limited_rows!r}")
 
         failing = execute_keil_breakpoint_sync(FakeSession(fail_on="BK"), safe_request)
         _assert(not failing.succeeded, "failure should mark sync unsuccessful")

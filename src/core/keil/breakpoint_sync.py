@@ -53,28 +53,84 @@ class KeilBreakpointSyncResult:
 
     @property
     def succeeded_count(self) -> int:
-        return sum(1 for item in self.commands if item.succeeded)
+        return sum(1 for item in self.commands if item.attempted and item.succeeded)
 
     @property
     def failed_count(self) -> int:
-        return sum(1 for item in self.commands if not item.succeeded)
+        return sum(1 for item in self.commands if item.attempted and not item.succeeded)
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(1 for item in self.commands if not item.attempted and not item.succeeded)
+
+    @property
+    def noop_count(self) -> int:
+        return sum(1 for item in self.commands if not item.attempted and item.succeeded)
 
     @property
     def succeeded(self) -> bool:
-        return not self.error and all(item.succeeded for item in self.commands)
+        return not self.error and self.failed_count == 0 and self.skipped_count == 0
+
+    @property
+    def completed(self) -> bool:
+        return not self.error and self.failed_count == 0 and not self.blocked_by_limits
+
+    @property
+    def partial(self) -> bool:
+        return not self.error and self.failed_count == 0 and self.skipped_count > 0 and self.attempted_count > 0
+
+    @property
+    def blocked_by_limits(self) -> bool:
+        return not self.error and self.failed_count == 0 and self.skipped_count > 0 and self.attempted_count == 0
+
+    @property
+    def limited_reasons(self) -> tuple[str, ...]:
+        reasons: list[str] = []
+        for item in self.commands:
+            if item.attempted or item.succeeded:
+                continue
+            reason = item.error or item.operation.reason or "断点操作受限，未发送"
+            if reason not in reasons:
+                reasons.append(reason)
+        return tuple(reasons)
+
+    @property
+    def status_label(self) -> str:
+        if self.succeeded:
+            return "成功"
+        if self.partial:
+            return "部分完成"
+        if self.blocked_by_limits:
+            return "受限未执行"
+        return "失败"
 
     def summary(self) -> str:
         if self.succeeded:
             return f"Keil 断点同步完成：{self.succeeded_count}/{self.attempted_count} 条命令成功"
+        if self.partial:
+            reason = _join_limited_reasons(self.limited_reasons)
+            suffix = f"，原因：{reason}" if reason else ""
+            return f"Keil 断点同步部分完成：{self.succeeded_count}/{self.attempted_count} 条命令成功，{self.skipped_count} 条受限未发送{suffix}"
+        if self.blocked_by_limits:
+            reason = _join_limited_reasons(self.limited_reasons)
+            suffix = f"，原因：{reason}" if reason else ""
+            return f"Keil 断点同步未执行：{self.skipped_count} 条操作受限未发送{suffix}"
         detail = self.error or _first_error(self.commands) or "断点同步失败"
         return f"Keil 断点同步失败：{detail}"
 
     def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
         rows = [
-            ("断点同步", "成功" if self.succeeded else "失败"),
+            ("断点同步", self.status_label),
             ("断点命令", f"{self.succeeded_count}/{self.attempted_count} 成功"),
             ("断点同步模式", "完整差分" if self.request.remote_snapshot_complete else "推送本地"),
         ]
+        if self.noop_count:
+            rows.append(("断点无变化", str(self.noop_count)))
+        if self.skipped_count:
+            rows.append(("断点受限", f"{self.skipped_count} 未发送"))
+            reason = _join_limited_reasons(self.limited_reasons)
+            if reason:
+                rows.append(("断点受限原因", reason))
         address_resolved = sum(1 for item in self.commands if item.operation.address is not None)
         address_unresolved = sum(
             1 for item in self.commands
@@ -110,9 +166,16 @@ class KeilBreakpointSyncResult:
             "remote_snapshot_complete": self.request.remote_snapshot_complete,
             "axf_path": str(self.request.axf_path or ""),
             "succeeded": self.succeeded,
+            "completed": self.completed,
+            "partial": self.partial,
+            "blocked_by_limits": self.blocked_by_limits,
+            "status": self.status_label,
             "attempted_count": self.attempted_count,
             "succeeded_count": self.succeeded_count,
             "failed_count": self.failed_count,
+            "skipped_count": self.skipped_count,
+            "noop_count": self.noop_count,
+            "limited_reasons": list(self.limited_reasons),
             "commands": [
                 {
                     "action": item.operation.action.value,
@@ -515,6 +578,15 @@ def _first_error(commands: tuple[KeilBreakpointCommandResult, ...]) -> str:
         if command.error:
             return command.error
     return ""
+
+
+def _join_limited_reasons(reasons: tuple[str, ...]) -> str:
+    if not reasons:
+        return ""
+    text = "；".join(reasons[:2])
+    if len(reasons) > 2:
+        text += f" 等 {len(reasons)} 类"
+    return text
 
 
 def _address_samples(commands: tuple[KeilBreakpointCommandResult, ...]) -> tuple[str, ...]:

@@ -3558,7 +3558,7 @@ class MainWindow(QMainWindow):
         if transaction is not None:
             self._debug_command_history.record(
                 transaction,
-                event="executed" if result.succeeded else "failed",
+                event="executed" if getattr(result, "completed", result.succeeded) else "failed",
                 source="ui_breakpoint_sync",
             )
             tab.set_command_history_entries(self._debug_command_history.recent(limit=5))
@@ -3567,6 +3567,10 @@ class MainWindow(QMainWindow):
         summary = result.summary()
         if result.succeeded:
             self._show_info("Keil 断点同步完成", summary)
+        elif getattr(result, "partial", False):
+            self._show_warning("Keil 断点同步部分完成", summary)
+        elif getattr(result, "blocked_by_limits", False):
+            self._show_warning("Keil 断点同步受限未执行", summary)
         else:
             self._show_warning("Keil 断点同步失败", summary)
         if hasattr(self, "_sb_label"):
@@ -3584,9 +3588,10 @@ class MainWindow(QMainWindow):
             f"模式：{mode}\n"
             f"新增：{counts.get('add', 0)}  删除：{counts.get('remove', 0)}  启用：{counts.get('enable', 0)}\n"
             f"禁用：{counts.get('disable', 0)}  条件更新：{counts.get('update_condition', 0)}  无变化：{counts.get('noop', 0)}\n"
-            f"无效：{invalid}\n\n"
+            f"受限：{invalid}\n\n"
         )
         detail += self._keil_breakpoint_address_confirmation_text(request)
+        detail += self._keil_breakpoint_limited_confirmation_text(request)
         if not request.remote_snapshot_complete:
             detail += "当前 Keil 远端断点枚举还未完成，本次不会删除远端断点，只把本地断点提交到 Keil。\n"
         if active == 0:
@@ -3625,6 +3630,28 @@ class MainWindow(QMainWindow):
         if unresolved:
             text += "存在未解析源码行，将回退到 Keil 源码行表达式。\n"
         return text + "\n"
+
+    @staticmethod
+    def _keil_breakpoint_limited_confirmation_text(request: KeilBreakpointSyncRequest) -> str:
+        limited = [operation for operation in request.operations if not operation.valid]
+        if not limited:
+            return ""
+        action_labels = {
+            KeilBreakpointSyncAction.ADD: "新增",
+            KeilBreakpointSyncAction.REMOVE: "删除",
+            KeilBreakpointSyncAction.ENABLE: "启用",
+            KeilBreakpointSyncAction.DISABLE: "停用",
+            KeilBreakpointSyncAction.UPDATE_CONDITION: "条件",
+            KeilBreakpointSyncAction.NOOP: "无变化",
+        }
+        lines = [f"受限操作：{len(limited)} 条不会发送到 Keil。"]
+        for operation in limited[:4]:
+            label = action_labels.get(operation.action, operation.action.value)
+            reason = operation.reason or "该断点操作尚未验证"
+            lines.append(f"- {Path(operation.path).name}:{operation.line} {label}：{reason}")
+        if len(limited) > 4:
+            lines.append(f"- 另有 {len(limited) - 4} 条受限操作")
+        return "\n".join(lines) + "\n\n"
 
     @staticmethod
     def _keil_breakpoint_operation_counts(request: KeilBreakpointSyncRequest) -> dict[str, int]:
@@ -3746,7 +3773,7 @@ class MainWindow(QMainWindow):
         record = {
             "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "action": "keil_breakpoint_sync",
-            "transaction": transaction.audit_record(event="executed" if result.succeeded else "failed") if transaction is not None else None,
+            "transaction": transaction.audit_record(event="executed" if getattr(result, "completed", result.succeeded) else "failed") if transaction is not None else None,
             "result": result.to_record(),
         }
         try:

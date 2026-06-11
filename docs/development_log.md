@@ -6678,3 +6678,81 @@ summary of the planned diff.
   - remote breakpoint readback evidence after sync,
   - clearer recovery when Keil accepts a command but `BL` cannot map it back to
     source.
+
+## Milestone 77 - Breakpoint Sync Limited-State Semantics
+
+### Goal
+
+Make Keil breakpoint sync results honest when some operations are intentionally
+not sent. Conditional source-line breakpoints are still blocked until the exact
+Keil command semantics are fully verified; they should not make successful
+safe commands look like a hard Keil failure.
+
+### Completed
+
+- Split `KeilBreakpointSyncResult` into clearer result states:
+  - `成功`: all sent commands succeeded and nothing was skipped,
+  - `部分完成`: sent commands succeeded, but some limited operations were not
+    sent,
+  - `受限未执行`: every requested operation was limited and no command was sent,
+  - `失败`: an attempted Keil command failed or the sync raised an error.
+- Added result fields and audit data:
+  - `completed`,
+  - `partial`,
+  - `blocked_by_limits`,
+  - `skipped_count`,
+  - `noop_count`,
+  - `limited_reasons`,
+  - `status`.
+- Diagnostics now include:
+  - `断点受限`,
+  - `断点受限原因`,
+  - `断点无变化` when no-op operations are present.
+- Updated the Keil sync UI flow:
+  - partial completion is shown as a warning, not a full failure,
+  - fully limited batches show `Keil 断点同步受限未执行`,
+  - audit/history event remains `executed` only when at least some safe work was
+    completed.
+- The confirmation dialog now lists limited operations with file, line, action,
+  and reason before sending anything to Keil.
+
+### Verified
+
+- `python -m py_compile src\core\keil\breakpoint_sync.py src\ui\gui.py tools\keil_breakpoint_sync_probe.py tools\ui_keil_breakpoint_sync_probe.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\keil_breakpoint_sync_probe.py`
+  - PASS.
+  - Verifies partial completion when a conditional add is skipped but safe
+    commands are sent.
+  - Verifies `受限未执行` when all operations are limited.
+  - Verifies real attempted command failures still report `失败`.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+  - Verifies confirmation text includes the limited operation reason.
+  - Verifies diagnostics and warning title for `受限未执行`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-breakpoint-sync-states --width 1440 --height 900`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+
+### Notes
+
+- This stage changes sync result semantics and UI truthfulness only. It still
+  does not enable automatic condition-breakpoint writes.
+- The current Keil path is now safer for real use: a user can see exactly which
+  breakpoint actions will be sent, which are limited, and whether Keil itself
+  failed.
+
+### Next Target
+
+- Continue with real Keil breakpoint readback:
+  - refresh `BL` after sync when possible,
+  - map remote breakpoint IDs and addresses back into local verification,
+  - then run a live F401 breakpoint sync smoke that does not leave residual
+    breakpoints behind.

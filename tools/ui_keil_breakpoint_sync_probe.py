@@ -144,8 +144,9 @@ def main() -> int:
         window = MainWindow()
         window._config_path = output_dir / "loopmaster.json"
         window._variable_write_audit_path = output_dir / "audit.jsonl"
+        warnings: list[tuple[str, str]] = []
         window._show_info = lambda _title, _message: None
-        window._show_warning = lambda _title, _message: None
+        window._show_warning = lambda title, message: warnings.append((title, message))
         window.resize(1360, 820)
         window.show()
         _pump(app, 0.2)
@@ -209,6 +210,28 @@ def main() -> int:
         _assert(audit_lines, "breakpoint sync audit log missing")
         record = json.loads(audit_lines[-1])
         _assert(record.get("action") == "keil_breakpoint_sync", f"audit action mismatch: {record!r}")
+
+        tab._breakpoints.set_condition(source_path, 5, "speed > 0")
+        tab._refresh_breakpoint_views(select_path=source_path, select_line=5)
+        window._debug_remote_breakpoint_snapshot = None
+        window._sync_debug_command_preview()
+        limited_confirm_calls, restore_limited_confirmation = _patch_confirmation()
+        try:
+            window._on_debug_workbench_action("sync_breakpoints")
+            _pump(app, 0.2)
+        finally:
+            restore_limited_confirmation()
+        _assert(len(limited_confirm_calls) == 1, f"limited confirmation mismatch: {limited_confirm_calls!r}")
+        limited_message = limited_confirm_calls[0]["message"]
+        _assert("受限操作" in limited_message, limited_message)
+        _assert("条件断点命令尚未验证" in limited_message, limited_message)
+        limited_rows = _diagnostics(tab)
+        _assert(limited_rows.get("断点同步") == "受限未执行", f"limited sync diagnostics mismatch: {limited_rows!r}")
+        _assert(limited_rows.get("断点受限") == "1 未发送", f"limited sync count mismatch: {limited_rows!r}")
+        _assert(warnings and warnings[-1][0] == "Keil 断点同步受限未执行", f"limited warning mismatch: {warnings!r}")
+        tab._breakpoints.set_condition(source_path, 5, "")
+        tab._refresh_breakpoint_views(select_path=source_path, select_line=5)
+        warnings.clear()
 
         complete_snapshot = RemoteBreakpointSnapshot(
             schema_version=1,
