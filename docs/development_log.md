@@ -4986,3 +4986,94 @@ real F401 smoke project from the F103 balance-car reference project.
   - current PC/current source line evidence,
   - clearer breakpoint evidence when Keil only echoes command text,
   - shared interface shape for OpenOCD/GDB run control.
+
+## Milestone 55 Update - PC Evidence UI and Debug Workbench Narrow-Window Fix
+
+### Goal
+
+Make the source-debugger UI distinguish real backend PC evidence from local or
+placeholder state, then fix the narrow-window overlap found during screenshot
+inspection.
+
+### Completed
+
+- Added PC evidence state to `DebugWorkbenchTab`.
+  - `set_pc_evidence()` accepts the existing `DebugPcLocation` model.
+  - PC gutter tooltip now reports whether the PC is read back, unverified or
+    pending.
+  - The source marker summary now shows `PC 已回读` or `PC 未验证` instead of a
+    generic `PC` when evidence is available.
+  - Unverified PC markers are rendered with a lighter dashed arrow so they do
+    not look like confirmed backend state.
+- Passed backend snapshot PC evidence through the main window.
+  - Discover, read-only attach, generic snapshot application and Keil Halt/Run
+    paths now update the debug workbench PC evidence.
+  - Backend switching and Keil runtime reconfiguration clear stale PC evidence.
+- Added PC evidence diagnostics.
+  - The diagnostics table now surfaces `PC 证据`, `PC 来源`, `PC 位置` and
+    `PC 说明` from the current backend snapshot record.
+  - Keil's current placeholder remains explicitly marked as unverified:
+    `Keil PC 位置读取尚未实现`.
+- Fixed a real UI issue found in screenshot review.
+  - The debug workbench navigation/diagnostics column now uses an internal
+    borderless scroll area.
+  - In narrow windows, diagnostics, variable presets and breakpoints scroll
+    vertically instead of overlapping each other.
+- Updated the UI screenshot probe.
+  - Fake read-only backend snapshots now carry an incomplete `DebugPcLocation`.
+  - The probe asserts unverified PC diagnostics, local unverified PC tooltips
+    and a synthetic verified PC tooltip with address/function evidence.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py src\ui\gui.py tools\ui_debug_workbench_probe.py`
+  - PASS.
+- `python tools\debug_snapshot_model_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-pc-evidence-scroll --width 1440 --height 900`
+  - PASS; screenshots:
+    - `tools\ui-debug-workbench-pc-evidence-scroll\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-pc-evidence-scroll\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-pc-evidence-scroll\03_debug_workbench_narrow.png`
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_backend_adapter_probe.py`
+  - PASS; Keil PC snapshot remains incomplete until real PC readback exists.
+- `python tools\debug_variable_access_probe.py`
+  - PASS.
+- `python tools\keil_balance_reference_probe.py --json`
+  - PASS; the F103 balance-car project remains a reference profile.
+- `python tools\keil_profile_store_probe.py`
+  - PASS.
+- `python tools\keil_variable_presets_probe.py`
+  - PASS.
+- `python tools\keil_backend_live_write_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+- `python tools\keil_auto_debug_smoke.py --keil-root D:\Keil --expected-device STM32F401 --execute --json`
+  - PASS on the connected ST-Link/F401 setup.
+  - LoopMaster launched Keil/UVSOCK, connected in 5 attempts, read
+    `debug_setpoint = 1000`, wrote `6000`, and read back `6000` from
+    `0x20000008`.
+
+### Notes
+
+- This milestone does not claim real Keil PC/source-line readback yet. It makes
+  the UI truthful by carrying incomplete PC evidence through the same surface
+  that future Keil/OpenOCD/pyOCD readback will use.
+- The F401 Keil smoke caused uVision to rewrite `.uvprojx/.uvoptx` local state;
+  those generated changes were restored and not included in this milestone.
+- No `UV4.exe`/`uVision` process remained after cleanup.
+
+### Next Target
+
+- Implement the first real breakpoint execution slice for Keil:
+  - convert local breakpoints into concrete Keil debug commands,
+  - execute an explicit sync action with confirmation,
+  - record backend evidence for accepted/failed breakpoints,
+  - keep the same evidence model compatible with OpenOCD/GDB and pyOCD.
+- Investigate reliable PC/source-line readback routes:
+  - Keil Debug Commands/UVSOCK status,
+  - AXF symbol and DWARF line mapping,
+  - GDB/MI-compatible PC readback for OpenOCD and pyOCD.

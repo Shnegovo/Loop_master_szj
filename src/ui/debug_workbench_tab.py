@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -40,6 +41,7 @@ from src.core.debug_workbench import (
     load_code_document,
     search_document,
 )
+from src.core.debug_snapshots import DebugPcLocation
 from src.core.debug_sources import (
     SourceManifest,
     source_manifest_from_keil_project,
@@ -142,7 +144,9 @@ class SourceCodeEditor(QPlainTextEdit):
                 message = f" · {decoration.message}" if decoration.message else ""
                 parts.append(f"{state}断点 · {verify}{condition}{message}")
             elif decoration.kind == "pc":
-                parts.append("当前 PC")
+                evidence = "已回读" if decoration.verified else "未验证" if decoration.message else "待回读"
+                message = f" · {decoration.message}" if decoration.message else ""
+                parts.append(f"当前 PC · {evidence}{message}")
             elif decoration.kind == "run":
                 parts.append("运行行")
             elif decoration.kind == "search_active":
@@ -246,8 +250,14 @@ class SourceCodeEditor(QPlainTextEdit):
         kinds = {decoration.kind for decoration in decorations}
         center_y = top + max(1, (bottom - top) // 2)
         if "pc" in kinds:
-            painter.setBrush(QColor("#2563eb"))
-            painter.setPen(Qt.NoPen)
+            pc_decorations = [decoration for decoration in decorations if decoration.kind == "pc"]
+            verified = any(decoration.verified for decoration in pc_decorations)
+            if verified:
+                painter.setBrush(QColor("#2563eb"))
+                painter.setPen(Qt.NoPen)
+            else:
+                painter.setBrush(QColor("#bfdbfe"))
+                painter.setPen(QPen(QColor("#2563eb"), 1.5, Qt.DashLine))
             points = [
                 (8, center_y - 6),
                 (8, center_y + 6),
@@ -311,6 +321,7 @@ class DebugWorkbenchTab(QWidget):
         self._current_document: CodeDocument | None = None
         self._current_pc_line: int | None = None
         self._run_line: int | None = None
+        self._pc_evidence: DebugPcLocation | None = None
         self._active_search_line: int | None = None
         self._search_matches = ()
         self._search_index = -1
@@ -452,6 +463,13 @@ class DebugWorkbenchTab(QWidget):
     def set_runtime_markers(self, current_pc_line: int | None = None, run_line: int | None = None) -> None:
         self._current_pc_line = current_pc_line
         self._run_line = run_line
+        self._pc_evidence = None
+        self._refresh_decorations()
+
+    def set_pc_evidence(self, pc_location: DebugPcLocation | None) -> None:
+        self._pc_evidence = pc_location
+        if pc_location is not None and pc_location.line is not None:
+            self._current_pc_line = pc_location.line
         self._refresh_decorations()
 
     def set_debug_status(self, status: DebugWorkbenchStatus, *, controls_ready: bool = False) -> None:
@@ -459,6 +477,7 @@ class DebugWorkbenchTab(QWidget):
         self._backend_controls_ready = bool(controls_ready)
         self._current_pc_line = status.current_pc_line
         self._run_line = status.run_line
+        self._pc_evidence = None
         self._apply_debug_status(status)
         self._refresh_decorations()
         self._refresh_summary()
@@ -739,7 +758,22 @@ class DebugWorkbenchTab(QWidget):
     def _build_navigation_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("debugCard")
-        layout = QVBoxLayout(panel)
+        outer_layout = QVBoxLayout(panel)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("debugNavigationScroll")
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer_layout.addWidget(scroll)
+
+        content = QFrame()
+        content.setObjectName("debugNavigationContent")
+        scroll.setWidget(content)
+
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(9)
 
@@ -1130,6 +1164,7 @@ class DebugWorkbenchTab(QWidget):
             run_line=self._run_line,
             search_query=self.search_edit.text(),
         )
+        decorations = self._with_pc_decoration_evidence(decorations)
         self._refresh_search_matches()
         if self._active_search_line is not None:
             decorations = tuple(decorations) + (
@@ -1137,6 +1172,60 @@ class DebugWorkbenchTab(QWidget):
             )
         self.editor.set_code_document(self._current_document, decorations)
         self.marker_label.setText(self._marker_text(decorations))
+
+    def _with_pc_decoration_evidence(
+        self,
+        decorations: tuple[LineDecoration, ...],
+    ) -> tuple[LineDecoration, ...]:
+        if not decorations:
+            return decorations
+        result: list[LineDecoration] = []
+        pc_message = self._pc_decoration_message()
+        pc_verified = bool(self._pc_evidence and self._pc_evidence.complete)
+        for decoration in decorations:
+            if decoration.kind != "pc":
+                result.append(decoration)
+                continue
+            result.append(
+                LineDecoration(
+                    line=decoration.line,
+                    kind=decoration.kind,
+                    label="PC 已回读" if pc_verified else "PC 未验证",
+                    enabled=decoration.enabled,
+                    verified=pc_verified,
+                    message=pc_message,
+                )
+            )
+        return tuple(result)
+
+    def _pc_decoration_message(self) -> str:
+        if self._pc_evidence is None:
+            if self._current_pc_line is None:
+                return ""
+            return "来源: 本地状态；尚未由调试后端回读验证"
+        parts: list[str] = []
+        source = self._pc_source_label(self._pc_evidence.source)
+        if source:
+            parts.append(f"来源: {source}")
+        if self._pc_evidence.address is not None:
+            parts.append(f"地址: 0x{int(self._pc_evidence.address):08X}")
+        if self._pc_evidence.function:
+            parts.append(f"函数: {self._pc_evidence.function}")
+        if self._pc_evidence.message:
+            parts.append(self._pc_evidence.message)
+        if not parts and not self._pc_evidence.complete:
+            parts.append("尚未由调试后端回读验证")
+        return "；".join(parts)
+
+    @staticmethod
+    def _pc_source_label(source: str) -> str:
+        labels = {
+            "status": "本地状态",
+            "keil_uvsock": "Keil/UVSOCK",
+            "openocd_gdb": "OpenOCD/GDB",
+            "pyocd": "pyOCD",
+        }
+        return labels.get(str(source or ""), str(source or ""))
 
     def _refresh_breakpoint_table(self) -> None:
         breakpoints = self._breakpoints.all()
@@ -1915,7 +2004,13 @@ class DebugWorkbenchTab(QWidget):
             counts[decoration.kind] = counts.get(decoration.kind, 0) + 1
         parts = []
         if counts.get("pc"):
-            parts.append("PC")
+            pc_decorations = [decoration for decoration in decorations if decoration.kind == "pc"]
+            if any(decoration.verified for decoration in pc_decorations):
+                parts.append("PC 已回读")
+            elif any(decoration.message for decoration in pc_decorations):
+                parts.append("PC 未验证")
+            else:
+                parts.append("PC")
         if counts.get("run"):
             parts.append("运行行")
         if counts.get("search"):
@@ -1962,6 +2057,29 @@ class DebugWorkbenchTab(QWidget):
                 background: #ffffff;
                 border: 1px solid #dce6f0;
                 border-radius: 8px;
+            }
+            QScrollArea#debugNavigationScroll {
+                background: transparent;
+                border: none;
+            }
+            QFrame#debugNavigationContent {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea#debugNavigationScroll QScrollBar:vertical {
+                background: transparent;
+                border: none;
+                width: 7px;
+                margin: 4px 1px 4px 0;
+            }
+            QScrollArea#debugNavigationScroll QScrollBar::handle:vertical {
+                background: #cbd8e6;
+                border-radius: 3px;
+                min-height: 28px;
+            }
+            QScrollArea#debugNavigationScroll QScrollBar::add-line:vertical,
+            QScrollArea#debugNavigationScroll QScrollBar::sub-line:vertical {
+                height: 0;
             }
             QLabel#debugSectionTitle {
                 color: #111827;

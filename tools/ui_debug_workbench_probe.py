@@ -27,6 +27,7 @@ from src.core.debug_workbench import (  # noqa: E402
     search_document,
 )
 from src.core.debug_backend import DebugBackendDiagnostic, DebugBackendSessionSnapshot  # noqa: E402
+from src.core.debug_snapshots import DebugPcLocation  # noqa: E402
 from src.core.debug_variable_access import DebugVariableReadResult, DebugVariableWriteResult  # noqa: E402
 from src.core.keil.commands import (  # noqa: E402
     KeilBreakpointRemoteSnapshot,
@@ -496,6 +497,11 @@ class _FakeReadOnlyBackend:
             port=4827,
             project_path=Path(project_path or self.project_path),
             target_name=target_name,
+            pc_location=DebugPcLocation(
+                source="keil_uvsock",
+                complete=False,
+                message="Keil PC 位置读取尚未实现",
+            ),
             remote_breakpoint_snapshot=KeilBreakpointRemoteSnapshot(
                 schema_version=1,
                 snapshot_id="keil-ui-fake-read-only-incomplete",
@@ -804,6 +810,13 @@ Raw dump of debug contents of section .debug_line:
             for key, expected in (("模式", "只读快照"), ("连接尝试", "是"), ("连接结果", "已连接"), ("目标运行", "运行中")):
                 if diag.get(key) != expected:
                     issues.append(f"read-only attach diagnostic mismatch {key}: {diag!r}")
+            for key, expected in (
+                ("PC 证据", "未验证"),
+                ("PC 来源", "keil_uvsock"),
+                ("PC 说明", "Keil PC 位置读取尚未实现"),
+            ):
+                if diag.get(key) != expected:
+                    issues.append(f"read-only attach PC evidence diagnostic mismatch {key}: {diag!r}")
             for key in ("Keil 档案", "AXF", "AXF 状态", "构建命令", "构建状态", "启动命令", "启动状态"):
                 if key not in diag:
                     issues.append(f"read-only attach profile diagnostic missing {key}: {diag!r}")
@@ -1017,12 +1030,17 @@ Raw dump of debug contents of section .debug_line:
         )
         if "启用 4" not in tab.marker_label.text() or "停用 1" not in tab.marker_label.text() or "条件 3" not in tab.marker_label.text():
             issues.append(f"marker label should summarize breakpoint states: {tab.marker_label.text()!r}")
+        if "PC 未验证" not in tab.marker_label.text():
+            issues.append(f"synthetic PC marker should be shown as unverified: {tab.marker_label.text()!r}")
         for phrase in ("已验证 1", "未验证 1", "待验证 3"):
             if phrase not in tab.marker_label.text():
                 issues.append(f"marker label missing verification phrase {phrase}: {tab.marker_label.text()!r}")
+        tooltip18 = tab.editor.gutter_tooltip_for_line(18)
         tooltip3 = tab.editor.gutter_tooltip_for_line(3)
         tooltip24 = tab.editor.gutter_tooltip_for_line(24)
         tooltip48 = tab.editor.gutter_tooltip_for_line(48)
+        if "当前 PC" not in tooltip18 or "未验证" not in tooltip18 or "本地状态" not in tooltip18:
+            issues.append(f"synthetic PC tooltip should show local unverified evidence: {tooltip18!r}")
         if "启用断点" not in tooltip3 or "已验证" not in tooltip3 or "条件: speed > 60" not in tooltip3:
             issues.append(f"enabled conditional breakpoint tooltip mismatch: {tooltip3!r}")
         if "停用断点" not in tooltip24 or "未验证" not in tooltip24 or "Keil 未回读到该断点" not in tooltip24 or "条件: speed_error < -12" not in tooltip24:
@@ -1212,6 +1230,23 @@ Raw dump of debug contents of section .debug_line:
             issues.append(f"marker label missing runtime decorations: {tab.marker_label.text()!r}")
         if "停用 0" in tab.marker_label.text():
             issues.append(f"marker label should omit zero-state breakpoint groups: {tab.marker_label.text()!r}")
+        tab.set_pc_evidence(
+            DebugPcLocation(
+                line=18,
+                address=0x08001234,
+                function="main",
+                source="keil_uvsock",
+                complete=True,
+                message="Keil 已回读当前 PC",
+            )
+        )
+        _pump(app, 0.1)
+        verified_pc_tip = tab.editor.gutter_tooltip_for_line(18)
+        if "PC 已回读" not in tab.marker_label.text():
+            issues.append(f"verified PC marker should show readback evidence: {tab.marker_label.text()!r}")
+        for phrase in ("已回读", "0x08001234", "main", "Keil 已回读当前 PC"):
+            if phrase not in verified_pc_tip:
+                issues.append(f"verified PC tooltip missing {phrase}: {verified_pc_tip!r}")
         if "目标已暂停" not in tab.status_text.text():
             issues.append(f"status text did not reflect paused synthetic state: {tab.status_text.text()!r}")
         enabled_actions = [

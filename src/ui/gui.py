@@ -2219,6 +2219,7 @@ class MainWindow(QMainWindow):
         self._debug_command_preview_suspended = True
         try:
             tab.set_debug_status(status, controls_ready=True)
+            tab.set_pc_evidence(None)
             self._sync_debug_source_manifest_preview()
             tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(self._debug_workbench_idle_diagnostics()))
             self._refresh_debug_variable_presets()
@@ -2847,6 +2848,7 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(f"正在发现 {self._debug_backend_display_name()}...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         diagnostics = []
+        pc_location = None
         try:
             snapshot = self._debug_backend.discover(
                 project_path=previous.project_path,
@@ -2854,6 +2856,7 @@ class MainWindow(QMainWindow):
                 previous_status=previous,
             )
             status = snapshot.status
+            pc_location = snapshot.pc_location
             diagnostics = snapshot.diagnostic_rows()
             self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
@@ -2879,6 +2882,7 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
+        tab.set_pc_evidence(pc_location)
         tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
@@ -2894,6 +2898,7 @@ class MainWindow(QMainWindow):
         self._debug_backend_snapshot_record = snapshot.to_record()
         self._debug_session_controller.apply_backend_snapshot(snapshot)
         self._tab_debug_workbench.set_debug_status(snapshot.status, controls_ready=True)
+        self._tab_debug_workbench.set_pc_evidence(snapshot.pc_location)
 
     def _connect_debug_backend_read_only_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -2905,6 +2910,7 @@ class MainWindow(QMainWindow):
             self._sb_label.setText(f"正在读取 {self._debug_backend_display_name()} 只读会话快照...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         diagnostics = []
+        pc_location = None
         try:
             snapshot = self._debug_backend.read_only_session_snapshot(
                 project_path=previous.project_path,
@@ -2914,6 +2920,7 @@ class MainWindow(QMainWindow):
                 query_status=True,
             )
             status = snapshot.status
+            pc_location = snapshot.pc_location
             diagnostics = snapshot.diagnostic_rows()
             self._debug_backend_diagnostics = tuple(diagnostics)
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
@@ -2939,6 +2946,7 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         tab.set_debug_status(status, controls_ready=True)
+        tab.set_pc_evidence(pc_location)
         tab.set_backend_diagnostics(self._with_debug_session_contract_diagnostics(diagnostics))
         self._sync_debug_command_preview()
         if hasattr(self, "_sb_label"):
@@ -3017,6 +3025,7 @@ class MainWindow(QMainWindow):
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
             tab.set_debug_status(status, controls_ready=True)
+            tab.set_pc_evidence(snapshot.pc_location)
         else:
             self._debug_backend_diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + self._keil_runtime_control_diagnostics(result)
         self._refresh_debug_workbench_diagnostics()
@@ -4022,6 +4031,7 @@ class MainWindow(QMainWindow):
                 target_name=previous.target_name,
             )
             tab.set_debug_status(status, controls_ready=True)
+            tab.set_pc_evidence(None)
         self._refresh_debug_backend_options()
         self._refresh_debug_workbench_diagnostics()
         self._sync_debug_command_preview()
@@ -4308,6 +4318,7 @@ class MainWindow(QMainWindow):
             + self._keil_launch_diagnostics()
             + self._keil_auto_debug_diagnostics()
             + self._keil_breakpoint_sync_diagnostics()
+            + self._debug_pc_evidence_diagnostics()
             + self._keil_live_write_diagnostics()
         )
         rows = diagnostic_rows + (
@@ -4318,6 +4329,36 @@ class MainWindow(QMainWindow):
             ("可执行命令", ", ".join(executable) if executable else "无"),
         )
         return rows
+
+    def _debug_pc_evidence_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        record = getattr(self, "_debug_backend_snapshot_record", None)
+        if not isinstance(record, dict):
+            return ()
+        pc = record.get("pc_location")
+        if not isinstance(pc, dict):
+            return ()
+        complete = bool(pc.get("complete"))
+        source = str(pc.get("source") or "--")
+        line = pc.get("line")
+        address = pc.get("address")
+        location_parts: list[str] = []
+        if line is not None:
+            location_parts.append(f"line {line}")
+        if address is not None:
+            try:
+                location_parts.append(f"0x{int(address):08X}")
+            except (TypeError, ValueError):
+                location_parts.append(str(address))
+        function = str(pc.get("function") or "")
+        if function:
+            location_parts.append(function)
+        message = str(pc.get("message") or "")
+        return (
+            ("PC 证据", "已回读" if complete else "未验证"),
+            ("PC 来源", source),
+            ("PC 位置", " / ".join(location_parts) if location_parts else "--"),
+            ("PC 说明", message or "--"),
+        )
 
     @staticmethod
     def _dedupe_diagnostics(rows: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
