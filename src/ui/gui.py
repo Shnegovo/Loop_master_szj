@@ -4897,6 +4897,30 @@ class MainWindow(QMainWindow):
             rows.append(("采集批次变量名", preview))
         return tuple(rows)
 
+    def _acquisition_batch_status_detail(self) -> str:
+        collector = getattr(self, "_collector", None)
+        if collector is None or not hasattr(collector, "get_acquisition_batch"):
+            return ""
+        source = getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD)
+        try:
+            batch = collector.get_acquisition_batch(source, tail_seconds=1.0 if collector.is_running else None)
+        except Exception:
+            return ""
+        rate = batch.actual_rate_hz or float(getattr(collector, "actual_rate", 0.0) or 0.0)
+        parts = [
+            f"批次：{batch.source_key}",
+            f"样本：{batch.sample_count}",
+            f"变量：{len(batch.variable_names)}",
+        ]
+        if rate > 0:
+            parts.append(f"批次频率：{self._format_sample_rate(rate)} Hz")
+        if batch.variable_names:
+            preview = ", ".join(batch.variable_names[:3])
+            if len(batch.variable_names) > 3:
+                preview += f", +{len(batch.variable_names) - 3}"
+            parts.append(f"变量名：{preview}")
+        return "  |  ".join(parts)
+
     def _debug_pc_evidence_diagnostics(self) -> tuple[tuple[str, str], ...]:
         record = getattr(self, "_debug_backend_snapshot_record", None)
         if not isinstance(record, dict):
@@ -6978,6 +7002,9 @@ class MainWindow(QMainWindow):
                 f"实际：-- Hz  |  目标：{self._configured_sample_rate_text()}  |  显示：{display_text}{note}"
             )
             text = "实际：-- Hz"
+        batch_detail = self._acquisition_batch_status_detail()
+        if batch_detail:
+            detail = f"{detail}  |  {batch_detail}"
         self._sb_rate.setToolTip(detail)
         if hasattr(self, "_scope_rate_label"):
             self._scope_rate_label.setToolTip(detail)

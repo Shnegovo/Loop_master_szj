@@ -209,6 +209,10 @@ def main() -> int:
         _assert(diagnostics.get("采集批次来源") == "keil_watch", f"Keil Watch batch source mismatch: {diagnostics!r}")
         _assert(int(diagnostics.get("采集批次样本", "0")) > 0, f"Keil Watch batch sample count mismatch: {diagnostics!r}")
         _assert("Angle" in diagnostics.get("采集批次变量名", ""), f"Keil Watch batch variable names mismatch: {diagnostics!r}")
+        window._update_sample_rate_label()
+        rate_tooltip = window._scope_rate_label.toolTip() if hasattr(window, "_scope_rate_label") else ""
+        _assert("批次：keil_watch" in rate_tooltip, f"rate tooltip missing batch source: {rate_tooltip!r}")
+        _assert("变量名：Angle" in rate_tooltip, f"rate tooltip missing batch variable name: {rate_tooltip!r}")
         window._on_stop()
         watch.connect()
         _assert(watch.connected, "fake watch should reconnect before close check")

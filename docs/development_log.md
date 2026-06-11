@@ -7523,3 +7523,62 @@ source capability from actual buffered sample evidence.
   - add a compact scope status chip or tooltip using the same batch data,
   - keep the old plot path intact,
   - then wire serial waveform batches after the parser contract is ready.
+
+## Milestone 90 - Scope Status Batch Metadata
+
+### Goal
+
+Move acquisition batch evidence closer to the main scope surface without making
+the visible status text noisy. Users should be able to hover the rate/status
+label and see which source produced the current buffered samples.
+
+### Completed
+
+- Added `_acquisition_batch_status_detail()` in the main window.
+- Scope/status rate tooltip now includes batch metadata from
+  `DataCollector.get_acquisition_batch()`:
+  - batch source key,
+  - buffered sample count,
+  - variable count,
+  - batch-derived frequency when available,
+  - a short variable-name preview.
+- Kept visible status text unchanged (`实际：... Hz`) so compact/narrow scope UI
+  does not become crowded.
+- Keil Watch scope probe now verifies that the rate tooltip contains
+  `批次：keil_watch` and `变量名：Angle` after fake Watch sampling starts.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\collector_fake_transport_probe.py`
+  - PASS.
+- `python tools\acquisition_session_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-batch-status-tooltip --width 1440 --height 900`
+  - PASS.
+- Regression probes:
+  - `python tools\ui_keil_runtime_control_probe.py`
+    - PASS.
+  - `python tools\ui_keil_breakpoint_sync_probe.py`
+    - PASS.
+  - `python tools\debug_backend_adapter_probe.py`
+    - PASS.
+  - `python tools\debug_session_controller_probe.py`
+    - PASS.
+
+### Notes
+
+- This is still a read-only metadata path. Plot data, sampling loops, Keil
+  commands, and serial parsing are unchanged.
+- The visible scope UI stays calm; batch/source details are available on hover
+  and in diagnostics.
+
+### Next Target
+
+- Start the serial waveform batch contract:
+  - identify the current serial collector/parser shape,
+  - add a no-hardware parser-to-`AcquisitionBatch` bridge,
+  - keep serial UI behavior unchanged until the bridge has probes.
