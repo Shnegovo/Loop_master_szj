@@ -172,6 +172,14 @@ def main() -> int:
         _assert(window._scope_read_source == "keil_watch", "scope source should switch to Keil Watch")
         boundary_scope = getattr(getattr(tab, "boundary_scope_label", None), "text", lambda: "")()
         _assert("Keil Watch" in boundary_scope, f"debug boundary scope chip should switch to Keil Watch: {boundary_scope!r}")
+        scope_combo_key = tab.scope_source_combo.currentData() if hasattr(tab, "scope_source_combo") else ""
+        _assert(scope_combo_key == "keil_watch", f"scope source combo should switch to Keil Watch: {scope_combo_key!r}")
+        diagnostics = {
+            tab.diagnostics_table.item(row, 0).text(): tab.diagnostics_table.item(row, 1).text()
+            for row in range(tab.diagnostics_table.rowCount())
+            if tab.diagnostics_table.item(row, 0) is not None and tab.diagnostics_table.item(row, 1) is not None
+        }
+        _assert(diagnostics.get("示波采集源") == "Keil Watch", f"diagnostics should show Keil Watch source: {diagnostics!r}")
         _assert("Angle" in window._monitored, f"Angle not monitored: {window._monitored!r}")
         _assert("Angle" in window._keil_watch_registry, "Angle missing from Keil watch registry")
         _assert(window._value_table.rowCount() >= 1, "value table should show watch variable")

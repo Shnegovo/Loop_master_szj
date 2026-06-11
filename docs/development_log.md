@@ -6133,3 +6133,82 @@ growing as more tools are added:
   SWD memory, Keil Watch, serial waveform, and future OpenOCD/pyOCD/TI should
   advertise label, rate limits, write safety, and expected use cases.
 - Then start TI MSPM0G3507 notes from `D:\ti` after Keil basics remain stable.
+
+## Milestone 69 - Acquisition Source Capability Model
+
+### Goal
+
+Make debug/scope acquisition modes explicit and selectable without mixing them
+into one crowded panel:
+
+- Keep the original non/light-intrusive LoopMaster SWD variable scope path.
+- Keep Keil/UVSOCK Watch as a debugger-backed low-frequency scope path.
+- Keep serial waveform as an independent serial assistant route.
+- Reserve honest planned entries for OpenOCD/GDB, pyOCD, and TI MSPM0G3507.
+
+### Completed
+
+- Added `src\core\acquisition_sources.py` with descriptors for:
+  - `swd`
+  - `keil_watch`
+  - `serial_waveform`
+  - `openocd_gdb`
+  - `pyocd`
+  - `ti_mspm0g3507`
+- Each source now advertises:
+  - label and short label,
+  - active/ready/route-only/planned state,
+  - transport,
+  - intrusive level,
+  - recommended and maximum sampling rate,
+  - read/write capability,
+  - intended use case and safety notes.
+- Added a compact `示波采集来源` selector to the Debug Workbench boundary strip.
+  - SWD and Keil Watch are directly selectable.
+  - Serial waveform routes to the serial assistant page.
+  - OpenOCD/GDB, pyOCD, and TI MSPM0G3507 are visible but disabled as planned
+    entries, so the UI does not pretend they are live yet.
+- Debug diagnostics now include acquisition source rows, so screenshots and
+  probes can tell whether scope data is coming from SWD, Keil Watch, or another
+  planned route.
+- Normalized saved scope source configuration so unknown future values fall back
+  to SWD instead of leaving the app in a mixed state.
+
+### Verified
+
+- `python -m py_compile src\core\acquisition_sources.py src\ui\debug_workbench_tab.py src\ui\gui.py tools\acquisition_sources_probe.py tools\ui_debug_workbench_probe.py tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-acquisition-sources --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-acquisition-sources\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-acquisition-sources\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-acquisition-sources\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_watch_scope_probe.py`
+  - PASS.
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\debug_workbench_model_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+
+### Notes
+
+- The selector is intentionally an acquisition-source boundary, not a full
+  transport manager yet. It prevents UI ambiguity while keeping the current
+  SWD, Keil Watch, and serial paths separate.
+- TI is recorded as the user-requested `MSPM0G3507` target, but it remains
+  disabled until the Keil basics are stable and a real TI debug path is wired.
+
+### Next Target
+
+- Continue real Keil debugger basics before adding more architecture:
+  - make breakpoint state evidence clearer after real sync/run-to-cursor,
+  - keep variable write/readback strict,
+  - then expose the minimum useful "breakpoint + run/halt + variable write"
+    workflow as a coherent first live-debug loop.

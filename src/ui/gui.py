@@ -32,6 +32,14 @@ from src.parser.variable_inventory import VariableInventory
 from src.parser.elf_parser import ELFParser
 from src.parser.map_parser import parse_map_file
 from src.core.collector import DataCollector
+from src.core.acquisition_sources import (
+    SCOPE_SOURCE_KEIL_WATCH,
+    SCOPE_SOURCE_SERIAL_WAVEFORM,
+    SCOPE_SOURCE_SWD,
+    acquisition_source_options,
+    active_acquisition_source,
+    normalize_acquisition_source_key,
+)
 from src.core.debug_workbench import (
     DebugBackendKind,
     DebugRuntimeState,
@@ -461,7 +469,7 @@ class MainWindow(QMainWindow):
         self._registry: dict[str, tuple[int, TypeInfo]] = {}
 
         self._backend = SWDBackend()
-        self._scope_read_source = "swd"
+        self._scope_read_source = SCOPE_SOURCE_SWD
         self._keil_watch_backend: KeilUvSockWatchBackend | None = None
         self._keil_watch_registry: dict[str, tuple[int, TypeInfo]] = {}
         self._keil_watch_next_idle_connect = 0.0
@@ -529,8 +537,8 @@ class MainWindow(QMainWindow):
                 self._recent_elf_path = Path(elf)
             self._saved_monitored_variables = cfg.get("monitored_variables", []) or []
             self._hidden_displayed_variables = set(cfg.get("hidden_displayed_variables", []) or [])
-            saved_scope_source = str(cfg.get("scope_read_source", "swd") or "swd")
-            self._scope_read_source = "keil_watch" if saved_scope_source == "keil_watch" else "swd"
+            saved_scope_source = str(cfg.get("scope_read_source", SCOPE_SOURCE_SWD) or SCOPE_SOURCE_SWD)
+            self._scope_read_source = normalize_acquisition_source_key(saved_scope_source)
             saved_keil_watch = cfg.get("keil_watch_variables", {}) or {}
             if isinstance(saved_keil_watch, dict):
                 for expression, type_name in saved_keil_watch.items():
@@ -2139,6 +2147,7 @@ class MainWindow(QMainWindow):
         self._tab_debug_workbench.sourceProviderSelectionChanged.connect(self._on_debug_source_provider_selected)
         self._tab_debug_workbench.sourceProviderConfigureRequested.connect(self._on_debug_source_provider_configure_requested)
         self._tab_debug_workbench.sourceRemapRequested.connect(self._on_debug_source_remap_requested)
+        self._tab_debug_workbench.scopeAcquisitionSelectionChanged.connect(self._on_scope_acquisition_selected)
         self._tab_debug_workbench.variablePresetWriteRequested.connect(self._write_keil_live_variable_from_preset)
         self._tab_debug_workbench.variablePresetWatchRequested.connect(self._add_keil_watch_preset_to_scope)
         self._tab_debug_workbench.profileSaveRequested.connect(self._save_current_keil_debug_profile)
@@ -2254,13 +2263,41 @@ class MainWindow(QMainWindow):
     def _refresh_debug_scope_acquisition_status(self) -> None:
         if not hasattr(self, "_tab_debug_workbench"):
             return
-        source = getattr(self, "_scope_read_source", "swd")
-        label = self._scope_read_source_label()
-        if source == "keil_watch":
-            detail = "通过 Keil/UVSOCK Watch 读取表达式，适合低频联调；高速波形仍建议 SWD 或串口。"
-        else:
-            detail = "LoopMaster 原轻侵入式 SWD 内存采集源，适合变量示波和较高频轮询。"
-        self._tab_debug_workbench.set_scope_acquisition_status(label, detail)
+        source = normalize_acquisition_source_key(getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD))
+        descriptor = active_acquisition_source(
+            source,
+            keil_watch_ready=True,
+            serial_ready=hasattr(self, "_tab_serial"),
+            include_planned=True,
+        )
+        self._tab_debug_workbench.set_scope_acquisition_options(
+            acquisition_source_options(
+                source,
+                keil_watch_ready=True,
+                serial_ready=hasattr(self, "_tab_serial"),
+                include_planned=True,
+            ),
+            source,
+        )
+        self._tab_debug_workbench.set_scope_acquisition_status(descriptor.short_label, descriptor.detail)
+
+    def _on_scope_acquisition_selected(self, source: str) -> None:
+        source = str(source or "").strip()
+        if source == SCOPE_SOURCE_SERIAL_WAVEFORM:
+            self._show_workspace_page("serial")
+            self._refresh_debug_scope_acquisition_status()
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText("已切换到串口助手波形页。")
+            return
+        if source in {SCOPE_SOURCE_SWD, SCOPE_SOURCE_KEIL_WATCH}:
+            self._set_scope_read_source(source)
+            if hasattr(self, "_sb_label"):
+                self._sb_label.setText(f"示波采集源：{self._scope_read_source_label()}")
+            self._refresh_hero()
+            return
+        self._refresh_debug_scope_acquisition_status()
+        if hasattr(self, "_sb_label"):
+            self._sb_label.setText("该示波采集源仍在计划中，尚未接入真实执行器。")
 
     def _on_debug_source_provider_selected(self, provider_key: str):
         provider_key = str(provider_key or "auto")
@@ -4312,8 +4349,11 @@ class MainWindow(QMainWindow):
         self._idle_read()
 
     def _set_scope_read_source(self, source: str) -> None:
-        source = "keil_watch" if source == "keil_watch" else "swd"
-        if source == getattr(self, "_scope_read_source", "swd"):
+        source = normalize_acquisition_source_key(source)
+        if source == getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD):
+            self._refresh_debug_scope_acquisition_status()
+            if hasattr(self, "_tab_debug_workbench"):
+                self._refresh_debug_workbench_diagnostics()
             return
         if self._collector.is_running:
             self._on_stop()
@@ -4323,14 +4363,16 @@ class MainWindow(QMainWindow):
         self._monitor_list = []
         self._sync_value_table_placeholders()
         self._refresh_debug_scope_acquisition_status()
+        if hasattr(self, "_tab_debug_workbench"):
+            self._refresh_debug_workbench_diagnostics()
 
     def _scope_registry(self) -> dict[str, tuple[int, TypeInfo]]:
-        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+        if getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD) == SCOPE_SOURCE_KEIL_WATCH:
             return self._keil_watch_registry
         return self._registry
 
     def _active_scope_backend(self, *, connect: bool = False):
-        if getattr(self, "_scope_read_source", "swd") != "keil_watch":
+        if getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD) != SCOPE_SOURCE_KEIL_WATCH:
             return self._backend
         backend = self._keil_watch_backend
         if backend is None:
@@ -4350,13 +4392,14 @@ class MainWindow(QMainWindow):
         return backend
 
     def _scope_backend_connected(self) -> bool:
-        if getattr(self, "_scope_read_source", "swd") == "keil_watch":
+        if getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD) == SCOPE_SOURCE_KEIL_WATCH:
             backend = self._keil_watch_backend
             return bool(backend and backend.is_connected)
         return bool(self._backend.is_connected)
 
     def _scope_read_source_label(self) -> str:
-        return "Keil Watch" if getattr(self, "_scope_read_source", "swd") == "keil_watch" else "SWD"
+        descriptor = active_acquisition_source(getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD))
+        return descriptor.short_label
 
     def _keil_build_diagnostics(self) -> tuple[tuple[str, str], ...]:
         result = getattr(self, "_debug_keil_build_result", None)
@@ -4577,6 +4620,7 @@ class MainWindow(QMainWindow):
             + self._keil_auto_debug_diagnostics()
             + self._keil_breakpoint_sync_diagnostics()
             + self._keil_run_to_cursor_diagnostics()
+            + self._acquisition_source_diagnostics()
             + self._debug_pc_evidence_diagnostics()
             + self._keil_live_write_diagnostics()
         )
@@ -4588,6 +4632,15 @@ class MainWindow(QMainWindow):
             ("可执行命令", ", ".join(executable) if executable else "无"),
         )
         return rows
+
+    def _acquisition_source_diagnostics(self) -> tuple[tuple[str, str], ...]:
+        descriptor = active_acquisition_source(
+            getattr(self, "_scope_read_source", SCOPE_SOURCE_SWD),
+            keil_watch_ready=True,
+            serial_ready=hasattr(self, "_tab_serial"),
+            include_planned=True,
+        )
+        return descriptor.diagnostic_rows()
 
     def _debug_pc_evidence_diagnostics(self) -> tuple[tuple[str, str], ...]:
         record = getattr(self, "_debug_backend_snapshot_record", None)

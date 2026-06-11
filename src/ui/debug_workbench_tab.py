@@ -319,6 +319,7 @@ class DebugWorkbenchTab(QWidget):
     sourceProviderSelectionChanged = Signal(str)
     sourceProviderConfigureRequested = Signal(str)
     sourceRemapRequested = Signal()
+    scopeAcquisitionSelectionChanged = Signal(str)
     variablePresetWriteRequested = Signal(str, str)
     variablePresetWatchRequested = Signal(str, str, str)
     profileSaveRequested = Signal()
@@ -353,6 +354,8 @@ class DebugWorkbenchTab(QWidget):
         self._source_provider_options: tuple[tuple[str, str, str], ...] = ()
         self._source_provider_selection_syncing = False
         self._scope_acquisition_status = ("SWD", "LoopMaster 原轻侵入式 SWD 采集源")
+        self._scope_acquisition_options: tuple[tuple[str, str, str, bool], ...] = ()
+        self._scope_acquisition_selection_syncing = False
         self._variable_presets: tuple[tuple[str, str, str, str, str, bool], ...] = ()
 
         self.setObjectName("debugWorkbenchTab")
@@ -590,6 +593,35 @@ class DebugWorkbenchTab(QWidget):
     def set_scope_acquisition_status(self, label: str, detail: str = "") -> None:
         self._scope_acquisition_status = (str(label or "--"), str(detail or ""))
         self._refresh_mode_boundary_strip()
+
+    def set_scope_acquisition_options(
+        self,
+        options: tuple[tuple[str, str, str, bool], ...] | list[tuple[str, str, str, bool]],
+        selected: str,
+    ) -> None:
+        self._scope_acquisition_options = tuple(
+            (str(key), str(label), str(note), bool(enabled))
+            for key, label, note, enabled in options
+        )
+        if not hasattr(self, "scope_source_combo"):
+            return
+        self._scope_acquisition_selection_syncing = True
+        try:
+            self.scope_source_combo.clear()
+            selected_index = 0
+            for index, (key, label, note, enabled) in enumerate(self._scope_acquisition_options):
+                self.scope_source_combo.addItem(label, key)
+                self.scope_source_combo.setItemData(index, note, Qt.ToolTipRole)
+                model = self.scope_source_combo.model()
+                item = model.item(index) if hasattr(model, "item") else None
+                if item is not None:
+                    item.setEnabled(enabled)
+                if key == selected:
+                    selected_index = index
+            if self.scope_source_combo.count():
+                self.scope_source_combo.setCurrentIndex(selected_index)
+        finally:
+            self._scope_acquisition_selection_syncing = False
 
     def set_command_transactions(
         self,
@@ -991,6 +1023,13 @@ class DebugWorkbenchTab(QWidget):
         key = self.source_provider_combo.currentData() if hasattr(self, "source_provider_combo") else ""
         self.sourceProviderConfigureRequested.emit(str(key or "auto"))
 
+    def _on_scope_acquisition_combo_changed(self) -> None:
+        if self._scope_acquisition_selection_syncing:
+            return
+        key = self.scope_source_combo.currentData()
+        if key:
+            self.scopeAcquisitionSelectionChanged.emit(str(key))
+
     def _build_source_manifest_strip(self) -> QFrame:
         strip = QFrame()
         strip.setObjectName("debugSourceStrip")
@@ -1027,6 +1066,12 @@ class DebugWorkbenchTab(QWidget):
         self.boundary_scope_label = QLabel("示波 SWD")
         self.boundary_scope_label.setObjectName("debugBoundaryChip")
         row.addWidget(self.boundary_scope_label)
+        self.scope_source_combo = PclComboBox()
+        self.scope_source_combo.setObjectName("debugBoundaryCombo")
+        self.scope_source_combo.setToolTip("选择示波采集来源")
+        self.scope_source_combo.currentIndexChanged.connect(self._on_scope_acquisition_combo_changed)
+        polish_combo_popup(self.scope_source_combo)
+        row.addWidget(self.scope_source_combo)
         return strip
 
     def _build_breakpoint_quick_editor(self) -> QFrame:
@@ -1784,6 +1829,8 @@ class DebugWorkbenchTab(QWidget):
             f"源码来源：{source_text}\n文件：{manifest.source_count if manifest is not None else 0}"
         )
         self.boundary_scope_label.setToolTip(f"示波采集源：{scope_label}\n{scope_detail or '等待采集配置'}")
+        if hasattr(self, "scope_source_combo"):
+            self.scope_source_combo.setToolTip(f"当前示波采集源：{scope_label}\n{scope_detail or '等待采集配置'}")
         self._repolish(self.boundary_backend_label, self.boundary_source_label, self.boundary_scope_label)
 
     @staticmethod
@@ -2290,6 +2337,25 @@ class DebugWorkbenchTab(QWidget):
                 background: #ffffff;
                 border: 1px solid #dce6f0;
                 border-radius: 5px;
+            }
+            QComboBox#debugBoundaryCombo {
+                min-height: 26px;
+                padding-left: 8px;
+                padding-right: 24px;
+                border-radius: 5px;
+                border: 1px solid #d2deea;
+                background: #ffffff;
+                color: #334155;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QComboBox#debugBoundaryCombo:hover {
+                border-color: #9bb6d6;
+                background: #f8fbff;
+            }
+            QComboBox#debugBoundaryCombo:focus {
+                border-color: #6f95c6;
+                background: #ffffff;
             }
             QFrame#debugBreakpointEditor {
                 background: #f8fbff;

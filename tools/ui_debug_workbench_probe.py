@@ -586,6 +586,11 @@ def run(output_dir: Path, width: int, height: int) -> int:
         window._probe_warnings = []
         window._show_info = lambda title, message: window._probe_infos.append((title, message))
         window._show_warning = lambda title, message: window._probe_warnings.append((title, message))
+        window._scope_read_source = "swd"
+        window._collector.stop(timeout=0.2)
+        window._collector.set_backend(window._backend)
+        window._refresh_debug_scope_acquisition_status()
+        window._refresh_debug_workbench_diagnostics()
         window.resize(width, height)
         window.show()
         _pump(app, 0.35)
@@ -614,6 +619,16 @@ def run(output_dir: Path, width: int, height: int) -> int:
         boundary_text = " / ".join(boundary_labels)
         if "调试 Keil" not in boundary_text or "源码 Keil 工程" not in boundary_text or "示波" not in boundary_text:
             issues.append(f"mode boundary strip mismatch: {boundary_text!r}")
+        scope_source_labels = [
+            tab.scope_source_combo.itemText(index)
+            for index in range(tab.scope_source_combo.count())
+        ] if hasattr(tab, "scope_source_combo") else []
+        for label in ("SWD 内存", "Keil Watch", "串口波形", "OpenOCD/GDB", "pyOCD", "TI MSPM0G3507"):
+            if not any(label in item for item in scope_source_labels):
+                issues.append(f"scope source selector missing {label}: {scope_source_labels!r}")
+        scope_source_key = tab.scope_source_combo.currentData() if hasattr(tab, "scope_source_combo") else ""
+        if scope_source_key != "swd":
+            issues.append(f"scope source selector should default to SWD: {scope_source_key!r}")
         preset_rows = [
             tab.variable_preset_table.item(row, 0).text()
             for row in range(tab.variable_preset_table.rowCount())
@@ -657,6 +672,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"OpenOCD source diagnostics missing source rows: {diag!r}")
                 if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
                     issues.append(f"OpenOCD placeholder diagnostics mismatch: {diag!r}")
+                if diag.get("示波采集源") != "SWD 内存" or "非/轻侵入式" not in diag.get("采集侵入性", ""):
+                    issues.append(f"scope acquisition diagnostics mismatch: {diag!r}")
                 compile_index = tab.source_provider_combo.findData("compile_commands")
                 if compile_index < 0:
                     issues.append("source provider selector missing compile_commands data")
