@@ -696,49 +696,51 @@ class DebugWorkbenchTab(QWidget):
         self.search_next_button.setToolTip("跳到下一处搜索结果")
         self.search_next_button.clicked.connect(lambda: self._navigate_search(1))
         search_box.addWidget(self.search_next_button)
-        layout.addLayout(search_box, 0, 4)
 
         self.summary_label = QLabel("未打开工程")
         self.summary_label.setObjectName("debugSummary")
-        layout.addWidget(self.summary_label, 1, 0, 1, 2)
+        layout.addWidget(self.summary_label, 1, 0, 1, 3)
+        layout.addLayout(search_box, 1, 3, 1, 2)
 
         actions = self._build_action_bar()
-        layout.addLayout(actions, 1, 2, 1, 3)
-        layout.addWidget(self._build_action_plan_strip(), 2, 0, 1, 5)
+        layout.addLayout(actions, 2, 0, 1, 5)
+        layout.addWidget(self._build_action_plan_strip(), 3, 0, 1, 5)
         layout.setColumnStretch(4, 1)
         return bar
 
     def _build_action_bar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
         self._action_buttons: dict[str, QPushButton] = {}
-        for key, title in (
-            ("discover", "发现后端"),
-            ("build_project", "构建"),
-            ("launch_uvsock", "启动"),
-            ("auto_debug", "调试"),
-            ("attach", "连接"),
-            ("disconnect", "断开"),
-            ("halt", "暂停"),
-            ("run", "运行"),
-            ("reset", "复位"),
-            ("step", "单步"),
-            ("step_over", "跨过"),
-            ("run_to_cursor", "到光标"),
-            ("sync_breakpoints", "断点"),
-            ("write_variables", "写入"),
-        ):
-            button = QPushButton(title)
-            button.setObjectName("debugActionButton")
-            button.setCursor(Qt.PointingHandCursor)
-            button.setMinimumWidth(46)
-            button.setEnabled(False)
-            button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
-            self._action_buttons[key] = button
-            layout.addWidget(button)
+        groups = (
+            (("discover", "发现"), ("build_project", "构建"), ("launch_uvsock", "启动"), ("auto_debug", "调试")),
+            (("attach", "连接"), ("disconnect", "断开")),
+            (("halt", "暂停"), ("run", "运行"), ("reset", "复位"), ("step", "单步"), ("step_over", "跨过"), ("run_to_cursor", "到光标")),
+            (("sync_breakpoints", "断点"), ("write_variables", "写入")),
+        )
+        for group_index, group in enumerate(groups):
+            if group_index:
+                layout.addWidget(self._action_separator())
+            for key, title in group:
+                button = QPushButton(title)
+                button.setObjectName("debugActionButton")
+                button.setCursor(Qt.PointingHandCursor)
+                button.setMinimumWidth(54 if len(title) >= 3 else 46)
+                button.setEnabled(False)
+                button.clicked.connect(lambda _checked=False, action_key=key: self.debugActionRequested.emit(action_key))
+                self._action_buttons[key] = button
+                layout.addWidget(button)
         layout.addStretch(1)
         return layout
+
+    @staticmethod
+    def _action_separator() -> QFrame:
+        separator = QFrame()
+        separator.setObjectName("debugActionSeparator")
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFixedWidth(8)
+        return separator
 
     def _build_action_plan_strip(self) -> QFrame:
         strip = QFrame()
@@ -2287,6 +2289,12 @@ class DebugWorkbenchTab(QWidget):
                 background: #f3f6fa;
                 border-color: #dce6f0;
                 color: #9aa6b4;
+            }
+            QFrame#debugActionSeparator {
+                border: none;
+                border-left: 1px solid #d8e4f1;
+                margin: 5px 3px;
+                background: transparent;
             }
             QPushButton#debugSearchNavButton {
                 min-height: 34px;

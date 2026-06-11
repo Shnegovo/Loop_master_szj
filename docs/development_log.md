@@ -5986,3 +5986,51 @@ debug chain, not only by fake UI and transaction probes.
 - Then split debugger source/mode selection from scope acquisition source so
   original SWD scope, serial waveform, Keil Watch, OpenOCD/pyOCD, and future TI
   MSPM0G3507 can coexist without crowding the right-side panels.
+
+## Milestone 66 - Debug Workbench Toolbar Responsiveness
+
+### Goal
+
+Clean up the Debug Workbench toolbar after adding `到光标`, especially in narrow
+window widths where the action buttons and search box could feel crowded.
+
+### Completed
+
+- Grouped debug action buttons into logical clusters:
+  - discovery/build/launch/debug,
+  - attach/disconnect,
+  - run-control,
+  - breakpoints/write.
+- Added subtle separators between action clusters.
+- Shortened the first action label from `发现后端` to `发现`.
+- Moved the search box and previous/next buttons to the second toolbar row so
+  narrow windows no longer squeeze the query text.
+- Moved action buttons to a full-width toolbar row so they do not overlap the
+  project summary or each other.
+
+### Verified
+
+- `python -m py_compile src\ui\debug_workbench_tab.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-toolbar-responsive --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-toolbar-responsive\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-toolbar-responsive\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-toolbar-responsive\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+
+### Notes
+
+- Visual review of the narrow screenshot confirmed the action row no longer
+  overlaps and the search box keeps readable text.
+- This is UI polish only; no backend behavior changed.
+
+### Next Target
+
+- Continue visual feedback polish in the editor itself: clearer current PC vs
+  run line distinction, breakpoint verification states, and failed/pending
+  validation readability.
+- Then return to the source/acquisition selector boundary before starting the TI
+  MSPM0G3507 adapter notes.
