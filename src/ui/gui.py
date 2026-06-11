@@ -2917,6 +2917,7 @@ class MainWindow(QMainWindow):
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
+            self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
         except Exception as exc:
             message = f"{self._debug_backend_display_name()} 预检失败：{exc}"
             status = make_debug_status(
@@ -2954,6 +2955,7 @@ class MainWindow(QMainWindow):
         self._debug_session_controller.apply_backend_snapshot(snapshot)
         self._tab_debug_workbench.set_debug_status(snapshot.status, controls_ready=True)
         self._tab_debug_workbench.set_pc_evidence(snapshot.pc_location)
+        self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
 
     def _connect_debug_backend_read_only_for_workbench(self):
         if not hasattr(self, "_tab_debug_workbench"):
@@ -2981,6 +2983,7 @@ class MainWindow(QMainWindow):
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
+            self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
         except Exception as exc:
             message = f"{self._debug_backend_display_name()} 只读连接失败：{exc}"
             status = make_debug_status(
@@ -3106,6 +3109,7 @@ class MainWindow(QMainWindow):
             self._debug_session_controller.apply_backend_snapshot(snapshot)
             tab.set_debug_status(status, controls_ready=True)
             tab.set_pc_evidence(snapshot.pc_location)
+            self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
         else:
             self._debug_backend_diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + self._keil_runtime_control_diagnostics(result)
         self._refresh_debug_workbench_diagnostics()
@@ -3206,6 +3210,7 @@ class MainWindow(QMainWindow):
         snapshot = result.after_cleanup_snapshot or result.after_set_snapshot or result.before_snapshot
         if snapshot is not None:
             self._debug_remote_breakpoint_snapshot = snapshot
+            self._mark_local_breakpoints_from_remote_snapshot(snapshot)
             if isinstance(self._debug_backend_snapshot_record, dict):
                 self._debug_backend_snapshot_record["remote_breakpoint_snapshot"] = snapshot.to_record()
                 self._debug_backend_snapshot_record["remote_breakpoint_snapshot_id"] = snapshot.snapshot_id
@@ -3693,6 +3698,37 @@ class MainWindow(QMainWindow):
                     verified=remote_complete,
                     message="Keil 已接受命令，等待断点列表回读" if not remote_complete else "Keil 已同步",
                 )
+
+    def _mark_local_breakpoints_from_remote_snapshot(self, snapshot) -> None:
+        if snapshot is None or not getattr(snapshot, "complete", False):
+            return
+        if not hasattr(self, "_tab_debug_workbench"):
+            return
+        tab = self._tab_debug_workbench
+        remote_by_key = {
+            self._keil_breakpoint_sync_key(item.path, item.line): item
+            for item in getattr(snapshot, "breakpoints", ()) or ()
+            if getattr(item, "path", None) is not None and getattr(item, "line", 0)
+        }
+        if not remote_by_key:
+            return
+        for breakpoint in tab.local_breakpoints():
+            key = self._keil_breakpoint_sync_key(breakpoint.path, breakpoint.line)
+            remote = remote_by_key.get(key)
+            if remote is None:
+                continue
+            verified = bool(getattr(remote, "verified", True))
+            message = str(getattr(remote, "message", "") or "")
+            if verified:
+                message = message or "Keil 快照已回读该断点"
+            else:
+                message = message or "Keil 快照回读该断点但标记异常"
+            tab.set_breakpoint_verification(
+                breakpoint.line,
+                path=breakpoint.path,
+                verified=verified,
+                message=message,
+            )
 
     @staticmethod
     def _keil_breakpoint_sync_key(path: str | Path | None, line: int) -> tuple[str, int]:
@@ -4555,6 +4591,7 @@ class MainWindow(QMainWindow):
 
     def set_debug_remote_breakpoint_snapshot(self, snapshot):
         self._debug_remote_breakpoint_snapshot = snapshot
+        self._mark_local_breakpoints_from_remote_snapshot(snapshot)
         self._sync_debug_command_preview()
 
     def _focused_debug_transaction(self, transactions):

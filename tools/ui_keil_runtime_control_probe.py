@@ -283,6 +283,8 @@ def main() -> int:
 
         tab = window._tab_debug_workbench
         tab.load_project(project_path)
+        tab.add_breakpoint(5, path=source_path)
+        _assert(not tab.local_breakpoints()[0].verified, "fresh local breakpoint should start unverified")
         initial = make_debug_status(
             state=DebugRuntimeState.RUNNING,
             backend=DebugBackendKind.KEIL,
@@ -314,6 +316,12 @@ def main() -> int:
             _assert(rows.get("PC 证据") == "已回读", f"halt PC evidence mismatch: {rows!r}")
             _assert(rows.get("远端断点证据") == "halt-remote", f"halt remote snapshot mismatch: {rows!r}")
             _assert("PC 已回读" in tab.marker_label.text(), f"halt marker missing PC evidence: {tab.marker_label.text()!r}")
+            verified_breakpoints = tab.local_breakpoints()
+            _assert(verified_breakpoints[0].verified, f"halt snapshot should verify local breakpoint: {verified_breakpoints!r}")
+            _assert(
+                "Keil 快照已回读" in verified_breakpoints[0].message,
+                f"halt breakpoint evidence message mismatch: {verified_breakpoints!r}",
+            )
 
             window._on_debug_workbench_action("run")
             _pump(app, 0.15)

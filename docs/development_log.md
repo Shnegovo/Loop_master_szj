@@ -6359,3 +6359,66 @@ button press, not just the target state:
   - keep breakpoint sync, run-to-cursor, run/halt, and variable write visibly
     connected,
   - then retest live variable write in the same Keil session.
+
+## Milestone 72 - Remote Snapshot Verifies Local Breakpoints
+
+### Goal
+
+When Keil returns a complete remote breakpoint snapshot, local breakpoint markers
+should immediately reflect that evidence. The user should not need to run a
+separate sync action just to see that a breakpoint already exists in Keil.
+
+### Completed
+
+- Added `_mark_local_breakpoints_from_remote_snapshot()`.
+  - Applies only complete remote snapshots.
+  - Marks matching local file/line breakpoints as verified.
+  - Preserves incomplete snapshots as evidence only; it does not mark local
+    breakpoints failed just because Keil returned an incomplete or address-only
+    list.
+- Wired the helper into:
+  - backend discovery snapshots,
+  - read-only attach snapshots,
+  - runtime-control snapshots,
+  - run-to-cursor cleanup snapshots,
+  - direct test/integration snapshot injection.
+- Extended `tools\ui_keil_runtime_control_probe.py` so a local breakpoint starts
+  unverified and becomes verified after the fake runtime snapshot reports the
+  same file/line from Keil.
+
+### Verified
+
+- `python -m py_compile src\ui\gui.py tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_runtime_control_probe.py`
+  - PASS.
+- `python tools\ui_keil_breakpoint_sync_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-remote-breakpoint-verify --width 1440 --height 900`
+  - PASS.
+  - Screenshots:
+    - `tools\ui-debug-workbench-remote-breakpoint-verify\01_debug_workbench_project.png`
+    - `tools\ui-debug-workbench-remote-breakpoint-verify\02_debug_workbench_decorations.png`
+    - `tools\ui-debug-workbench-remote-breakpoint-verify\03_debug_workbench_narrow.png`
+- `python tools\ui_keil_run_to_cursor_probe.py`
+  - PASS.
+- `python tools\debug_backend_adapter_probe.py`
+  - PASS.
+- `python tools\keil_command_transaction_probe.py`
+  - PASS.
+
+### Notes
+
+- The helper intentionally does not treat "missing from snapshot" as failure.
+  That is safer while Keil `BL` can return incomplete or address-only entries.
+- This makes the UI feel more live: remote evidence now updates gutter/breakpoint
+  verification state as soon as it arrives.
+
+### Next Target
+
+- Tighten the first live-debug loop around variable write:
+  - retest strict baseline-read/write/readback on F401,
+  - make the UI surface the latest successful write/read as part of the same
+    live session evidence,
+  - then decide whether the next visible feature should be a compact "live loop"
+    checklist or OpenOCD/pyOCD adapter work.
