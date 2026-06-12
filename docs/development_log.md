@@ -8480,3 +8480,84 @@ and variable writes disabled until their UI contracts are finished.
   - SWD/serial/Keil watch for non/轻侵入示波,
   - Keil/OpenOCD/pyOCD/TI for调试接管模式,
   - each mode shows whether it can read variables, write variables, sync breakpoints, and feed the scope.
+
+## Milestone 103 - OpenOCD/GDB Halt Run Reset Controls
+
+### Changed
+
+- Added OpenOCD/GDB live runtime controls:
+  - `halt_target()`,
+  - `run_target()`,
+  - `reset_target()`.
+- Runtime controls reuse the persistent OpenOCD/GDB live session from Milestone 102.
+- `reset_target()` now safely halts a running target before `monitor reset halt`, because GDB rejects the monitor reset command while the target is running.
+- Switched GDB async setup from deprecated `set target-async on` to `set mi-async on`.
+- OpenOCD/GDB live backend capabilities now expose:
+  - `can_halt=true`,
+  - `can_run=true`,
+  - `can_reset=true`,
+  - `can_sync_breakpoints=true`,
+  - `can_write_variables=false`.
+- Kept `can_step=false` for OpenOCD/GDB because the current capability model still couples `step` and `run_to_cursor`; this avoids enabling a UI action that is not truthful yet.
+- Generalized the Debug Workbench runtime-control UI path:
+  - any backend with `halt_target/run_target/reset_target/...` can use the same buttons,
+  - confirmations and diagnostics now use the selected backend display name instead of hardcoded Keil text.
+- Updated OpenOCD/GDB toolchain metadata:
+  - `halt`, `run`, and `reset` are implemented,
+  - `step`, `step_over`, `run_to_cursor`, and variable access remain planned.
+- Extended `tools\openocd_gdb_backend_probe.py` with `--runtime-controls`.
+
+### Verified
+
+- Compile check:
+  - `src\core\openocd_gdb\readonly.py`
+  - `src\core\openocd_gdb\backend.py`
+  - `src\ui\gui.py`
+  - `tools\openocd_gdb_backend_probe.py`
+  - PASS.
+- `python tools\openocd_gdb_backend_probe.py --json`
+  - PASS dry-run.
+  - Runtime controls stayed disabled while execution gate was closed.
+- `python tools\openocd_gdb_backend_probe.py --execute --sync-breakpoint main.c:62 --runtime-controls --json`
+  - PASS on the connected F401CCU6 + ST-Link.
+  - Connected and read PC evidence.
+  - Added and deleted the `main.c:62` breakpoint with no leak.
+  - `halt` ended with `target_running=false`.
+  - `run` ended with `target_running=true`.
+  - `reset` ended with `target_running=false`.
+  - final `run_after_reset` ended with `target_running=true`.
+- `python tools\openocd_gdb_readonly_probe.py --execute --resume-after-halt --allow-halt --breakpoint main.c:62 --gdb-port 3334 --telnet-port 4445 --tcl-port 6667 --json`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-openocd-runtime-controls --width 1440 --height 900`
+  - PASS.
+- Final process check:
+  - no `openocd.exe` process remains,
+  - no `arm-none-eabi-gdb.exe` process remains,
+  - no `UV4.exe` process remains.
+
+### Notes
+
+- OpenOCD/GDB now has a usable basic debug loop:
+  - attach,
+  - PC evidence,
+  - breakpoint sync,
+  - halt,
+  - run,
+  - reset,
+  - clean shutdown.
+- Step support is intentionally held back until `step` and `run_to_cursor` can be represented separately in the capability model.
+
+### Next Target
+
+- Either:
+  - split `can_step` and `can_run_to_cursor`, then add OpenOCD/GDB `step` and `step_over`;
+  - or move directly to OpenOCD/GDB variable read/write, which is more aligned with the user's current "至少做到改变量" priority.
+- After OpenOCD variable read/write works, map the same generic debugger interface toward pyOCD and TI MSPM0G3507.

@@ -49,6 +49,39 @@ class OpenOcdGdbBackendConfig:
     resume_after_halt: bool = True
 
 
+@dataclass(frozen=True)
+class OpenOcdGdbRuntimeControlResult:
+    action: str
+    attempted: bool
+    succeeded: bool
+    command: str
+    output_lines: tuple[str, ...] = ()
+    snapshot: DebugBackendSessionSnapshot | None = None
+    error: str = ""
+
+    @property
+    def target_running(self) -> bool | None:
+        if self.snapshot is not None:
+            return self.snapshot.target_running
+        return None
+
+    def summary(self) -> str:
+        label = _runtime_action_label(self.action)
+        if self.error:
+            return f"OpenOCD/GDB {label}失败：{self.error}"
+        state = "运行中" if self.target_running is True else "已暂停" if self.target_running is False else "未知"
+        return f"OpenOCD/GDB {label}完成：目标{state}"
+
+    def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("OpenOCD/GDB 运行控制", _runtime_action_label(self.action)),
+            ("OpenOCD/GDB 运行控制结果", "成功" if self.succeeded else "失败"),
+            ("OpenOCD/GDB 运行控制命令", self.command or "--"),
+            ("OpenOCD/GDB 运行控制输出", "\n".join(self.output_lines) if self.output_lines else "--"),
+            ("OpenOCD/GDB 运行控制错误", self.error or "--"),
+        )
+
+
 class OpenOcdGdbBackendAdapter:
     kind = DebugBackendKind.OPENOCD_GDB
     display_name = "OpenOCD / GDB"
@@ -134,6 +167,10 @@ class OpenOcdGdbBackendAdapter:
             capabilities=DebugCapabilities(
                 can_discover=True,
                 can_attach=True,
+                can_disconnect=bool(execute and result.succeeded),
+                can_halt=bool(execute and result.succeeded),
+                can_run=bool(execute and result.succeeded),
+                can_reset=bool(execute and result.succeeded),
                 can_sync_breakpoints=bool(execute and result.succeeded),
             ),
             error="" if result.succeeded or not execute else result.detail,
@@ -223,6 +260,30 @@ class OpenOcdGdbBackendAdapter:
         except Exception as exc:
             return KeilBreakpointSyncResult(request=request, commands=tuple(commands), remote_snapshot=None, error=str(exc))
 
+    def halt_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> OpenOcdGdbRuntimeControlResult:
+        return self._runtime_control("halt", project_path=project_path, target_name=target_name)
+
+    def run_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> OpenOcdGdbRuntimeControlResult:
+        return self._runtime_control("run", project_path=project_path, target_name=target_name)
+
+    def reset_target(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> OpenOcdGdbRuntimeControlResult:
+        return self._runtime_control("reset", project_path=project_path, target_name=target_name)
+
     def disconnect(self, timeout: float | None = None) -> bool:
         session = self._session
         self._session = None
@@ -254,6 +315,57 @@ class OpenOcdGdbBackendAdapter:
         session.start()
         self._session = session
         return session
+
+    def _runtime_control(
+        self,
+        action: str,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> OpenOcdGdbRuntimeControlResult:
+        command = _runtime_command(action)
+        try:
+            session = self._ensure_session(project_path)
+            if action == "halt":
+                succeeded, output_lines = session.halt_target()
+            elif action == "run":
+                succeeded, output_lines = session.run_target()
+            elif action == "reset":
+                succeeded, output_lines = session.reset_target()
+            else:
+                raise ValueError(f"unsupported OpenOCD/GDB runtime action: {action}")
+            snapshot = self.read_only_session_snapshot(
+                project_path=project_path,
+                target_name=target_name,
+                attempt_connection=True,
+                query_status=True,
+            )
+            error = ""
+            if not succeeded:
+                error = _mi_error(output_lines) or f"OpenOCD/GDB 未完成{_runtime_action_label(action)}命令"
+            elif action == "halt" and snapshot.target_running is not False:
+                error = "暂停后状态回读仍不是已暂停"
+            elif action == "run" and snapshot.target_running is not True:
+                error = "运行后状态回读仍不是运行中"
+            elif action == "reset" and snapshot.target_running is not False:
+                error = "复位后状态回读仍不是已暂停"
+            return OpenOcdGdbRuntimeControlResult(
+                action=action,
+                attempted=True,
+                succeeded=bool(succeeded and not error),
+                command=command,
+                output_lines=tuple(output_lines),
+                snapshot=snapshot,
+                error=error,
+            )
+        except Exception as exc:
+            return OpenOcdGdbRuntimeControlResult(
+                action=action,
+                attempted=True,
+                succeeded=False,
+                command=command,
+                error=str(exc),
+            )
 
     @staticmethod
     def _result_from_session(session: OpenOcdGdbLiveSession, *, detail: str) -> OpenOcdGdbReadOnlyResult:
@@ -394,3 +506,19 @@ def _mi_error(lines: tuple[str, ...]) -> str:
     joined = "\n".join(lines)
     match = re.search(r'msg="([^"]+)"', joined)
     return match.group(1).replace("\\n", " ") if match else ""
+
+
+def _runtime_command(action: str) -> str:
+    return {
+        "halt": "-exec-interrupt",
+        "run": "-exec-continue",
+        "reset": '-interpreter-exec console "monitor reset halt"',
+    }.get(str(action or ""), "")
+
+
+def _runtime_action_label(action: str) -> str:
+    return {
+        "halt": "暂停",
+        "run": "运行",
+        "reset": "复位",
+    }.get(str(action or ""), str(action or "--"))

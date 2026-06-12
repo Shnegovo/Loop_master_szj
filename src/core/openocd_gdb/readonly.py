@@ -224,7 +224,7 @@ class OpenOcdGdbLiveSession:
         self.gdb_reader = _ProcessReader(self.gdb, "gdb-live")
         self.gdb_reader.wait_for(lambda line: "(gdb)" in line, min(3.0, self.request.gdb_timeout_s))
         self._send("-gdb-set pagination off")
-        self._send("-gdb-set target-async on")
+        self._send("-gdb-set mi-async on")
         connect = self._send(f"-target-select extended-remote localhost:{self.profile.gdb_port}")
         if not _mi_ok(connect):
             raise RuntimeError(_mi_detail(connect) or "GDB failed to connect to OpenOCD.")
@@ -244,13 +244,55 @@ class OpenOcdGdbLiveSession:
         return self.pc_value
 
     def resume(self) -> bool:
+        succeeded, _ = self.run_target()
+        return succeeded
+
+    def halt_target(self) -> tuple[bool, tuple[str, ...]]:
         self._require_alive()
-        result = self._send("-exec-continue")
-        self.resumed_after_halt = _mi_ok(result) or "*running" in "\n".join(result)
-        if self.resumed_after_halt and self.gdb_reader is not None:
-            self.gdb_reader.wait_for(lambda line: "*running" in line, 1.0)
         self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
-        return self.resumed_after_halt
+        if self.target_state == "stopped":
+            self.read_pc()
+            return True, ()
+        result = self._send("-exec-interrupt")
+        halted = _mi_ok(result) or "*stopped" in "\n".join(result)
+        if self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*stopped" in line, 1.0)
+            self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        self.halted_by_probe = self.halted_by_probe or halted or self.target_state == "stopped"
+        if self.target_state == "stopped":
+            self.read_pc()
+        return self.target_state == "stopped", result
+
+    def run_target(self) -> tuple[bool, tuple[str, ...]]:
+        self._require_alive()
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
+        if self.target_state == "running":
+            return True, ()
+        result = self._send("-exec-continue")
+        running = _mi_ok(result) or "*running" in "\n".join(result)
+        if self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*running" in line, 1.0)
+            self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        self.resumed_after_halt = self.resumed_after_halt or running or self.target_state == "running"
+        return self.target_state == "running", result
+
+    def reset_target(self) -> tuple[bool, tuple[str, ...]]:
+        self._require_alive()
+        output: list[str] = []
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
+        if self.target_state == "running":
+            halted, halt_lines = self.halt_target()
+            output.extend(halt_lines)
+            if not halted:
+                return False, tuple(output)
+        result = self._send('-interpreter-exec console "monitor reset halt"')
+        output.extend(result)
+        if self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*stopped" in line or "reset" in line.lower(), 2.0)
+            self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        if self.target_state == "stopped":
+            self.read_pc()
+        return self.target_state == "stopped", tuple(output)
 
     def _halt_for_pc_readback(self) -> None:
         interrupt = self._send("-exec-interrupt")
@@ -400,7 +442,7 @@ def _execute_readonly_probe(
 
         stage = "gdb_connect"
         _send_mi(gdb, gdb_reader, 1, "-gdb-set pagination off", request.gdb_timeout_s)
-        _send_mi(gdb, gdb_reader, 2, "-gdb-set target-async on", request.gdb_timeout_s)
+        _send_mi(gdb, gdb_reader, 2, "-gdb-set mi-async on", request.gdb_timeout_s)
         connect = _send_mi(
             gdb,
             gdb_reader,

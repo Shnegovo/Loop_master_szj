@@ -3035,9 +3035,6 @@ class MainWindow(QMainWindow):
         self._connect_debug_backend_read_only_for_workbench()
 
     def _control_keil_runtime_from_workbench(self, action_key: str):
-        if self._debug_backend_kind != DebugBackendKind.KEIL:
-            self._show_warning("Keil 运行控制", "当前调试后端不是 Keil / UVSOCK。")
-            return
         method_name = {
             "halt": "halt_target",
             "run": "run_target",
@@ -3045,29 +3042,30 @@ class MainWindow(QMainWindow):
             "step": "step_target",
             "step_over": "step_over_target",
         }.get(action_key, "")
+        backend_name = self._debug_backend_display_name()
         if not hasattr(self._debug_backend, method_name):
-            self._show_warning("Keil 运行控制", "当前 Keil 后端尚未提供运行控制执行器。")
+            self._show_warning("运行控制", f"当前 {backend_name} 后端尚未提供这个运行控制执行器。")
             return
         tab = self._tab_debug_workbench
         status = tab.debug_status
         if action_key == "halt" and status.state != DebugRuntimeState.RUNNING:
-            self._show_warning("Keil 暂停", "目标当前不是运行中状态。")
+            self._show_warning("暂停目标", "目标当前不是运行中状态。")
             return
         if action_key == "run" and status.state != DebugRuntimeState.PAUSED:
-            self._show_warning("Keil 运行", "目标当前不是暂停状态。")
+            self._show_warning("继续运行", "目标当前不是暂停状态。")
             return
         if action_key == "reset" and status.state not in {
             DebugRuntimeState.KEIL_ATTACHED,
             DebugRuntimeState.PAUSED,
             DebugRuntimeState.RUNNING,
         }:
-            self._show_warning("Keil 复位", "目标当前尚未连接调试会话。")
+            self._show_warning("复位目标", "目标当前尚未连接调试会话。")
             return
         if action_key == "step" and status.state != DebugRuntimeState.PAUSED:
-            self._show_warning("Keil 单步", "目标当前不是暂停状态。")
+            self._show_warning("单步", "目标当前不是暂停状态。")
             return
         if action_key == "step_over" and status.state != DebugRuntimeState.PAUSED:
-            self._show_warning("Keil 跨过", "目标当前不是暂停状态。")
+            self._show_warning("跨过", "目标当前不是暂停状态。")
             return
         label = {
             "halt": "暂停",
@@ -3076,15 +3074,21 @@ class MainWindow(QMainWindow):
             "step": "单步",
             "step_over": "跨过",
         }.get(action_key, action_key)
+        context_lines = [
+            f"后端：{backend_name}",
+            f"工程：{status.project_path or '--'}",
+            f"Target：{status.target_name or '--'}",
+        ]
+        if self._debug_backend_kind == DebugBackendKind.KEIL:
+            context_lines.append(f"端口：{self._debug_uvsock_port}")
         message = (
-            f"工程：{status.project_path or '--'}\n"
-            f"Target：{status.target_name or '--'}\n"
-            f"端口：{self._debug_uvsock_port}\n\n"
-            f"这会通过 Keil/UVSOCK 真实{label} MCU，并在执行后读取目标状态。"
+            "\n".join(context_lines)
+            + "\n\n"
+            + f"这会通过 {backend_name} 真实{label} MCU，并在执行后读取目标状态。"
         )
         if not ask_pcl_confirmation(
             self,
-            f"确认 Keil {label}",
+            f"确认 {backend_name} {label}",
             message,
             confirm_text=label,
             cancel_text="取消",
@@ -3095,7 +3099,7 @@ class MainWindow(QMainWindow):
         tab.set_debug_controls_ready(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         if hasattr(self, "_sb_label"):
-            self._sb_label.setText(f"正在通过 Keil {label}目标...")
+            self._sb_label.setText(f"正在通过 {backend_name} {label}目标...")
         try:
             result = getattr(self._debug_backend, method_name)(
                 project_path=status.project_path,
@@ -3112,10 +3116,10 @@ class MainWindow(QMainWindow):
 
         if result is None:
             self._debug_last_runtime_control_result = None
-            diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + ((f"Keil {label}", f"失败：{error}"),)
+            diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + ((f"{backend_name} {label}", f"失败：{error}"),)
             self._debug_backend_diagnostics = diagnostics
             self._refresh_debug_workbench_diagnostics()
-            self._show_warning(f"Keil {label}失败", error)
+            self._show_warning(f"{backend_name} {label}失败", error)
             if hasattr(self, "_sb_label"):
                 self._sb_label.setText(error)
             return
@@ -3125,7 +3129,7 @@ class MainWindow(QMainWindow):
         if snapshot is not None:
             status = snapshot.status
             diagnostics = snapshot.diagnostic_rows()
-            self._debug_backend_diagnostics = tuple(diagnostics) + self._keil_runtime_control_diagnostics(result)
+            self._debug_backend_diagnostics = tuple(diagnostics) + self._runtime_control_diagnostics(result)
             self._debug_remote_breakpoint_snapshot = snapshot.remote_breakpoint_snapshot
             self._debug_backend_snapshot_record = snapshot.to_record()
             self._debug_session_controller.apply_backend_snapshot(snapshot)
@@ -3133,14 +3137,14 @@ class MainWindow(QMainWindow):
             tab.set_pc_evidence(snapshot.pc_location)
             self._mark_local_breakpoints_from_remote_snapshot(snapshot.remote_breakpoint_snapshot)
         else:
-            self._debug_backend_diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + self._keil_runtime_control_diagnostics(result)
+            self._debug_backend_diagnostics = tuple(getattr(self, "_debug_backend_diagnostics", ())) + self._runtime_control_diagnostics(result)
         self._refresh_debug_workbench_diagnostics()
         self._sync_debug_command_preview()
         summary = result.summary()
         if getattr(result, "succeeded", False):
-            self._show_info(f"Keil {label}完成", summary)
+            self._show_info(f"{backend_name} {label}完成", summary)
         else:
-            self._show_warning(f"Keil {label}失败", summary)
+            self._show_warning(f"{backend_name} {label}失败", summary)
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(summary)
         self._refresh_hero()
@@ -4694,7 +4698,7 @@ class MainWindow(QMainWindow):
         return result.diagnostic_rows()
 
     @staticmethod
-    def _keil_runtime_control_diagnostics(result) -> tuple[tuple[str, str], ...]:
+    def _runtime_control_diagnostics(result) -> tuple[tuple[str, str], ...]:
         if result is None:
             return ()
         uvsc = getattr(result, "uvsc", None)

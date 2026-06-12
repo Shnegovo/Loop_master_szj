@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="Actually launch OpenOCD/GDB through the backend adapter.")
     parser.add_argument("--sync-breakpoint", default="", help="Optional source breakpoint to add/read/delete, e.g. main.c:62.")
+    parser.add_argument("--runtime-controls", action="store_true", help="Exercise halt/run/reset through the live backend.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -50,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sync_add = None
     sync_cleanup = None
+    runtime_controls: list[dict[str, object]] = []
     try:
         snapshot = adapter.read_only_session_snapshot(
             project_path=DEFAULT_PROJECT,
@@ -62,7 +64,6 @@ def main(argv: list[str] | None = None) -> int:
         _assert(snapshot.read_only, "snapshot must remain read-only")
         _assert(snapshot.connection_attempted, "snapshot should record attempted attach")
         _assert(not snapshot.status.capabilities.can_write_variables, f"OpenOCD backend must not write variables: {snapshot.status!r}")
-        _assert(not snapshot.status.capabilities.can_halt, f"OpenOCD backend must not expose halt yet: {snapshot.status!r}")
         _assert(rows.get("后端") == "OpenOCD / GDB", f"backend diagnostic mismatch: {rows!r}")
         _assert(rows.get("本机档案") == "OpenOCD/GDB 只读发现", f"profile diagnostic mismatch: {rows!r}")
 
@@ -70,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
             _assert(snapshot.connection_established, f"live backend attach failed: {rows!r}")
             _assert(snapshot.status.state in {DebugRuntimeState.RUNNING, DebugRuntimeState.PAUSED}, f"live state mismatch: {snapshot.status!r}")
             _assert(snapshot.pc_location is not None and snapshot.pc_location.complete, f"PC evidence missing: {snapshot.pc_location!r}")
+            _assert(snapshot.status.capabilities.can_halt, f"live backend should expose halt: {snapshot.status!r}")
+            _assert(snapshot.status.capabilities.can_run, f"live backend should expose run: {snapshot.status!r}")
+            _assert(snapshot.status.capabilities.can_reset, f"live backend should expose reset: {snapshot.status!r}")
+            _assert(not snapshot.status.capabilities.can_step, f"OpenOCD step stays disabled until run-to-cursor is split: {snapshot.status!r}")
             _assert(snapshot.status.capabilities.can_sync_breakpoints, f"live backend should expose breakpoint sync: {snapshot.status!r}")
             _assert(rows.get("OpenOCD/GDB 恢复") == "是", f"live backend should restore target: {rows!r}")
             if args.sync_breakpoint:
@@ -105,9 +110,30 @@ def main(argv: list[str] | None = None) -> int:
                     sync_cleanup.remote_snapshot is not None and not sync_cleanup.remote_snapshot.breakpoints,
                     f"OpenOCD breakpoint cleanup leaked: {sync_cleanup.to_record()!r}",
                 )
+            if args.runtime_controls:
+                for action, method, expected_running in (
+                    ("halt", adapter.halt_target, False),
+                    ("run", adapter.run_target, True),
+                    ("reset", adapter.reset_target, False),
+                    ("run_after_reset", adapter.run_target, True),
+                ):
+                    result = method(project_path=DEFAULT_PROJECT, target_name="STM32F401CCU6 Variable Probe")
+                    record = {
+                        "action": action,
+                        "succeeded": result.succeeded,
+                        "target_running": result.target_running,
+                        "summary": result.summary(),
+                        "diagnostics": [{"key": key, "value": value} for key, value in result.diagnostic_rows()],
+                    }
+                    runtime_controls.append(record)
+                    _assert(result.succeeded, f"OpenOCD runtime {action} failed: {record!r}")
+                    _assert(result.target_running is expected_running, f"OpenOCD runtime {action} state mismatch: {record!r}")
         else:
             _assert(not snapshot.connection_established, "dry-run backend must not connect")
             _assert(snapshot.status.state == DebugRuntimeState.DISCONNECTED, f"dry-run state mismatch: {snapshot.status!r}")
+            _assert(not snapshot.status.capabilities.can_halt, f"dry-run backend must not expose halt: {snapshot.status!r}")
+            _assert(not snapshot.status.capabilities.can_run, f"dry-run backend must not expose run: {snapshot.status!r}")
+            _assert(not snapshot.status.capabilities.can_reset, f"dry-run backend must not expose reset: {snapshot.status!r}")
             _assert(rows.get("OpenOCD/GDB 执行") == "dry-run", f"dry-run diagnostic mismatch: {rows!r}")
     finally:
         adapter.disconnect()
@@ -117,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         "snapshot": snapshot.to_record(),
         "sync_add": sync_add.to_record() if sync_add is not None else None,
         "sync_cleanup": sync_cleanup.to_record() if sync_cleanup is not None else None,
+        "runtime_controls": runtime_controls,
     }
     if args.json:
         print(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True, default=str))
