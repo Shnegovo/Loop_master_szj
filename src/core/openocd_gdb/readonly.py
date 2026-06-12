@@ -1,0 +1,430 @@
+"""OpenOCD/GDB live read-only smoke executor.
+
+The executor is intentionally narrow: it may start OpenOCD and GDB only when
+`execute=True`, and it never writes memory or flashes the target. Runtime halt
+is also opt-in because even a read-only debugger attach can disturb a running
+control loop.
+"""
+
+from __future__ import annotations
+
+import queue
+import re
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from src.core.openocd_gdb.profile import OpenOcdGdbProfile, default_openocd_gdb_profile
+
+
+DEFAULT_AXF = Path("D:/LoopMaster_v2.1/firmware/keil_f401_variable_probe/Objects/f401_variable_probe.axf")
+
+
+@dataclass(frozen=True)
+class OpenOcdGdbReadOnlyRequest:
+    openocd_root: Path | None = None
+    gdb_path: Path | None = None
+    axf_path: Path | None = DEFAULT_AXF
+    gdb_port: int = 3333
+    telnet_port: int = 4444
+    tcl_port: int = 6666
+    execute: bool = False
+    allow_halt: bool = False
+    resume_after_halt: bool = False
+    connect_timeout_s: float = 10.0
+    gdb_timeout_s: float = 8.0
+
+
+@dataclass(frozen=True)
+class OpenOcdGdbReadOnlyResult:
+    attempted: bool
+    succeeded: bool
+    stage: str
+    detail: str
+    profile: OpenOcdGdbProfile
+    openocd_command: tuple[str, ...]
+    gdb_command: tuple[str, ...]
+    openocd_lines: tuple[str, ...] = ()
+    gdb_lines: tuple[str, ...] = ()
+    target_state: str = "unknown"
+    pc_value: str = ""
+    halted_by_probe: bool = False
+    resumed_after_halt: bool = False
+
+    def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
+        rows = [
+            ("OpenOCD/GDB 执行", "已执行" if self.attempted else "dry-run"),
+            ("OpenOCD/GDB 结果", "通过" if self.succeeded else "未通过"),
+            ("OpenOCD/GDB 阶段", self.stage or "--"),
+            ("OpenOCD/GDB 说明", self.detail or "--"),
+            ("OpenOCD/GDB 目标状态", self.target_state or "--"),
+            ("OpenOCD/GDB PC", self.pc_value or "--"),
+            ("OpenOCD/GDB 暂停", "是" if self.halted_by_probe else "否"),
+            ("OpenOCD/GDB 恢复", "是" if self.resumed_after_halt else "否"),
+        ]
+        return tuple(rows) + self.profile.diagnostic_rows()
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "attempted": self.attempted,
+            "succeeded": self.succeeded,
+            "stage": self.stage,
+            "detail": self.detail,
+            "target_state": self.target_state,
+            "pc_value": self.pc_value,
+            "halted_by_probe": self.halted_by_probe,
+            "resumed_after_halt": self.resumed_after_halt,
+            "openocd_command": list(self.openocd_command),
+            "gdb_command": list(self.gdb_command),
+            "openocd_lines": list(self.openocd_lines),
+            "gdb_lines": list(self.gdb_lines),
+            "profile": self.profile.to_summary_record(),
+            "diagnostics": [{"key": key, "value": value} for key, value in self.diagnostic_rows()],
+        }
+
+
+def run_openocd_gdb_readonly_probe(request: OpenOcdGdbReadOnlyRequest) -> OpenOcdGdbReadOnlyResult:
+    profile = default_openocd_gdb_profile(
+        request.openocd_root,
+        gdb_path=request.gdb_path,
+        gdb_port=request.gdb_port,
+        telnet_port=request.telnet_port,
+        tcl_port=request.tcl_port,
+    )
+    openocd_command = _openocd_command(profile)
+    gdb_command = _gdb_command(profile, request.axf_path)
+    if not request.execute:
+        return OpenOcdGdbReadOnlyResult(
+            attempted=False,
+            succeeded=profile.ready_for_preview,
+            stage="dry_run",
+            detail="dry-run only; pass --execute to start OpenOCD and GDB/MI.",
+            profile=profile,
+            openocd_command=openocd_command,
+            gdb_command=gdb_command,
+        )
+    if not profile.ready_for_preview:
+        return OpenOcdGdbReadOnlyResult(
+            attempted=True,
+            succeeded=False,
+            stage="profile",
+            detail="OpenOCD/GDB profile is incomplete.",
+            profile=profile,
+            openocd_command=openocd_command,
+            gdb_command=gdb_command,
+        )
+    return _execute_readonly_probe(request, profile, openocd_command, gdb_command)
+
+
+def _execute_readonly_probe(
+    request: OpenOcdGdbReadOnlyRequest,
+    profile: OpenOcdGdbProfile,
+    openocd_command: tuple[str, ...],
+    gdb_command: tuple[str, ...],
+) -> OpenOcdGdbReadOnlyResult:
+    openocd: subprocess.Popen[str] | None = None
+    gdb: subprocess.Popen[str] | None = None
+    openocd_reader: _ProcessReader | None = None
+    gdb_reader: _ProcessReader | None = None
+    target_state = "unknown"
+    pc_value = ""
+    halted_by_probe = False
+    resumed_after_halt = False
+    stage = "start_openocd"
+    detail = ""
+    succeeded = False
+    try:
+        openocd = subprocess.Popen(
+            list(openocd_command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_creation_flags(),
+        )
+        openocd_reader = _ProcessReader(openocd, "openocd")
+        if not openocd_reader.wait_for(
+            lambda line: _openocd_ready(line, profile.gdb_port) or _openocd_failed(line),
+            request.connect_timeout_s,
+        ):
+            detail = "OpenOCD did not report a GDB listener before timeout."
+            return _result(request, profile, openocd_command, gdb_command, openocd_reader, gdb_reader, stage, detail, False)
+        if any(_openocd_failed(line) for line in openocd_reader.lines):
+            detail = _last_matching(openocd_reader.lines, _openocd_failed) or "OpenOCD failed during startup."
+            return _result(request, profile, openocd_command, gdb_command, openocd_reader, gdb_reader, stage, detail, False)
+
+        stage = "start_gdb"
+        gdb = subprocess.Popen(
+            list(gdb_command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_creation_flags(),
+        )
+        gdb_reader = _ProcessReader(gdb, "gdb")
+        gdb_reader.wait_for(lambda line: "(gdb)" in line, min(3.0, request.gdb_timeout_s))
+
+        stage = "gdb_connect"
+        _send_mi(gdb, gdb_reader, 1, "-gdb-set pagination off", request.gdb_timeout_s)
+        connect = _send_mi(
+            gdb,
+            gdb_reader,
+            2,
+            f"-target-select extended-remote localhost:{profile.gdb_port}",
+            request.gdb_timeout_s,
+        )
+        if not _mi_ok(connect):
+            detail = _mi_detail(connect) or "GDB failed to connect to OpenOCD."
+            return _result(request, profile, openocd_command, gdb_command, openocd_reader, gdb_reader, stage, detail, False)
+        target_state = _target_state_from_lines(gdb_reader.lines)
+
+        stage = "read_pc"
+        pc_result = _send_mi(gdb, gdb_reader, 3, "-data-evaluate-expression $pc", request.gdb_timeout_s)
+        pc_value = _parse_pc_value(pc_result)
+        halted_by_probe = halted_by_probe or _connection_halt_observed(openocd_reader.lines, gdb_reader.lines)
+        if not pc_value and request.allow_halt:
+            stage = "halt_for_pc"
+            interrupt = _send_mi(gdb, gdb_reader, 4, "-exec-interrupt", request.gdb_timeout_s)
+            halted_by_probe = _mi_ok(interrupt) or "*stopped" in "\n".join(interrupt)
+            target_state = _target_state_from_lines(gdb_reader.lines)
+            pc_result = _send_mi(gdb, gdb_reader, 5, "-data-evaluate-expression $pc", request.gdb_timeout_s)
+            pc_value = _parse_pc_value(pc_result)
+        if halted_by_probe and request.resume_after_halt and target_state == "stopped":
+            stage = "resume_after_halt"
+            resume = _send_mi(gdb, gdb_reader, 6, "-exec-continue", request.gdb_timeout_s)
+            resumed_after_halt = _mi_ok(resume) or "*running" in "\n".join(resume)
+            target_state = _target_state_from_lines(gdb_reader.lines)
+        if pc_value:
+            succeeded = True
+            detail = "Connected through OpenOCD/GDB and read $pc."
+        else:
+            succeeded = _mi_ok(connect)
+            detail = _mi_detail(pc_result) or "Connected through OpenOCD/GDB, but PC was not readable without additional target control."
+        return _result(
+            request,
+            profile,
+            openocd_command,
+            gdb_command,
+            openocd_reader,
+            gdb_reader,
+            stage,
+            detail,
+            succeeded,
+            target_state=target_state,
+            pc_value=pc_value,
+            halted_by_probe=halted_by_probe,
+            resumed_after_halt=resumed_after_halt,
+        )
+    finally:
+        _gdb_exit(gdb, gdb_reader)
+        _terminate(gdb)
+        _terminate(openocd)
+        if gdb_reader is not None:
+            gdb_reader.join(1.0)
+        if openocd_reader is not None:
+            openocd_reader.join(1.0)
+
+
+def _result(
+    request: OpenOcdGdbReadOnlyRequest,
+    profile: OpenOcdGdbProfile,
+    openocd_command: tuple[str, ...],
+    gdb_command: tuple[str, ...],
+    openocd_reader: "_ProcessReader | None",
+    gdb_reader: "_ProcessReader | None",
+    stage: str,
+    detail: str,
+    succeeded: bool,
+    *,
+    target_state: str = "unknown",
+    pc_value: str = "",
+    halted_by_probe: bool = False,
+    resumed_after_halt: bool = False,
+) -> OpenOcdGdbReadOnlyResult:
+    return OpenOcdGdbReadOnlyResult(
+        attempted=bool(request.execute),
+        succeeded=bool(succeeded),
+        stage=stage,
+        detail=detail,
+        profile=profile,
+        openocd_command=openocd_command,
+        gdb_command=gdb_command,
+        openocd_lines=tuple(openocd_reader.lines if openocd_reader is not None else ()),
+        gdb_lines=tuple(gdb_reader.lines if gdb_reader is not None else ()),
+        target_state=target_state,
+        pc_value=pc_value,
+        halted_by_probe=halted_by_probe,
+        resumed_after_halt=resumed_after_halt,
+    )
+
+
+class _ProcessReader:
+    def __init__(self, process: subprocess.Popen[str], label: str) -> None:
+        self.process = process
+        self.label = label
+        self.lines: list[str] = []
+        self._queue: queue.Queue[str] = queue.Queue()
+        self._thread = threading.Thread(target=self._run, name=f"{label}-reader", daemon=True)
+        self._thread.start()
+
+    def wait_for(self, predicate: Callable[[str], bool], timeout_s: float) -> bool:
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+        while time.monotonic() < deadline:
+            while True:
+                try:
+                    line = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if predicate(line):
+                    return True
+            if self.process.poll() is not None:
+                return any(predicate(line) for line in self.lines)
+            time.sleep(0.02)
+        return any(predicate(line) for line in self.lines)
+
+    def collect_until(self, predicate: Callable[[str], bool], timeout_s: float) -> tuple[str, ...]:
+        start = len(self.lines)
+        self.wait_for(predicate, timeout_s)
+        return tuple(self.lines[start:])
+
+    def join(self, timeout_s: float) -> None:
+        self._thread.join(timeout=max(0.0, float(timeout_s)))
+
+    def _run(self) -> None:
+        stream = self.process.stdout
+        if stream is None:
+            return
+        for line in stream:
+            text = line.rstrip()
+            self.lines.append(text)
+            self._queue.put(text)
+
+
+def _send_mi(
+    gdb: subprocess.Popen[str],
+    reader: _ProcessReader,
+    token: int,
+    command: str,
+    timeout_s: float,
+) -> tuple[str, ...]:
+    if gdb.stdin is None:
+        return ()
+    gdb.stdin.write(f"{token}{command}\n")
+    gdb.stdin.flush()
+    prefix = str(token)
+    return reader.collect_until(lambda line: line.startswith(prefix + "^"), timeout_s)
+
+
+def _openocd_command(profile: OpenOcdGdbProfile) -> tuple[str, ...]:
+    command = [str(profile.openocd_path or "openocd")]
+    if profile.scripts_dir is not None:
+        command.extend(("-s", str(profile.scripts_dir)))
+    command.extend(
+        (
+            "-f",
+            profile.interface_name,
+            "-f",
+            profile.target_name,
+            "-c",
+            f"gdb_port {profile.gdb_port}",
+            "-c",
+            f"telnet_port {profile.telnet_port}",
+            "-c",
+            f"tcl_port {profile.tcl_port}",
+        )
+    )
+    return tuple(command)
+
+
+def _gdb_command(profile: OpenOcdGdbProfile, axf_path: Path | None) -> tuple[str, ...]:
+    command = [str(profile.gdb_path or "arm-none-eabi-gdb"), "--interpreter=mi2", "-q"]
+    if axf_path is not None and Path(axf_path).exists():
+        command.append(str(Path(axf_path).expanduser().resolve()))
+    return tuple(command)
+
+
+def _openocd_ready(line: str, gdb_port: int) -> bool:
+    text = line.lower()
+    return "listening on port" in text and str(int(gdb_port)) in text and "gdb" in text
+
+
+def _openocd_failed(line: str) -> bool:
+    text = line.lower()
+    return "error:" in text or "failed" in text or "unable to open" in text
+
+
+def _last_matching(lines: list[str], predicate: Callable[[str], bool]) -> str:
+    for line in reversed(lines):
+        if predicate(line):
+            return line
+    return ""
+
+
+def _mi_ok(lines: tuple[str, ...]) -> bool:
+    return any("^done" in line or "^connected" in line or "^running" in line for line in lines)
+
+
+def _mi_detail(lines: tuple[str, ...]) -> str:
+    joined = "\n".join(lines)
+    match = re.search(r'msg="([^"]+)"', joined)
+    if match:
+        return match.group(1).replace("\\n", " ")
+    for line in reversed(lines):
+        if line:
+            return line
+    return ""
+
+
+def _parse_pc_value(lines: tuple[str, ...]) -> str:
+    joined = "\n".join(lines)
+    match = re.search(r'value="([^"]+)"', joined)
+    return match.group(1) if match else ""
+
+
+def _target_state_from_lines(lines: list[str]) -> str:
+    for line in reversed(lines):
+        if "*stopped" in line:
+            return "stopped"
+        if "*running" in line:
+            return "running"
+    return "unknown"
+
+
+def _connection_halt_observed(openocd_lines: list[str], gdb_lines: list[str]) -> bool:
+    openocd_text = "\n".join(openocd_lines).lower()
+    gdb_text = "\n".join(gdb_lines)
+    return "halted due to debug-request" in openocd_text or "*stopped" in gdb_text
+
+
+def _gdb_exit(gdb: subprocess.Popen[str] | None, reader: _ProcessReader | None) -> None:
+    if gdb is None or gdb.poll() is not None or gdb.stdin is None or reader is None:
+        return
+    try:
+        _send_mi(gdb, reader, 90, "-gdb-exit", 1.5)
+    except Exception:
+        pass
+
+
+def _terminate(process: subprocess.Popen[str] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2.0)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _creation_flags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)

@@ -8125,3 +8125,95 @@ being taken yet.
   - read target state and PC,
   - insert/remove one source-line breakpoint,
   - keep variable writes disabled until read-only controls are proven.
+
+## Milestone 99 - OpenOCD/GDB Live Read-Only PC Smoke
+
+### Goal
+
+Prove that the non-Keil debugger path can perform a real hardware session on
+the connected F401/ST-Link without flashing firmware or writing variables. This
+stage focuses on process launch, GDB/MI attach, target state evidence, PC
+readback, and clean shutdown.
+
+### Completed
+
+- Added `src\core\openocd_gdb\readonly.py`.
+- Added `tools\openocd_gdb_readonly_probe.py`.
+- Exported the read-only executor through `src\core\openocd_gdb\__init__.py`.
+- The executor now supports:
+  - dry-run planning by default,
+  - explicit `--execute` live launch,
+  - OpenOCD process startup,
+  - GDB/MI process startup,
+  - `target extended-remote` attach,
+  - `$pc` readback,
+  - detection that GDB/OpenOCD attach can halt the target,
+  - optional `--resume-after-halt` restoration,
+  - process cleanup for GDB and OpenOCD.
+- Updated OpenOCD/GDB toolchain metadata so it no longer reads as purely empty:
+  - `profile_discovery`,
+  - `dry_run_command_preview`,
+  - `live_readonly_smoke_pc`.
+- Kept the application backend itself marked as placeholder until the verified
+  executor is wired into Debug Workbench actions.
+
+### Verified
+
+- In-memory compile check for:
+  - `src\core\openocd_gdb\__init__.py`,
+  - `src\core\openocd_gdb\readonly.py`,
+  - `src\core\debug_toolchains.py`,
+  - `tools\openocd_gdb_readonly_probe.py`,
+  - `tools\debug_toolchain_plan_probe.py`.
+  - PASS.
+- `python tools\openocd_gdb_readonly_probe.py --json`
+  - PASS dry-run.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- First live attempt:
+  - command used OpenOCD/GDB on ports `3334/4445/6667`,
+  - failed at OpenOCD USB open with `LIBUSB_ERROR_ACCESS / open failed`,
+  - root cause was the earlier Keil F401 test session still holding ST-Link.
+- Confirmed UV4 command line was the generated F401 probe project:
+  - `D:\LoopMaster_v2.1\firmware\keil_f401_variable_probe\F401VariableProbe.uvprojx`.
+- Closed that UV4 process and retried.
+- Live OpenOCD/GDB read-only probe:
+  - PASS.
+  - OpenOCD detected `STLINK V2J46S7`.
+  - Target voltage was about `3.18V`.
+  - OpenOCD detected Cortex-M4 STM32F4 target.
+  - GDB/MI connected to OpenOCD.
+  - GDB read `$pc`.
+  - Example PC readback:
+    - `0x8000182 <probe_tick+34>`,
+    - later `0x800018c <probe_tick+44>`.
+  - GDB reported source locations around `main.c:62` and `main.c:63`.
+  - Attach halted the target, and `--resume-after-halt` restored target state to
+    `running`.
+- Confirmed after live probes:
+  - no `openocd.exe` process remains,
+  - no `arm-none-eabi-gdb.exe` process remains,
+  - no `UV4.exe` process remains.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-openocd-readonly --width 1440 --height 900`
+  - PASS.
+
+### Notes
+
+- This is the first real non-Keil debugger functionality. It is not just a
+  planned contract anymore.
+- GDB/OpenOCD attach can halt the target even when no explicit halt command is
+  sent. The executor now reports that honestly and supports explicit resume.
+- Variable writes remain disabled for OpenOCD/GDB until read-only status,
+  breakpoint control, and cleanup are proven inside the app backend.
+
+### Next Target
+
+- Add OpenOCD/GDB source-line breakpoint smoke:
+  - resolve or use a source line from the F401 AXF,
+  - insert one temporary GDB breakpoint,
+  - read it back,
+  - delete it,
+  - prove no breakpoint leak remains,
+  - keep variable writes disabled.

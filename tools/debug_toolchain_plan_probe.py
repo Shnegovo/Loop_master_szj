@@ -47,6 +47,9 @@ def main() -> int:
     _assert(not openocd.may_start_process and not openocd.may_connect_probe and not openocd.may_write_target, f"OpenOCD gates mismatch: {openocd!r}")
     _assert(any("openocd" in command for command in openocd.preview_commands), f"OpenOCD preview mismatch: {openocd.preview_commands!r}")
     _assert(any("target extended-remote" in command for command in openocd.preview_commands), f"OpenOCD GDB preview mismatch: {openocd.preview_commands!r}")
+    openocd_descriptor = debug_toolchain_descriptor("openocd_gdb")
+    _assert("live_readonly_smoke_pc" in openocd_descriptor.implemented_operations, f"OpenOCD live smoke capability missing: {openocd_descriptor!r}")
+    _assert("app_backend_attach" in openocd_descriptor.planned_operations, f"OpenOCD app backend next step missing: {openocd_descriptor!r}")
 
     pyocd = debug_toolchain_command_plan("pyocd")
     _assert(not pyocd.may_start_process and not pyocd.may_connect_probe and not pyocd.may_write_target, f"pyOCD gates mismatch: {pyocd!r}")
