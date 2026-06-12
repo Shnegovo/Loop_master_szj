@@ -7977,3 +7977,75 @@ serial active-report waveform mode.
   - read target status/PC,
   - insert/remove a source-line breakpoint,
   - only after that enable variable read/write.
+
+## Milestone 97 - pyOCD Read-Only Environment Discovery
+
+### Goal
+
+Prepare the pyOCD adapter path while keeping the same safety boundary as the
+OpenOCD/GDB profile: discover only local environment facts, do not enumerate
+debug probes, do not start a GDB server, and do not touch the target.
+
+### Completed
+
+- Added `src\core\pyocd\profile.py`.
+- Added `src\core\pyocd\__init__.py`.
+- Added read-only pyOCD profile discovery for:
+  - `pyocd` command path,
+  - installed Python `pyocd` module,
+  - likely CMSIS-Pack cache locations,
+  - target hint,
+  - GDB/telnet port defaults.
+- Added command previews for:
+  - `pyocd gdbserver --target ...`,
+  - GDB/MI remote attach,
+  - source-line breakpoint insertion,
+  - halt/run/step command shape,
+  - future Python-session memory read/write adapter.
+- Kept missing dependencies explicit:
+  - if the `pyocd` command is absent, diagnostics say so,
+  - if CMSIS-Pack cache is absent, diagnostics say the target pack still needs
+    installation,
+  - no fake live capability is exposed.
+
+### Verified
+
+- `python tools\pyocd_profile_probe.py --json`
+  - PASS.
+  - Current machine has the Python `pyocd` module installed.
+  - Current machine does not expose a `pyocd` command on PATH.
+  - Current machine has no detected pyOCD CMSIS-Pack cache directory.
+  - `ready_for_preview=true` because the Python module is present, while
+    `missing_tools=["pyocd"]` remains explicit.
+- In-memory compile check for:
+  - `src\core\pyocd\__init__.py`,
+  - `src\core\pyocd\profile.py`,
+  - `tools\pyocd_profile_probe.py`.
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+
+### Notes
+
+- `python -m py_compile ...` hit a local `__pycache__` access-denied condition,
+  so this milestone used an in-memory compile check that does not write `.pyc`
+  files. The runtime probe imports and executes the module successfully.
+- pyOCD remains a planned backend until the CLI/module execution path is wired
+  behind an explicit live-session gate.
+
+### Next Target
+
+- Surface OpenOCD/GDB and pyOCD read-only profile diagnostics inside the Debug
+  Workbench so the user can see tool readiness before choosing a backend.
+- Then start the OpenOCD/GDB live read-only executor path on the connected
+  F401/ST-Link:
+  - launch OpenOCD only when the OpenOCD backend is selected,
+  - connect GDB/MI,
+  - read stop/running state and PC,
+  - insert/remove source-line breakpoints,
+  - keep variable writes disabled until read-only state and breakpoint control
+    are proven.
