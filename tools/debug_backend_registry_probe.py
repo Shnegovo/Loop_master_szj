@@ -171,7 +171,8 @@ def main() -> int:
             _assert(diagnostic_map.get("芯片") == "MSPM0G3507", f"TI chip diagnostic missing: {diagnostic_map!r}")
             _assert("DSLite.exe" in diagnostic_map.get("预览命令", ""), f"TI preview command missing DSLite: {diagnostic_map!r}")
         contract = snapshot.to_session_contract()
-        _assert(contract.state == DebugSessionState.ERROR, f"{kind.value} contract state mismatch")
+        expected_state = DebugSessionState.DISCONNECTED if kind == DebugBackendKind.OPENOCD_GDB else DebugSessionState.ERROR
+        _assert(contract.state == expected_state, f"{kind.value} contract state mismatch")
         _assert(contract.safety_policy.dry_run, f"{kind.value} contract must stay dry-run")
         _assert(contract.backend_snapshot_id == snapshot.snapshot_id, f"{kind.value} contract snapshot id mismatch")
         _assert(not any(command.execution_enabled for command in command_matrix_for_session(contract) if command.key != "discover"), f"{kind.value} contract must not enable execution")

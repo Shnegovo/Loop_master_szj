@@ -8294,3 +8294,98 @@ GDB/MI, delete it, prove it did not leak, and restore target execution.
   - show PC evidence from GDB/MI,
   - map source-line breakpoint sync to GDB `-break-insert` / `-break-delete`,
   - keep write-variable disabled until read/breakpoint paths are stable.
+
+## Milestone 101 - OpenOCD/GDB Workbench Backend Attach
+
+### Goal
+
+Promote the verified OpenOCD/GDB smoke executor into the Debug Workbench backend
+adapter path without opening unsafe controls. The app should be able to produce
+a real backend snapshot with PC evidence while keeping halt/run/breakpoint sync
+and variable writes disabled until their UI contracts are finished.
+
+### Completed
+
+- Added `src\core\openocd_gdb\backend.py`.
+- Added `OpenOcdGdbBackendConfig`.
+- Added `OpenOcdGdbBackendAdapter`.
+- Registered OpenOCD/GDB as a real backend factory instead of a pure unavailable
+  placeholder.
+- Added `openocd_execute_enabled` to `create_default_debug_backend_registry()`.
+- Kept no-hardware tests safe:
+  - registry default keeps OpenOCD execution disabled,
+  - GUI creation enables OpenOCD execution for explicit attach.
+- OpenOCD/GDB backend now supports:
+  - dry-run discover,
+  - dry-run read-only snapshot when execution gate is closed,
+  - real read-only attach when execution gate is open,
+  - PC evidence extraction from GDB/MI stopped frame,
+  - target restore to `running`,
+  - diagnostics compatible with the existing Debug Workbench table.
+- Added `tools\openocd_gdb_backend_probe.py`.
+- Kept OpenOCD/GDB write-variable, runtime-control buttons, and app breakpoint
+  sync disabled in the backend status.
+
+### Verified
+
+- In-memory compile check for:
+  - `src\core\openocd_gdb\backend.py`,
+  - `src\core\debug_backend_registry.py`,
+  - `src\ui\gui.py`,
+  - `tools\openocd_gdb_backend_probe.py`,
+  - `tools\debug_backend_registry_probe.py`.
+  - PASS.
+- `python tools\openocd_gdb_backend_probe.py --json`
+  - PASS dry-run.
+  - Did not start OpenOCD/GDB.
+  - Snapshot state stayed `disconnected`.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-openocd-backend-probe --width 1440 --height 900`
+  - PASS.
+- Live backend attach:
+  - `python tools\openocd_gdb_backend_probe.py --execute --json`
+  - PASS.
+  - `connection_established=true`.
+  - target state returned as `running`.
+  - `pc_location.complete=true`.
+  - PC evidence source was `openocd_gdb`.
+  - Example PC evidence:
+    - path `D:\LoopMaster_v2.1\firmware\keil_f401_variable_probe\main.c`,
+    - line `65`,
+    - function `probe_tick`.
+  - backend capabilities still keep:
+    - `can_halt=false`,
+    - `can_run=false`,
+    - `can_sync_breakpoints=false`,
+    - `can_write_variables=false`.
+- Confirmed after live backend attach:
+  - no `openocd.exe` process remains,
+  - no `arm-none-eabi-gdb.exe` process remains,
+  - no `UV4.exe` process remains.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+
+### Notes
+
+- OpenOCD/GDB is now visible to the app as a real read-only attach backend.
+- The toolchain stage still says `占位` because app breakpoint sync and runtime
+  controls are not wired yet. That label can move once UI actions use the new
+  backend path directly.
+- The existing `KEIL_DISCOVERED` enum naming is still Keil-specific; this stage
+  avoided blocking real functionality on a naming cleanup.
+
+### Next Target
+
+- Wire OpenOCD/GDB breakpoint sync into the Debug Workbench:
+  - translate local source breakpoints to GDB locations,
+  - insert/read/delete through GDB/MI,
+  - reuse the smoke cleanup guarantees,
+  - surface verified gutter markers,
+  - keep variable writes disabled.

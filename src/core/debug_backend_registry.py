@@ -32,6 +32,7 @@ from src.core.debug_toolchains import (
     debug_toolchain_command_plan,
     debug_toolchain_descriptor,
 )
+from src.core.openocd_gdb import OpenOcdGdbBackendAdapter, OpenOcdGdbBackendConfig
 from src.core.openocd_gdb import default_openocd_gdb_profile
 from src.core.pyocd import default_pyocd_profile
 from src.core.ti_mspm0.profile import default_ti_mspm0_profile
@@ -206,6 +207,7 @@ def create_default_debug_backend_registry(
     keil_root: str | Path | None = None,
     uvsock_port: int = 4827,
     include_placeholders: bool = False,
+    openocd_execute_enabled: bool = False,
 ) -> DebugBackendRegistry:
     registry = DebugBackendRegistry()
     root = Path(keil_root).expanduser() if keil_root else None
@@ -229,16 +231,42 @@ def create_default_debug_backend_registry(
         )
     )
     if include_placeholders:
+        _register_openocd_gdb_backend(registry, execute_enabled=openocd_execute_enabled)
         _register_unavailable_placeholders(registry)
     return registry
 
 
+def _register_openocd_gdb_backend(registry: DebugBackendRegistry, *, execute_enabled: bool) -> None:
+    toolchain = debug_toolchain_descriptor(DebugBackendKind.OPENOCD_GDB.value)
+    registry.register(
+        DebugBackendDescriptor(
+            kind=DebugBackendKind.OPENOCD_GDB,
+            display_name=toolchain.display_name,
+            factory=lambda enabled=bool(execute_enabled): OpenOcdGdbBackendAdapter(
+                OpenOcdGdbBackendConfig(
+                    gdb_port=3334 if enabled else 3333,
+                    telnet_port=4445 if enabled else 4444,
+                    tcl_port=6667 if enabled else 6666,
+                    execute_enabled=enabled,
+                    resume_after_halt=True,
+                )
+            ),
+            lifecycle=DebugBackendWorkerLifecycleRegistration(
+                worker_key="openocd_gdb",
+                read_only_first=True,
+                notes=(
+                    "OpenOCD/GDB 后端已有显式只读 attach 执行器；默认不自启动，"
+                    "变量写入仍关闭。"
+                ),
+            ),
+            read_only_first=True,
+            notes=toolchain.combo_note,
+        )
+    )
+
+
 def _register_unavailable_placeholders(registry: DebugBackendRegistry) -> None:
     placeholders = (
-        (
-            DebugBackendKind.OPENOCD_GDB,
-            debug_toolchain_descriptor(DebugBackendKind.OPENOCD_GDB.value),
-        ),
         (
             DebugBackendKind.PYOCD,
             debug_toolchain_descriptor(DebugBackendKind.PYOCD.value),

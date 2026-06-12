@@ -1,5 +1,6 @@
 """OpenOCD/GDB debugger profile helpers."""
 
+from src.core.openocd_gdb.backend import OpenOcdGdbBackendAdapter, OpenOcdGdbBackendConfig
 from src.core.openocd_gdb.profile import OpenOcdGdbProfile, default_openocd_gdb_profile
 from src.core.openocd_gdb.readonly import (
     OpenOcdGdbReadOnlyRequest,
@@ -8,6 +9,8 @@ from src.core.openocd_gdb.readonly import (
 )
 
 __all__ = [
+    "OpenOcdGdbBackendAdapter",
+    "OpenOcdGdbBackendConfig",
     "OpenOcdGdbProfile",
     "OpenOcdGdbReadOnlyRequest",
     "OpenOcdGdbReadOnlyResult",

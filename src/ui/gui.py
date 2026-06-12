@@ -572,6 +572,7 @@ class MainWindow(QMainWindow):
             keil_root=self._keil_root,
             uvsock_port=self._debug_uvsock_port,
             include_placeholders=True,
+            openocd_execute_enabled=True,
         )
         self._debug_backend_kind = self._debug_backend_registry.default_kind()
         self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
@@ -4423,6 +4424,7 @@ class MainWindow(QMainWindow):
             keil_root=self._keil_root,
             uvsock_port=self._debug_uvsock_port,
             include_placeholders=True,
+            openocd_execute_enabled=True,
         )
         self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
         self._debug_session_controller.set_backend(self._debug_backend_kind)
@@ -4485,6 +4487,7 @@ class MainWindow(QMainWindow):
             keil_root=self._keil_root,
             uvsock_port=self._debug_uvsock_port,
             include_placeholders=True,
+            openocd_execute_enabled=True,
         )
         self._debug_backend = self._debug_backend_registry.create(self._debug_backend_kind)
         self._debug_session_controller = DebugSessionController(
