@@ -46,7 +46,10 @@ from src.core.debug_workbench import (
     debug_command_plans_for_status,
     make_debug_status,
 )
-from src.core.debug_backend_registry import create_default_debug_backend_registry
+from src.core.debug_backend_registry import (
+    create_default_debug_backend_registry,
+    debug_backend_local_profile_diagnostic_rows,
+)
 from src.core.debug_session_controller import DebugSessionController
 from src.core.debug_variable_access import (
     DebugVariableReadRequest,
@@ -4791,7 +4794,7 @@ class MainWindow(QMainWindow):
                 ("状态", "占位已注册，尚未接入执行器"),
                 ("安全边界", "不会启动进程、连接探针或写目标"),
                 ("下一步", descriptor.notes or "等待后续后端实现"),
-            )
+            ) + debug_backend_local_profile_diagnostic_rows(self._debug_backend_kind)
         return (
             ("后端", descriptor.display_name),
             ("Keil 根目录", str(self._keil_root)),

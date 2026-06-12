@@ -153,7 +153,22 @@ def main() -> int:
         _assert("工具链命令计划" in diagnostic_map, f"{kind.value} command plan diagnostics missing")
         _assert("预览命令" in diagnostic_map, f"{kind.value} preview command diagnostics missing")
         _assert(diagnostic_map.get("执行门") == "仅预览，不执行", f"{kind.value} execution gate mismatch: {diagnostic_map!r}")
+        if kind == DebugBackendKind.OPENOCD_GDB:
+            _assert(diagnostic_map.get("本机档案") == "OpenOCD/GDB 只读发现", f"OpenOCD local profile missing: {diagnostic_map!r}")
+            _assert("不启动 OpenOCD" in diagnostic_map.get("本机安全边界", ""), f"OpenOCD local safety missing: {diagnostic_map!r}")
+            _assert("openocd.exe" in diagnostic_map.get("OpenOCD", ""), f"OpenOCD executable diagnostic missing: {diagnostic_map!r}")
+            _assert("arm-none-eabi-gdb.exe" in diagnostic_map.get("GDB", ""), f"OpenOCD GDB diagnostic missing: {diagnostic_map!r}")
+            _assert("stlink.cfg" in diagnostic_map.get("OpenOCD interface", ""), f"OpenOCD interface diagnostic missing: {diagnostic_map!r}")
+            _assert("stm32f4x.cfg" in diagnostic_map.get("OpenOCD target", ""), f"OpenOCD target diagnostic missing: {diagnostic_map!r}")
+        if kind == DebugBackendKind.PYOCD:
+            _assert(diagnostic_map.get("本机档案") == "pyOCD 只读发现", f"pyOCD local profile missing: {diagnostic_map!r}")
+            _assert("不枚举探针" in diagnostic_map.get("本机安全边界", ""), f"pyOCD local safety missing: {diagnostic_map!r}")
+            _assert("pyOCD Python 模块" in diagnostic_map, f"pyOCD module diagnostic missing: {diagnostic_map!r}")
+            _assert("pyocd gdbserver" in diagnostic_map.get("pyOCD 命令预览", ""), f"pyOCD command preview missing: {diagnostic_map!r}")
         if kind == DebugBackendKind.TI_MSPM0:
+            _assert(diagnostic_map.get("本机档案") == "TI MSPM0G3507 只读发现", f"TI local profile missing: {diagnostic_map!r}")
+            _assert("不枚举探针" in diagnostic_map.get("本机安全边界", ""), f"TI local safety missing: {diagnostic_map!r}")
+            _assert(diagnostic_map.get("芯片") == "MSPM0G3507", f"TI chip diagnostic missing: {diagnostic_map!r}")
             _assert("DSLite.exe" in diagnostic_map.get("预览命令", ""), f"TI preview command missing DSLite: {diagnostic_map!r}")
         contract = snapshot.to_session_contract()
         _assert(contract.state == DebugSessionState.ERROR, f"{kind.value} contract state mismatch")

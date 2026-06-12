@@ -32,6 +32,9 @@ from src.core.debug_toolchains import (
     debug_toolchain_command_plan,
     debug_toolchain_descriptor,
 )
+from src.core.openocd_gdb import default_openocd_gdb_profile
+from src.core.pyocd import default_pyocd_profile
+from src.core.ti_mspm0.profile import default_ti_mspm0_profile
 
 
 DebugBackendFactory = Callable[[], DebugBackendAdapter]
@@ -168,6 +171,9 @@ class UnavailableDebugBackend:
                 if self.toolchain is not None
                 else ()
             )
+        ) + tuple(
+            DebugBackendDiagnostic(key, value)
+            for key, value in debug_backend_local_profile_diagnostic_rows(self.kind)
         )
         payload = {
             "backend": self.kind.value,
@@ -280,6 +286,34 @@ def _worker_key_for_backend(kind: DebugBackendKind) -> str:
     if kind == DebugBackendKind.OFFLINE:
         return "offline"
     return kind.value
+
+
+def debug_backend_local_profile_diagnostic_rows(
+    kind: DebugBackendKind | str,
+) -> tuple[tuple[str, str], ...]:
+    backend_kind = _coerce_backend_kind(kind)
+    try:
+        if backend_kind == DebugBackendKind.OPENOCD_GDB:
+            profile = default_openocd_gdb_profile()
+            return (
+                ("本机档案", "OpenOCD/GDB 只读发现"),
+                ("本机安全边界", profile.safety_note),
+            ) + profile.diagnostic_rows()
+        if backend_kind == DebugBackendKind.PYOCD:
+            profile = default_pyocd_profile()
+            return (
+                ("本机档案", "pyOCD 只读发现"),
+                ("本机安全边界", profile.safety_note),
+            ) + profile.diagnostic_rows()
+        if backend_kind == DebugBackendKind.TI_MSPM0:
+            profile = default_ti_mspm0_profile()
+            return (
+                ("本机档案", "TI MSPM0G3507 只读发现"),
+                ("本机安全边界", profile.safety_note),
+            ) + profile.diagnostic_rows()
+    except Exception as exc:
+        return (("本机档案", f"不可用：{exc}"),)
+    return ()
 
 
 def _coerce_backend_kind(kind: DebugBackendKind | str) -> DebugBackendKind:

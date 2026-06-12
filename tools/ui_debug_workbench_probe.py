@@ -687,6 +687,12 @@ def run(output_dir: Path, width: int, height: int) -> int:
                     issues.append(f"OpenOCD source diagnostics missing source rows: {diag!r}")
                 if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
                     issues.append(f"OpenOCD placeholder diagnostics mismatch: {diag!r}")
+                if diag.get("本机档案") != "OpenOCD/GDB 只读发现":
+                    issues.append(f"OpenOCD local profile diagnostics missing: {diag!r}")
+                if "openocd.exe" not in diag.get("OpenOCD", "") or "arm-none-eabi-gdb.exe" not in diag.get("GDB", ""):
+                    issues.append(f"OpenOCD tool readiness diagnostics missing: {diag!r}")
+                if "stlink.cfg" not in diag.get("OpenOCD interface", "") or "stm32f4x.cfg" not in diag.get("OpenOCD target", ""):
+                    issues.append(f"OpenOCD cfg diagnostics missing: {diag!r}")
                 if diag.get("示波采集源") != "SWD 内存" or "非/轻侵入式" not in diag.get("采集侵入性", ""):
                     issues.append(f"scope acquisition diagnostics mismatch: {diag!r}")
                 if diag.get("采集模式") != "非/轻侵入式" or diag.get("调试接管") != "不接管调试链":
@@ -788,6 +794,31 @@ Raw dump of debug contents of section .debug_line:
                 ]
                 if unsafe_actions:
                     issues.append(f"OpenOCD placeholder enabled dangerous actions: {unsafe_actions!r}")
+                pyocd_index = tab.backend_combo.findData("pyocd")
+                if pyocd_index < 0:
+                    issues.append("backend selector missing pyocd data")
+                else:
+                    tab.backend_combo.setCurrentIndex(pyocd_index)
+                    _pump(app, 0.15)
+                    if getattr(window, "_debug_backend_kind", None).value != "pyocd":
+                        issues.append(f"pyOCD backend selector did not switch main window: {getattr(window, '_debug_backend_kind', None)!r}")
+                    if "pyOCD" not in tab.status_text.text():
+                        issues.append(f"pyOCD placeholder status mismatch: {tab.status_text.text()!r}")
+                    diag = _diagnostics(tab)
+                    if diag.get("后端") != "pyOCD" or diag.get("本机档案") != "pyOCD 只读发现":
+                        issues.append(f"pyOCD placeholder diagnostics mismatch: {diag!r}")
+                    if "pyOCD Python 模块" not in diag or "pyocd gdbserver" not in diag.get("pyOCD 命令预览", ""):
+                        issues.append(f"pyOCD local readiness diagnostics missing: {diag!r}")
+                    if "不枚举探针" not in diag.get("本机安全边界", ""):
+                        issues.append(f"pyOCD safety diagnostics missing no-probe boundary: {diag!r}")
+                    unsafe_actions = [
+                        key
+                        for key in ("halt", "run", "reset", "step", "step_over", "run_to_cursor", "sync_breakpoints", "write_variables")
+                        if getattr(tab, "_action_buttons", {}).get(key) is not None
+                        and getattr(tab, "_action_buttons", {})[key].isEnabled()
+                    ]
+                    if unsafe_actions:
+                        issues.append(f"pyOCD placeholder enabled dangerous actions: {unsafe_actions!r}")
                 ti_index = tab.backend_combo.findData("ti_mspm0")
                 if ti_index < 0:
                     issues.append("backend selector missing ti_mspm0 data")

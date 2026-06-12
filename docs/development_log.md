@@ -8049,3 +8049,79 @@ debug probes, do not start a GDB server, and do not touch the target.
   - insert/remove source-line breakpoints,
   - keep variable writes disabled until read-only state and breakpoint control
     are proven.
+
+## Milestone 98 - Local Debug Profile Diagnostics In Workbench
+
+### Goal
+
+Make OpenOCD/GDB, pyOCD, and TI MSPM0 readiness visible from the Debug
+Workbench instead of hiding it in standalone probes. Selecting a backend should
+show what local tools are present, what is missing, and why no hardware action is
+being taken yet.
+
+### Completed
+
+- Added `debug_backend_local_profile_diagnostic_rows(kind)` in
+  `src\core\debug_backend_registry.py`.
+- Placeholder backend snapshots now include local read-only profile diagnostics.
+- Debug Workbench idle diagnostics for non-Keil backends now include local
+  profile diagnostics immediately after selecting the backend.
+- Added a separate `本机安全边界` row so tool-specific safety notes are not
+  hidden by the existing generic `安全边界` row.
+- OpenOCD/GDB UI diagnostics now surface:
+  - `openocd.exe`,
+  - `arm-none-eabi-gdb.exe`,
+  - OpenOCD scripts path,
+  - `interface/stlink.cfg`,
+  - `target/stm32f4x.cfg`,
+  - command previews.
+- pyOCD UI diagnostics now surface:
+  - missing `pyocd` command,
+  - present Python `pyocd` module,
+  - missing CMSIS-Pack cache,
+  - GDB server/GDB-MI command previews,
+  - no-probe/no-write safety boundary.
+- TI placeholder snapshots now also include the MSPM0G3507 local profile rows.
+
+### Verified
+
+- In-memory compile check for:
+  - `src\core\debug_backend_registry.py`,
+  - `src\ui\gui.py`,
+  - `tools\debug_backend_registry_probe.py`,
+  - `tools\ui_debug_workbench_probe.py`.
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+  - Confirmed local profile rows for OpenOCD/GDB, pyOCD, and TI placeholders.
+- `python tools\openocd_gdb_profile_probe.py --json`
+  - PASS.
+- `python tools\pyocd_profile_probe.py --json`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-local-profiles --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- Screenshot checked:
+  - `tools\ui-debug-workbench-local-profiles\01_debug_workbench_project.png`.
+
+### Notes
+
+- This is still not a live OpenOCD/pyOCD session. It is the UI-facing readiness
+  layer needed before live executor work.
+- The backend selector now exposes the practical difference between:
+  - original non/light-intrusive SWD scope,
+  - Keil live debug-backed mode,
+  - planned OpenOCD/pyOCD/TI debug-backed modes,
+  - serial active-report waveform mode.
+
+### Next Target
+
+- Build the first OpenOCD/GDB live read-only executor:
+  - launch OpenOCD only under the OpenOCD backend,
+  - connect GDB/MI,
+  - read target state and PC,
+  - insert/remove one source-line breakpoint,
+  - keep variable writes disabled until read-only controls are proven.
