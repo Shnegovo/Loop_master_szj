@@ -170,6 +170,7 @@ def default_debug_toolchains() -> tuple[DebugToolchainDescriptor, ...]:
                 "profile_discovery",
                 "dry_run_command_preview",
                 "live_readonly_smoke_pc",
+                "live_breakpoint_smoke",
             ),
             planned_operations=(
                 "app_backend_attach",

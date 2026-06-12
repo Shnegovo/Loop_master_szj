@@ -49,6 +49,7 @@ def main() -> int:
     _assert(any("target extended-remote" in command for command in openocd.preview_commands), f"OpenOCD GDB preview mismatch: {openocd.preview_commands!r}")
     openocd_descriptor = debug_toolchain_descriptor("openocd_gdb")
     _assert("live_readonly_smoke_pc" in openocd_descriptor.implemented_operations, f"OpenOCD live smoke capability missing: {openocd_descriptor!r}")
+    _assert("live_breakpoint_smoke" in openocd_descriptor.implemented_operations, f"OpenOCD breakpoint smoke capability missing: {openocd_descriptor!r}")
     _assert("app_backend_attach" in openocd_descriptor.planned_operations, f"OpenOCD app backend next step missing: {openocd_descriptor!r}")
 
     pyocd = debug_toolchain_command_plan("pyocd")

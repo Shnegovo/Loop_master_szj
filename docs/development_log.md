@@ -8217,3 +8217,80 @@ readback, and clean shutdown.
   - delete it,
   - prove no breakpoint leak remains,
   - keep variable writes disabled.
+
+## Milestone 100 - OpenOCD/GDB Temporary Breakpoint Smoke
+
+### Goal
+
+Prove the first non-Keil breakpoint path on real hardware before wiring it into
+the app. The smoke must set only one temporary GDB breakpoint, verify it through
+GDB/MI, delete it, prove it did not leak, and restore target execution.
+
+### Completed
+
+- Extended `src\core\openocd_gdb\readonly.py` with optional breakpoint smoke.
+- Extended `tools\openocd_gdb_readonly_probe.py` with:
+  - `--breakpoint main.c:62`,
+  - insert/list/delete/list verification.
+- Breakpoint smoke now records:
+  - breakpoint location,
+  - GDB breakpoint id,
+  - inserted flag,
+  - deleted flag,
+  - leak flag,
+  - detail text.
+- The executor uses a cleanup `finally` path if a breakpoint was created but
+  normal deletion did not complete.
+- Updated OpenOCD/GDB toolchain metadata with `live_breakpoint_smoke`.
+- Updated `tools\debug_toolchain_plan_probe.py` to guard the new capability.
+
+### Verified
+
+- In-memory compile check for:
+  - `src\core\openocd_gdb\readonly.py`,
+  - `tools\openocd_gdb_readonly_probe.py`,
+  - `src\core\debug_toolchains.py`,
+  - `tools\debug_toolchain_plan_probe.py`.
+  - PASS.
+- `python tools\openocd_gdb_readonly_probe.py --json`
+  - PASS dry-run.
+- Live breakpoint smoke:
+  - `python tools\openocd_gdb_readonly_probe.py --execute --resume-after-halt --breakpoint main.c:62 --gdb-port 3334 --telnet-port 4445 --tcl-port 6667 --connect-timeout 12 --gdb-timeout 10 --json`
+  - PASS.
+  - GDB/OpenOCD connected to F401/ST-Link.
+  - `$pc` readback succeeded.
+  - GDB inserted breakpoint `1`.
+  - GDB resolved `main.c:62` to `0x08000164` in `probe_tick`.
+  - GDB reported: `automatically using hardware breakpoints for read-only addresses`.
+  - `-break-list` showed breakpoint `1`.
+  - `-break-delete 1` succeeded.
+  - final `-break-list` showed zero rows.
+  - leak flag was `False`.
+  - target state was restored to `running`.
+- Confirmed after live smoke:
+  - no `openocd.exe` process remains,
+  - no `arm-none-eabi-gdb.exe` process remains,
+  - no `UV4.exe` process remains.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-openocd-breakpoint-smoke --width 1440 --height 900`
+  - PASS.
+
+### Notes
+
+- This proves OpenOCD/GDB can now do real breakpoint control on the connected
+  F401 path.
+- It still lives in the explicit smoke executor, not the GUI backend. That is
+  intentional: the next step is to wire this proven path into the Debug
+  Workbench action model with the same cleanup guarantees.
+- Variable writes remain disabled for OpenOCD/GDB.
+
+### Next Target
+
+- Promote the OpenOCD/GDB smoke executor into an app backend adapter:
+  - expose read-only attach diagnostics in Debug Workbench,
+  - show PC evidence from GDB/MI,
+  - map source-line breakpoint sync to GDB `-break-insert` / `-break-delete`,
+  - keep write-variable disabled until read/breakpoint paths are stable.

@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gdb-timeout", type=float, default=8.0)
     parser.add_argument("--allow-halt", action="store_true", help="Allow GDB to interrupt the target if PC is not readable.")
     parser.add_argument("--resume-after-halt", action="store_true", help="Resume the target if this probe halted it.")
+    parser.add_argument(
+        "--breakpoint",
+        default="",
+        help="Optional temporary GDB breakpoint location to insert/list/delete, for example main.c:62.",
+    )
     parser.add_argument("--execute", action="store_true", help="Actually start OpenOCD and GDB/MI.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -43,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         execute=bool(args.execute),
         allow_halt=bool(args.allow_halt),
         resume_after_halt=bool(args.resume_after_halt),
+        breakpoint_location=str(args.breakpoint or ""),
         connect_timeout_s=float(args.connect_timeout),
         gdb_timeout_s=float(args.gdb_timeout),
     )

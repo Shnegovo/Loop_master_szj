@@ -34,6 +34,7 @@ class OpenOcdGdbReadOnlyRequest:
     execute: bool = False
     allow_halt: bool = False
     resume_after_halt: bool = False
+    breakpoint_location: str = ""
     connect_timeout_s: float = 10.0
     gdb_timeout_s: float = 8.0
 
@@ -53,6 +54,12 @@ class OpenOcdGdbReadOnlyResult:
     pc_value: str = ""
     halted_by_probe: bool = False
     resumed_after_halt: bool = False
+    breakpoint_location: str = ""
+    breakpoint_id: str = ""
+    breakpoint_inserted: bool = False
+    breakpoint_deleted: bool = False
+    breakpoint_leaked: bool = False
+    breakpoint_detail: str = ""
 
     def diagnostic_rows(self) -> tuple[tuple[str, str], ...]:
         rows = [
@@ -65,6 +72,17 @@ class OpenOcdGdbReadOnlyResult:
             ("OpenOCD/GDB 暂停", "是" if self.halted_by_probe else "否"),
             ("OpenOCD/GDB 恢复", "是" if self.resumed_after_halt else "否"),
         ]
+        if self.breakpoint_location:
+            rows.extend(
+                (
+                    ("OpenOCD/GDB 断点", self.breakpoint_location),
+                    ("OpenOCD/GDB 断点编号", self.breakpoint_id or "--"),
+                    ("OpenOCD/GDB 断点插入", "是" if self.breakpoint_inserted else "否"),
+                    ("OpenOCD/GDB 断点删除", "是" if self.breakpoint_deleted else "否"),
+                    ("OpenOCD/GDB 断点泄漏", "是" if self.breakpoint_leaked else "否"),
+                    ("OpenOCD/GDB 断点说明", self.breakpoint_detail or "--"),
+                )
+            )
         return tuple(rows) + self.profile.diagnostic_rows()
 
     def to_record(self) -> dict[str, object]:
@@ -77,6 +95,12 @@ class OpenOcdGdbReadOnlyResult:
             "pc_value": self.pc_value,
             "halted_by_probe": self.halted_by_probe,
             "resumed_after_halt": self.resumed_after_halt,
+            "breakpoint_location": self.breakpoint_location,
+            "breakpoint_id": self.breakpoint_id,
+            "breakpoint_inserted": self.breakpoint_inserted,
+            "breakpoint_deleted": self.breakpoint_deleted,
+            "breakpoint_leaked": self.breakpoint_leaked,
+            "breakpoint_detail": self.breakpoint_detail,
             "openocd_command": list(self.openocd_command),
             "gdb_command": list(self.gdb_command),
             "openocd_lines": list(self.openocd_lines),
@@ -133,6 +157,11 @@ def _execute_readonly_probe(
     pc_value = ""
     halted_by_probe = False
     resumed_after_halt = False
+    breakpoint_id = ""
+    breakpoint_inserted = False
+    breakpoint_deleted = False
+    breakpoint_leaked = False
+    breakpoint_detail = ""
     stage = "start_openocd"
     detail = ""
     succeeded = False
@@ -197,14 +226,26 @@ def _execute_readonly_probe(
             target_state = _target_state_from_lines(gdb_reader.lines)
             pc_result = _send_mi(gdb, gdb_reader, 5, "-data-evaluate-expression $pc", request.gdb_timeout_s)
             pc_value = _parse_pc_value(pc_result)
+        if pc_value and request.breakpoint_location:
+            stage = "breakpoint_smoke"
+            breakpoint = _smoke_breakpoint(gdb, gdb_reader, request.breakpoint_location, request.gdb_timeout_s)
+            breakpoint_id = breakpoint["id"]
+            breakpoint_inserted = bool(breakpoint["inserted"])
+            breakpoint_deleted = bool(breakpoint["deleted"])
+            breakpoint_leaked = bool(breakpoint["leaked"])
+            breakpoint_detail = str(breakpoint["detail"])
         if halted_by_probe and request.resume_after_halt and target_state == "stopped":
             stage = "resume_after_halt"
             resume = _send_mi(gdb, gdb_reader, 6, "-exec-continue", request.gdb_timeout_s)
             resumed_after_halt = _mi_ok(resume) or "*running" in "\n".join(resume)
             target_state = _target_state_from_lines(gdb_reader.lines)
         if pc_value:
-            succeeded = True
+            succeeded = not request.breakpoint_location or (
+                breakpoint_inserted and breakpoint_deleted and not breakpoint_leaked
+            )
             detail = "Connected through OpenOCD/GDB and read $pc."
+            if request.breakpoint_location:
+                detail = f"{detail} Breakpoint smoke: {breakpoint_detail}"
         else:
             succeeded = _mi_ok(connect)
             detail = _mi_detail(pc_result) or "Connected through OpenOCD/GDB, but PC was not readable without additional target control."
@@ -222,6 +263,12 @@ def _execute_readonly_probe(
             pc_value=pc_value,
             halted_by_probe=halted_by_probe,
             resumed_after_halt=resumed_after_halt,
+            breakpoint_location=request.breakpoint_location,
+            breakpoint_id=breakpoint_id,
+            breakpoint_inserted=breakpoint_inserted,
+            breakpoint_deleted=breakpoint_deleted,
+            breakpoint_leaked=breakpoint_leaked,
+            breakpoint_detail=breakpoint_detail,
         )
     finally:
         _gdb_exit(gdb, gdb_reader)
@@ -248,6 +295,12 @@ def _result(
     pc_value: str = "",
     halted_by_probe: bool = False,
     resumed_after_halt: bool = False,
+    breakpoint_location: str = "",
+    breakpoint_id: str = "",
+    breakpoint_inserted: bool = False,
+    breakpoint_deleted: bool = False,
+    breakpoint_leaked: bool = False,
+    breakpoint_detail: str = "",
 ) -> OpenOcdGdbReadOnlyResult:
     return OpenOcdGdbReadOnlyResult(
         attempted=bool(request.execute),
@@ -263,6 +316,12 @@ def _result(
         pc_value=pc_value,
         halted_by_probe=halted_by_probe,
         resumed_after_halt=resumed_after_halt,
+        breakpoint_location=breakpoint_location,
+        breakpoint_id=breakpoint_id,
+        breakpoint_inserted=breakpoint_inserted,
+        breakpoint_deleted=breakpoint_deleted,
+        breakpoint_leaked=breakpoint_leaked,
+        breakpoint_detail=breakpoint_detail,
     )
 
 
@@ -396,6 +455,79 @@ def _target_state_from_lines(lines: list[str]) -> str:
         if "*running" in line:
             return "running"
     return "unknown"
+
+
+def _smoke_breakpoint(
+    gdb: subprocess.Popen[str],
+    reader: _ProcessReader,
+    location: str,
+    timeout_s: float,
+) -> dict[str, object]:
+    created_id = ""
+    inserted = False
+    deleted = False
+    leaked = False
+    detail = ""
+    try:
+        before = _send_mi(gdb, reader, 20, "-break-list", timeout_s)
+        before_ids = _parse_breakpoint_numbers(before)
+        insert = _send_mi(gdb, reader, 21, f"-break-insert {_quote_mi_arg(location)}", timeout_s)
+        created_id = _parse_breakpoint_number(insert)
+        inserted = bool(created_id) and _mi_ok(insert)
+        if not inserted:
+            detail = _mi_detail(insert) or "breakpoint insert failed"
+            return {
+                "id": created_id,
+                "inserted": inserted,
+                "deleted": deleted,
+                "leaked": True,
+                "detail": detail,
+            }
+        after_insert = _send_mi(gdb, reader, 22, "-break-list", timeout_s)
+        after_insert_ids = _parse_breakpoint_numbers(after_insert)
+        if created_id not in after_insert_ids or created_id in before_ids:
+            detail = f"breakpoint {created_id} was not uniquely visible after insert"
+            return {
+                "id": created_id,
+                "inserted": inserted,
+                "deleted": deleted,
+                "leaked": True,
+                "detail": detail,
+            }
+        delete = _send_mi(gdb, reader, 23, f"-break-delete {created_id}", timeout_s)
+        deleted = _mi_ok(delete)
+        after_delete = _send_mi(gdb, reader, 24, "-break-list", timeout_s)
+        leaked = created_id in _parse_breakpoint_numbers(after_delete)
+        detail = f"breakpoint {created_id} inserted, listed, deleted, leak={leaked}"
+        return {
+            "id": created_id,
+            "inserted": inserted,
+            "deleted": deleted,
+            "leaked": leaked,
+            "detail": detail,
+        }
+    finally:
+        if created_id and not deleted:
+            try:
+                _send_mi(gdb, reader, 25, f"-break-delete {created_id}", timeout_s)
+            except Exception:
+                pass
+
+
+def _parse_breakpoint_number(lines: tuple[str, ...]) -> str:
+    joined = "\n".join(lines)
+    match = re.search(r'bkpt=\{number="([^"]+)"', joined)
+    return match.group(1) if match else ""
+
+
+def _parse_breakpoint_numbers(lines: tuple[str, ...]) -> set[str]:
+    joined = "\n".join(lines)
+    return set(re.findall(r'number="([^"]+)"', joined))
+
+
+def _quote_mi_arg(text: str) -> str:
+    escaped = str(text).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _connection_halt_observed(openocd_lines: list[str], gdb_lines: list[str]) -> bool:
