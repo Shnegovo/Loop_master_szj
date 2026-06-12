@@ -51,6 +51,7 @@ from src.core.debug_backend_registry import (
     debug_backend_local_profile_diagnostic_rows,
 )
 from src.core.debug_session_controller import DebugSessionController
+from src.core.debug_toolchains import debug_toolchain_descriptor
 from src.core.debug_variable_access import (
     DebugVariableReadRequest,
     DebugVariableReadResult,
@@ -2676,8 +2677,8 @@ class MainWindow(QMainWindow):
                 project_path=existing.project_path,
                 diagnostics=(
                     ("来源", existing.provider),
-                    ("说明", "复用当前工作台源码树，仅用于非 Keil 后端占位预览"),
-                    ("安全边界", "不启动进程、不连接探针、不写目标"),
+                    ("说明", f"复用当前工作台源码树，作为 {provider_name} 源码预览"),
+                    ("安全边界", "源码预览不启动进程、不连接探针、不写目标"),
                 ) + tuple(diagnostics),
                 metadata={"backend": self._debug_backend_kind.value, "preview": "reuse"},
             )
@@ -3505,11 +3506,9 @@ class MainWindow(QMainWindow):
         self._refresh_hero()
 
     def _sync_keil_breakpoints_from_workbench(self):
-        if self._debug_backend_kind != DebugBackendKind.KEIL:
-            self._show_warning("Keil 断点同步", "当前调试后端不是 Keil / UVSOCK。")
-            return
+        backend_name = self._debug_backend_display_name()
         if not hasattr(self._debug_backend, "sync_breakpoints"):
-            self._show_warning("Keil 断点同步", "当前 Keil 后端尚未提供断点同步执行器。")
+            self._show_warning("断点同步", f"当前 {backend_name} 后端尚未提供断点同步执行器。")
             return
         tab = self._tab_debug_workbench
         status = tab.debug_status
@@ -3518,7 +3517,7 @@ class MainWindow(QMainWindow):
             DebugRuntimeState.PAUSED,
             DebugRuntimeState.RUNNING,
         }:
-            self._show_warning("Keil 断点同步", "请先连接 Keil 调试会话。")
+            self._show_warning("断点同步", f"请先连接 {backend_name} 调试会话。")
             return
         remote_snapshot = getattr(self, "_debug_remote_breakpoint_snapshot", None)
         remote_complete = bool(remote_snapshot is not None and getattr(remote_snapshot, "complete", False))
@@ -3526,13 +3525,16 @@ class MainWindow(QMainWindow):
         local_breakpoints = tab.local_breakpoints()
         if not local_breakpoints and not remote_breakpoints:
             if remote_snapshot is not None and not remote_complete:
-                self._show_warning("Keil 断点同步", "当前没有本地断点，且 Keil 远端断点快照不完整，不能安全清理远端断点。")
+                self._show_warning("断点同步", f"当前没有本地断点，且 {backend_name} 远端断点快照不完整，不能安全清理远端断点。")
             else:
-                self._show_warning("Keil 断点同步", "当前没有本地断点，也没有可同步的 Keil 远端断点。")
+                self._show_warning("断点同步", f"当前没有本地断点，也没有可同步的 {backend_name} 远端断点。")
             return
         transaction = transaction_by_key(getattr(tab, "_command_transactions", ()), "sync_breakpoints")
-        profile = self._make_current_keil_profile()
-        axf_path = profile.axf_path if profile is not None and profile.axf_exists else None
+        if self._debug_backend_kind == DebugBackendKind.KEIL:
+            profile = self._make_current_keil_profile()
+            axf_path = profile.axf_path if profile is not None and profile.axf_exists else None
+        else:
+            axf_path = getattr(getattr(self._debug_backend, "config", None), "axf_path", None)
         request = build_keil_breakpoint_sync_request_from_state(
             project_path=status.project_path,
             target_name=status.target_name,
@@ -3544,12 +3546,12 @@ class MainWindow(QMainWindow):
             remote_snapshot_complete=remote_complete,
             axf_path=axf_path,
         )
-        if not self._confirm_keil_breakpoint_sync(request, status):
+        if not self._confirm_keil_breakpoint_sync(request, status, backend_name=backend_name):
             return
 
         tab.set_debug_controls_ready(False)
         if hasattr(self, "_sb_label"):
-            self._sb_label.setText("正在通过 Keil 同步断点...")
+            self._sb_label.setText(f"正在通过 {backend_name} 同步断点...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             result = self._debug_backend.sync_breakpoints(request)
@@ -3583,18 +3585,18 @@ class MainWindow(QMainWindow):
         self._sync_debug_command_preview()
         summary = result.summary()
         if result.succeeded:
-            self._show_info("Keil 断点同步完成", summary)
+            self._show_info("断点同步完成", summary)
         elif getattr(result, "partial", False):
-            self._show_warning("Keil 断点同步部分完成", summary)
+            self._show_warning("断点同步部分完成", summary)
         elif getattr(result, "blocked_by_limits", False):
-            self._show_warning("Keil 断点同步受限未执行", summary)
+            self._show_warning("断点同步受限未执行", summary)
         else:
-            self._show_warning("Keil 断点同步失败", summary)
+            self._show_warning("断点同步失败", summary)
         if hasattr(self, "_sb_label"):
             self._sb_label.setText(summary)
         self._refresh_hero()
 
-    def _confirm_keil_breakpoint_sync(self, request: KeilBreakpointSyncRequest, status) -> bool:
+    def _confirm_keil_breakpoint_sync(self, request: KeilBreakpointSyncRequest, status, *, backend_name: str = "Keil") -> bool:
         counts = self._keil_breakpoint_operation_counts(request)
         invalid = counts.get("invalid", 0)
         active = counts.get("active", 0)
@@ -3608,16 +3610,16 @@ class MainWindow(QMainWindow):
             f"受限：{invalid}\n\n"
         )
         detail += self._keil_breakpoint_address_confirmation_text(request)
-        detail += self._keil_breakpoint_limited_confirmation_text(request)
+        detail += self._keil_breakpoint_limited_confirmation_text(request, backend_name=backend_name)
         if not request.remote_snapshot_complete:
-            detail += "当前 Keil 远端断点枚举还未完成，本次不会删除远端断点，只把本地断点提交到 Keil。\n"
+            detail += f"当前 {backend_name} 远端断点枚举还未完成，本次不会删除远端断点，只把本地断点提交到 {backend_name}。\n"
         if active == 0:
             detail += "本地和远端断点没有需要修改的差异，将只刷新本地验证状态。"
         else:
-            detail += "这会通过 UVSOCK 修改真实 Keil 调试会话里的断点。"
+            detail += f"这会通过 {backend_name} 修改真实调试会话里的断点。"
         return ask_pcl_confirmation(
             self,
-            "确认 Keil 断点同步",
+            f"确认 {backend_name} 断点同步",
             detail,
             confirm_text="同步",
             cancel_text="取消",
@@ -3649,7 +3651,7 @@ class MainWindow(QMainWindow):
         return text + "\n"
 
     @staticmethod
-    def _keil_breakpoint_limited_confirmation_text(request: KeilBreakpointSyncRequest) -> str:
+    def _keil_breakpoint_limited_confirmation_text(request: KeilBreakpointSyncRequest, *, backend_name: str = "Keil") -> str:
         limited = [operation for operation in request.operations if not operation.valid]
         if not limited:
             return ""
@@ -3664,7 +3666,7 @@ class MainWindow(QMainWindow):
         lines = [f"受限操作：{len(limited)} 条不会发送到 Keil。"]
         for operation in limited[:4]:
             label = action_labels.get(operation.action, operation.action.value)
-            reason = operation.reason or "该断点操作尚未验证"
+            reason = operation.reason or f"该 {backend_name} 断点操作尚未验证"
             lines.append(f"- {Path(operation.path).name}:{operation.line} {label}：{reason}")
         if len(limited) > 4:
             lines.append(f"- 另有 {len(limited) - 4} 条受限操作")
@@ -3693,6 +3695,7 @@ class MainWindow(QMainWindow):
 
     def _mark_keil_breakpoint_sync_result(self, result: KeilBreakpointSyncResult) -> None:
         tab = self._tab_debug_workbench
+        backend_name = self._debug_backend_display_name()
         failed_by_key: dict[tuple[str, int], str] = {}
         succeeded_by_key: set[tuple[str, int]] = set()
         succeeded_address_by_key: dict[tuple[str, int], int] = {}
@@ -3731,7 +3734,7 @@ class MainWindow(QMainWindow):
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=True,
-                    message=self._keil_remote_breakpoint_evidence_text(remote_by_key[key], "Keil 已回读该断点"),
+                    message=self._keil_remote_breakpoint_evidence_text(remote_by_key[key], f"{backend_name} 已回读该断点"),
                 )
             elif completed and succeeded_address_by_key.get(key) in remote_by_address:
                 remote = remote_by_address[int(succeeded_address_by_key[key])]
@@ -3739,14 +3742,14 @@ class MainWindow(QMainWindow):
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=True,
-                    message=self._keil_remote_breakpoint_evidence_text(remote, "Keil 已按地址回读该断点"),
+                    message=self._keil_remote_breakpoint_evidence_text(remote, f"{backend_name} 已按地址回读该断点"),
                 )
             elif completed and key in succeeded_by_key:
                 tab.set_breakpoint_verification(
                     breakpoint.line,
                     path=breakpoint.path,
                     verified=remote_complete,
-                    message="Keil 已接受命令，等待断点列表回读" if not remote_complete else "Keil 已同步",
+                    message=f"{backend_name} 已接受命令，等待断点列表回读" if not remote_complete else f"{backend_name} 已同步",
                 )
 
     def _mark_local_breakpoints_from_remote_snapshot(self, snapshot) -> None:
@@ -3755,6 +3758,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_tab_debug_workbench"):
             return
         tab = self._tab_debug_workbench
+        backend_name = self._debug_backend_display_name()
         remote_by_key = {
             self._keil_breakpoint_sync_key(item.path, item.line): item
             for item in getattr(snapshot, "breakpoints", ()) or ()
@@ -3770,9 +3774,9 @@ class MainWindow(QMainWindow):
             verified = bool(getattr(remote, "verified", True))
             message = str(getattr(remote, "message", "") or "")
             if verified:
-                message = message or "Keil 快照已回读该断点"
+                message = message or f"{backend_name} 快照已回读该断点"
             else:
-                message = message or "Keil 快照回读该断点但标记异常"
+                message = message or f"{backend_name} 快照回读该断点但标记异常"
             tab.set_breakpoint_verification(
                 breakpoint.line,
                 path=breakpoint.path,
@@ -4792,11 +4796,12 @@ class MainWindow(QMainWindow):
     def _debug_workbench_idle_diagnostics(self) -> tuple[tuple[str, str], ...]:
         descriptor = self._debug_backend_registry.descriptor(self._debug_backend_kind)
         if self._debug_backend_kind != DebugBackendKind.KEIL:
+            toolchain = debug_toolchain_descriptor(self._debug_backend_kind.value)
             return (
                 ("后端", descriptor.display_name),
-                ("状态", "占位已注册，尚未接入执行器"),
-                ("安全边界", "不会启动进程、连接探针或写目标"),
-                ("下一步", descriptor.notes or "等待后续后端实现"),
+                ("状态", f"{toolchain.stage_label}，等待发现或连接"),
+                ("安全边界", toolchain.safety_note),
+                ("下一步", toolchain.next_step or descriptor.notes or "等待后续后端实现"),
             ) + debug_backend_local_profile_diagnostic_rows(self._debug_backend_kind)
         return (
             ("后端", descriptor.display_name),
@@ -7522,10 +7527,32 @@ class MainWindow(QMainWindow):
             ok = True if result is None else bool(result)
             return ok, "watch disconnected" if ok else (getattr(backend, "last_error", "") or "watch disconnect failed")
 
+        def disconnect_debug_backend():
+            backend = getattr(self, "_debug_backend", None)
+            if backend is None:
+                return True, "no debug backend"
+            request = getattr(backend, "request_shutdown", None)
+            if callable(request):
+                try:
+                    request()
+                    return True, "debug backend shutdown requested"
+                except Exception as exc:
+                    return False, str(exc)
+            disconnect = getattr(backend, "disconnect", None)
+            if not callable(disconnect):
+                return True, "debug backend has no disconnect hook"
+            try:
+                result = disconnect()
+            except Exception as exc:
+                return False, str(exc)
+            ok = True if result is None else bool(result)
+            return ok, "debug backend disconnected" if ok else "debug backend disconnect failed"
+
         sequence.run("stop timers", stop_timers)
         sequence.run("request backend shutdown", request_backend_shutdown)
         sequence.run("stop sampling", stop_sampling)
         sequence.run("disconnect keil watch", disconnect_keil_watch)
+        sequence.run("disconnect debug backend", disconnect_debug_backend)
         sequence.run("stop serial", stop_serial)
         sequence.run("save config", self._save_config)
         sequence.run("disconnect backend", disconnect_backend)

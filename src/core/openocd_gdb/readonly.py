@@ -14,9 +14,12 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from src.core.debug_backend import backend_snapshot_id
+from src.core.debug_snapshots import RemoteBreakpoint, RemoteBreakpointSnapshot
 from src.core.openocd_gdb.profile import OpenOcdGdbProfile, default_openocd_gdb_profile
 
 
@@ -143,6 +146,200 @@ def run_openocd_gdb_readonly_probe(request: OpenOcdGdbReadOnlyRequest) -> OpenOc
     return _execute_readonly_probe(request, profile, openocd_command, gdb_command)
 
 
+class OpenOcdGdbLiveSession:
+    """Persistent OpenOCD/GDB session used by the app backend."""
+
+    def __init__(self, request: OpenOcdGdbReadOnlyRequest) -> None:
+        self.request = request
+        self.profile = default_openocd_gdb_profile(
+            request.openocd_root,
+            gdb_path=request.gdb_path,
+            gdb_port=request.gdb_port,
+            telnet_port=request.telnet_port,
+            tcl_port=request.tcl_port,
+        )
+        self.openocd_command = _openocd_command(self.profile)
+        self.gdb_command = _gdb_command(self.profile, request.axf_path)
+        self.openocd: subprocess.Popen[str] | None = None
+        self.gdb: subprocess.Popen[str] | None = None
+        self.openocd_reader: _ProcessReader | None = None
+        self.gdb_reader: _ProcessReader | None = None
+        self.target_state = "unknown"
+        self.pc_value = ""
+        self.halted_by_probe = False
+        self.resumed_after_halt = False
+        self._token = 10
+
+    @property
+    def alive(self) -> bool:
+        return bool(
+            self.openocd is not None
+            and self.openocd.poll() is None
+            and self.gdb is not None
+            and self.gdb.poll() is None
+            and self.gdb_reader is not None
+        )
+
+    @property
+    def gdb_lines(self) -> tuple[str, ...]:
+        return tuple(self.gdb_reader.lines if self.gdb_reader is not None else ())
+
+    @property
+    def openocd_lines(self) -> tuple[str, ...]:
+        return tuple(self.openocd_reader.lines if self.openocd_reader is not None else ())
+
+    def start(self) -> None:
+        if self.alive:
+            return
+        if not self.profile.ready_for_preview:
+            raise RuntimeError("OpenOCD/GDB profile is incomplete.")
+        self.openocd = subprocess.Popen(
+            list(self.openocd_command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_creation_flags(),
+        )
+        self.openocd_reader = _ProcessReader(self.openocd, "openocd-live")
+        if not self.openocd_reader.wait_for(
+            lambda line: _openocd_ready(line, self.profile.gdb_port) or _openocd_failed(line),
+            self.request.connect_timeout_s,
+        ):
+            raise RuntimeError("OpenOCD did not report a GDB listener before timeout.")
+        if any(_openocd_failed(line) for line in self.openocd_reader.lines):
+            raise RuntimeError(_last_matching(self.openocd_reader.lines, _openocd_failed) or "OpenOCD failed during startup.")
+        self.gdb = subprocess.Popen(
+            list(self.gdb_command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_creation_flags(),
+        )
+        self.gdb_reader = _ProcessReader(self.gdb, "gdb-live")
+        self.gdb_reader.wait_for(lambda line: "(gdb)" in line, min(3.0, self.request.gdb_timeout_s))
+        self._send("-gdb-set pagination off")
+        self._send("-gdb-set target-async on")
+        connect = self._send(f"-target-select extended-remote localhost:{self.profile.gdb_port}")
+        if not _mi_ok(connect):
+            raise RuntimeError(_mi_detail(connect) or "GDB failed to connect to OpenOCD.")
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        self.read_pc()
+        self.halted_by_probe = _connection_halt_observed(self.openocd_reader.lines, self.gdb_reader.lines)
+        if not self.pc_value and self.request.allow_halt:
+            self._halt_for_pc_readback()
+        if self.halted_by_probe and self.request.resume_after_halt and self.target_state == "stopped":
+            self.resume()
+
+    def read_pc(self) -> str:
+        self._require_alive()
+        result = self._send("-data-evaluate-expression $pc")
+        self.pc_value = _parse_pc_value(result)
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
+        return self.pc_value
+
+    def resume(self) -> bool:
+        self._require_alive()
+        result = self._send("-exec-continue")
+        self.resumed_after_halt = _mi_ok(result) or "*running" in "\n".join(result)
+        if self.resumed_after_halt and self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*running" in line, 1.0)
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
+        return self.resumed_after_halt
+
+    def _halt_for_pc_readback(self) -> None:
+        interrupt = self._send("-exec-interrupt")
+        self.halted_by_probe = self.halted_by_probe or _mi_ok(interrupt) or "*stopped" in "\n".join(interrupt)
+        if self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*stopped" in line, 1.0)
+            self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        self.read_pc()
+
+    def insert_breakpoint(self, location: str) -> tuple[str, tuple[str, ...]]:
+        result = self._send_breakpoint_mutation(f"-break-insert {_quote_mi_arg(location)}")
+        return _parse_breakpoint_number(result), result
+
+    def delete_breakpoint(self, remote_id: str) -> tuple[str, ...]:
+        return self._send_breakpoint_mutation(f"-break-delete {remote_id}")
+
+    def enable_breakpoint(self, remote_id: str) -> tuple[str, ...]:
+        return self._send_breakpoint_mutation(f"-break-enable {remote_id}")
+
+    def disable_breakpoint(self, remote_id: str) -> tuple[str, ...]:
+        return self._send_breakpoint_mutation(f"-break-disable {remote_id}")
+
+    def _send_breakpoint_mutation(self, command: str) -> tuple[str, ...]:
+        should_resume = self._ensure_stopped_for_mutation() and self.request.resume_after_halt
+        result = self._send(command)
+        if should_resume:
+            self.resume()
+        return result
+
+    def _ensure_stopped_for_mutation(self) -> bool:
+        self.target_state = _target_state_from_lines(self.gdb_reader.lines if self.gdb_reader is not None else [])
+        if self.target_state != "running":
+            return False
+        interrupt = self._send("-exec-interrupt")
+        halted = _mi_ok(interrupt) or "*stopped" in "\n".join(interrupt)
+        if self.gdb_reader is not None:
+            self.gdb_reader.wait_for(lambda line: "*stopped" in line, 1.0)
+            self.target_state = _target_state_from_lines(self.gdb_reader.lines)
+        self.halted_by_probe = self.halted_by_probe or halted or self.target_state == "stopped"
+        return self.target_state == "stopped"
+
+    def breakpoint_snapshot(
+        self,
+        *,
+        project_path: str | Path | None = None,
+        target_name: str = "",
+    ) -> RemoteBreakpointSnapshot:
+        result = self._send("-break-list")
+        breakpoints = tuple(_parse_gdb_breakpoints(result))
+        payload = {
+            "backend": "openocd_gdb",
+            "project": str(project_path or ""),
+            "target": str(target_name or ""),
+            "count": len(breakpoints),
+            "breakpoints": [item.to_record() for item in breakpoints],
+        }
+        return RemoteBreakpointSnapshot(
+            schema_version=1,
+            snapshot_id=backend_snapshot_id(payload),
+            project_path=Path(project_path).expanduser().resolve() if project_path else None,
+            target_name=str(target_name or ""),
+            captured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            complete=True,
+            breakpoints=breakpoints,
+        )
+
+    def close(self) -> None:
+        _gdb_exit(self.gdb, self.gdb_reader)
+        _terminate(self.gdb)
+        _terminate(self.openocd)
+        if self.gdb_reader is not None:
+            self.gdb_reader.join(1.0)
+        if self.openocd_reader is not None:
+            self.openocd_reader.join(1.0)
+        self.gdb = None
+        self.openocd = None
+        self.gdb_reader = None
+        self.openocd_reader = None
+
+    def _send(self, command: str) -> tuple[str, ...]:
+        self._require_alive()
+        self._token += 1
+        return _send_mi(self.gdb, self.gdb_reader, self._token, command, self.request.gdb_timeout_s)  # type: ignore[arg-type]
+
+    def _require_alive(self) -> None:
+        if not self.alive:
+            raise RuntimeError("OpenOCD/GDB live session is not connected.")
+
+
 def _execute_readonly_probe(
     request: OpenOcdGdbReadOnlyRequest,
     profile: OpenOcdGdbProfile,
@@ -203,10 +400,11 @@ def _execute_readonly_probe(
 
         stage = "gdb_connect"
         _send_mi(gdb, gdb_reader, 1, "-gdb-set pagination off", request.gdb_timeout_s)
+        _send_mi(gdb, gdb_reader, 2, "-gdb-set target-async on", request.gdb_timeout_s)
         connect = _send_mi(
             gdb,
             gdb_reader,
-            2,
+            3,
             f"-target-select extended-remote localhost:{profile.gdb_port}",
             request.gdb_timeout_s,
         )
@@ -216,15 +414,15 @@ def _execute_readonly_probe(
         target_state = _target_state_from_lines(gdb_reader.lines)
 
         stage = "read_pc"
-        pc_result = _send_mi(gdb, gdb_reader, 3, "-data-evaluate-expression $pc", request.gdb_timeout_s)
+        pc_result = _send_mi(gdb, gdb_reader, 4, "-data-evaluate-expression $pc", request.gdb_timeout_s)
         pc_value = _parse_pc_value(pc_result)
         halted_by_probe = halted_by_probe or _connection_halt_observed(openocd_reader.lines, gdb_reader.lines)
         if not pc_value and request.allow_halt:
             stage = "halt_for_pc"
-            interrupt = _send_mi(gdb, gdb_reader, 4, "-exec-interrupt", request.gdb_timeout_s)
+            interrupt = _send_mi(gdb, gdb_reader, 5, "-exec-interrupt", request.gdb_timeout_s)
             halted_by_probe = _mi_ok(interrupt) or "*stopped" in "\n".join(interrupt)
             target_state = _target_state_from_lines(gdb_reader.lines)
-            pc_result = _send_mi(gdb, gdb_reader, 5, "-data-evaluate-expression $pc", request.gdb_timeout_s)
+            pc_result = _send_mi(gdb, gdb_reader, 6, "-data-evaluate-expression $pc", request.gdb_timeout_s)
             pc_value = _parse_pc_value(pc_result)
         if pc_value and request.breakpoint_location:
             stage = "breakpoint_smoke"
@@ -236,7 +434,7 @@ def _execute_readonly_probe(
             breakpoint_detail = str(breakpoint["detail"])
         if halted_by_probe and request.resume_after_halt and target_state == "stopped":
             stage = "resume_after_halt"
-            resume = _send_mi(gdb, gdb_reader, 6, "-exec-continue", request.gdb_timeout_s)
+            resume = _send_mi(gdb, gdb_reader, 7, "-exec-continue", request.gdb_timeout_s)
             resumed_after_halt = _mi_ok(resume) or "*running" in "\n".join(resume)
             target_state = _target_state_from_lines(gdb_reader.lines)
         if pc_value:
@@ -523,6 +721,51 @@ def _parse_breakpoint_number(lines: tuple[str, ...]) -> str:
 def _parse_breakpoint_numbers(lines: tuple[str, ...]) -> set[str]:
     joined = "\n".join(lines)
     return set(re.findall(r'number="([^"]+)"', joined))
+
+
+def _parse_gdb_breakpoints(lines: tuple[str, ...]) -> tuple[RemoteBreakpoint, ...]:
+    joined = "\n".join(lines)
+    items: list[RemoteBreakpoint] = []
+    for body in re.findall(r"bkpt=\{([^{}]+)\}", joined):
+        attrs = dict(re.findall(r'([A-Za-z0-9_-]+)="([^"]*)"', body))
+        number = attrs.get("number", "")
+        address = _hex_or_none(attrs.get("addr", ""))
+        line = _int_or_zero(attrs.get("line", ""))
+        path_text = attrs.get("fullname") or attrs.get("file") or ""
+        path = Path(path_text.replace("\\\\", "\\")).expanduser() if path_text else None
+        enabled_text = attrs.get("enabled", "")
+        enabled = True if enabled_text == "y" else False if enabled_text == "n" else None
+        raw = attrs.get("original-location") or attrs.get("what") or ""
+        items.append(
+            RemoteBreakpoint(
+                path=path,
+                line=line,
+                address=address,
+                enabled=enabled,
+                remote_id=number,
+                raw_location=raw,
+                verified=True,
+                message="OpenOCD/GDB 已回读该断点",
+            )
+        )
+    return tuple(items)
+
+
+def _hex_or_none(text: str | None) -> int | None:
+    value = str(text or "").strip()
+    if not value.startswith("0x"):
+        return None
+    try:
+        return int(value, 16)
+    except ValueError:
+        return None
+
+
+def _int_or_zero(text: str | None) -> int:
+    try:
+        return int(str(text or "0"), 10)
+    except ValueError:
+        return 0
 
 
 def _quote_mi_arg(text: str) -> str:

@@ -152,9 +152,11 @@ def main() -> int:
         _assert("工具链协议" in diagnostic_map, f"{kind.value} toolchain diagnostics missing")
         _assert("工具链命令计划" in diagnostic_map, f"{kind.value} command plan diagnostics missing")
         _assert("预览命令" in diagnostic_map, f"{kind.value} preview command diagnostics missing")
-        _assert(diagnostic_map.get("执行门") == "仅预览，不执行", f"{kind.value} execution gate mismatch: {diagnostic_map!r}")
+        expected_gate = "可启动进程" if kind == DebugBackendKind.OPENOCD_GDB else "仅预览，不执行"
+        _assert(diagnostic_map.get("执行门") == expected_gate, f"{kind.value} execution gate mismatch: {diagnostic_map!r}")
         if kind == DebugBackendKind.OPENOCD_GDB:
             _assert(diagnostic_map.get("本机档案") == "OpenOCD/GDB 只读发现", f"OpenOCD local profile missing: {diagnostic_map!r}")
+            _assert(diagnostic_map.get("工具链阶段") == "已接入", f"OpenOCD toolchain stage mismatch: {diagnostic_map!r}")
             _assert("不启动 OpenOCD" in diagnostic_map.get("本机安全边界", ""), f"OpenOCD local safety missing: {diagnostic_map!r}")
             _assert("openocd.exe" in diagnostic_map.get("OpenOCD", ""), f"OpenOCD executable diagnostic missing: {diagnostic_map!r}")
             _assert("arm-none-eabi-gdb.exe" in diagnostic_map.get("GDB", ""), f"OpenOCD GDB diagnostic missing: {diagnostic_map!r}")

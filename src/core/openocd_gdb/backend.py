@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 
 from src.core.debug_backend import (
@@ -20,8 +21,15 @@ from src.core.debug_workbench import (
     make_debug_status,
 )
 from src.core.debug_toolchains import debug_toolchain_command_plan, debug_toolchain_descriptor
+from src.core.keil.breakpoint_sync import (
+    KeilBreakpointCommandResult,
+    KeilBreakpointSyncRequest,
+    KeilBreakpointSyncResult,
+)
+from src.core.keil.commands import KeilBreakpointSyncAction
 from src.core.openocd_gdb.readonly import (
     DEFAULT_AXF,
+    OpenOcdGdbLiveSession,
     OpenOcdGdbReadOnlyRequest,
     OpenOcdGdbReadOnlyResult,
     run_openocd_gdb_readonly_probe,
@@ -37,6 +45,7 @@ class OpenOcdGdbBackendConfig:
     telnet_port: int = 4444
     tcl_port: int = 6666
     execute_enabled: bool = False
+    allow_halt: bool = True
     resume_after_halt: bool = True
 
 
@@ -46,6 +55,7 @@ class OpenOcdGdbBackendAdapter:
 
     def __init__(self, config: OpenOcdGdbBackendConfig | None = None) -> None:
         self.config = config or OpenOcdGdbBackendConfig()
+        self._session: OpenOcdGdbLiveSession | None = None
 
     def discover(
         self,
@@ -87,7 +97,25 @@ class OpenOcdGdbBackendAdapter:
         query_status: bool = True,
     ) -> DebugBackendSessionSnapshot:
         execute = bool(attempt_connection and self.config.execute_enabled)
-        result = run_openocd_gdb_readonly_probe(self._request(execute=execute, project_path=project_path))
+        remote_snapshot = None
+        if execute:
+            try:
+                session = self._ensure_session(project_path)
+                if not session.pc_value:
+                    session.read_pc()
+                remote_snapshot = session.breakpoint_snapshot(project_path=project_path, target_name=target_name)
+                result = self._result_from_session(session, detail="Connected through OpenOCD/GDB and read $pc.")
+            except Exception as exc:
+                result = run_openocd_gdb_readonly_probe(self._request(execute=False, project_path=project_path))
+                result = replace(
+                    result,
+                    attempted=True,
+                    succeeded=False,
+                    stage="live_backend_attach",
+                    detail=str(exc),
+                )
+        else:
+            result = run_openocd_gdb_readonly_probe(self._request(execute=False, project_path=project_path))
         if not execute:
             detail = "OpenOCD/GDB 应用执行门未开启，尚未接入 live session。"
             state = DebugRuntimeState.DISCONNECTED
@@ -103,7 +131,11 @@ class OpenOcdGdbBackendAdapter:
             detail=detail,
             project_path=project_path,
             target_name=target_name,
-            capabilities=DebugCapabilities(can_discover=True, can_attach=True),
+            capabilities=DebugCapabilities(
+                can_discover=True,
+                can_attach=True,
+                can_sync_breakpoints=bool(execute and result.succeeded),
+            ),
             error="" if result.succeeded or not execute else result.detail,
         )
         return self._snapshot(
@@ -113,7 +145,93 @@ class OpenOcdGdbBackendAdapter:
             target_name=target_name,
             connection_attempted=bool(attempt_connection),
             connection_established=bool(execute and result.succeeded),
+            remote_breakpoint_snapshot=remote_snapshot,
         )
+
+    def sync_breakpoints(self, request: KeilBreakpointSyncRequest) -> KeilBreakpointSyncResult:
+        commands: list[KeilBreakpointCommandResult] = []
+        try:
+            session = self._ensure_session(request.project_path)
+            for operation in request.operations:
+                command_text = _gdb_command_for_operation(operation)
+                if operation.action == KeilBreakpointSyncAction.NOOP:
+                    commands.append(
+                        KeilBreakpointCommandResult(
+                            operation=operation,
+                            command=command_text,
+                            attempted=False,
+                            succeeded=True,
+                            output="noop",
+                        )
+                    )
+                    continue
+                if not operation.valid:
+                    commands.append(
+                        KeilBreakpointCommandResult(
+                            operation=operation,
+                            command=command_text,
+                            attempted=False,
+                            succeeded=False,
+                            error=operation.reason or "OpenOCD/GDB 断点操作受限，未发送",
+                        )
+                    )
+                    continue
+                try:
+                    updated_operation = operation
+                    if operation.action == KeilBreakpointSyncAction.ADD:
+                        remote_id, output_lines = session.insert_breakpoint(_gdb_location(operation))
+                        if remote_id:
+                            updated_operation = replace(operation, remote_id=remote_id)
+                        succeeded = bool(remote_id)
+                    elif operation.action == KeilBreakpointSyncAction.REMOVE:
+                        output_lines = session.delete_breakpoint(operation.remote_id)
+                        succeeded = _mi_succeeded(output_lines)
+                    elif operation.action == KeilBreakpointSyncAction.ENABLE:
+                        output_lines = session.enable_breakpoint(operation.remote_id)
+                        succeeded = _mi_succeeded(output_lines)
+                    elif operation.action == KeilBreakpointSyncAction.DISABLE:
+                        output_lines = session.disable_breakpoint(operation.remote_id)
+                        succeeded = _mi_succeeded(output_lines)
+                    else:
+                        output_lines = ()
+                        succeeded = False
+                    commands.append(
+                        KeilBreakpointCommandResult(
+                            operation=updated_operation,
+                            command=command_text,
+                            attempted=True,
+                            succeeded=succeeded,
+                            output="\n".join(output_lines),
+                            error="" if succeeded else _mi_error(output_lines) or "OpenOCD/GDB 未接受断点命令",
+                        )
+                    )
+                except Exception as exc:
+                    commands.append(
+                        KeilBreakpointCommandResult(
+                            operation=operation,
+                            command=command_text,
+                            attempted=True,
+                            succeeded=False,
+                            error=str(exc),
+                        )
+                    )
+            snapshot = session.breakpoint_snapshot(
+                project_path=request.project_path,
+                target_name=request.target_name,
+            )
+            return KeilBreakpointSyncResult(request=request, commands=tuple(commands), remote_snapshot=snapshot)
+        except Exception as exc:
+            return KeilBreakpointSyncResult(request=request, commands=tuple(commands), remote_snapshot=None, error=str(exc))
+
+    def disconnect(self, timeout: float | None = None) -> bool:
+        session = self._session
+        self._session = None
+        if session is not None:
+            session.close()
+        return True
+
+    def request_shutdown(self) -> None:
+        self.disconnect()
 
     def _request(self, *, execute: bool, project_path: str | Path | None) -> OpenOcdGdbReadOnlyRequest:
         return OpenOcdGdbReadOnlyRequest(
@@ -124,7 +242,35 @@ class OpenOcdGdbBackendAdapter:
             telnet_port=self.config.telnet_port,
             tcl_port=self.config.tcl_port,
             execute=bool(execute),
+            allow_halt=bool(self.config.allow_halt),
             resume_after_halt=bool(self.config.resume_after_halt),
+        )
+
+    def _ensure_session(self, project_path: str | Path | None) -> OpenOcdGdbLiveSession:
+        if self._session is not None and self._session.alive:
+            return self._session
+        request = self._request(execute=True, project_path=project_path)
+        session = OpenOcdGdbLiveSession(request)
+        session.start()
+        self._session = session
+        return session
+
+    @staticmethod
+    def _result_from_session(session: OpenOcdGdbLiveSession, *, detail: str) -> OpenOcdGdbReadOnlyResult:
+        return OpenOcdGdbReadOnlyResult(
+            attempted=True,
+            succeeded=True,
+            stage="live_backend_attach",
+            detail=detail,
+            profile=session.profile,
+            openocd_command=session.openocd_command,
+            gdb_command=session.gdb_command,
+            openocd_lines=session.openocd_lines,
+            gdb_lines=session.gdb_lines,
+            target_state=session.target_state,
+            pc_value=session.pc_value,
+            halted_by_probe=session.halted_by_probe,
+            resumed_after_halt=session.resumed_after_halt,
         )
 
     def _snapshot(
@@ -136,6 +282,7 @@ class OpenOcdGdbBackendAdapter:
         target_name: str,
         connection_attempted: bool,
         connection_established: bool,
+        remote_breakpoint_snapshot=None,
     ) -> DebugBackendSessionSnapshot:
         project = Path(project_path).expanduser().resolve() if project_path else None
         pc_location = _pc_location_from_result(result)
@@ -176,6 +323,8 @@ class OpenOcdGdbBackendAdapter:
             project_path=project,
             target_name=str(target_name or ""),
             pc_location=pc_location,
+            remote_breakpoint_snapshot=remote_breakpoint_snapshot,
+            remote_breakpoint_snapshot_id=getattr(remote_breakpoint_snapshot, "snapshot_id", "") if remote_breakpoint_snapshot is not None else "",
         )
 
 
@@ -213,3 +362,35 @@ def _pc_location_from_result(result: OpenOcdGdbReadOnlyResult) -> DebugPcLocatio
         complete=True,
         message="GDB/MI $pc readback",
     )
+
+
+def _gdb_location(operation) -> str:
+    if operation.path is not None and int(operation.line or 0) > 0:
+        return f"{Path(operation.path).as_posix()}:{int(operation.line)}"
+    if operation.address is not None:
+        return f"*0x{int(operation.address):08X}"
+    return f"{Path(operation.path).name}:{int(operation.line or 0)}"
+
+
+def _gdb_command_for_operation(operation) -> str:
+    if operation.action == KeilBreakpointSyncAction.ADD:
+        return f"-break-insert {_gdb_location(operation)}"
+    if operation.action == KeilBreakpointSyncAction.REMOVE:
+        return f"-break-delete {operation.remote_id}"
+    if operation.action == KeilBreakpointSyncAction.ENABLE:
+        return f"-break-enable {operation.remote_id}"
+    if operation.action == KeilBreakpointSyncAction.DISABLE:
+        return f"-break-disable {operation.remote_id}"
+    if operation.action == KeilBreakpointSyncAction.UPDATE_CONDITION:
+        return f"# unsupported condition update {_gdb_location(operation)}"
+    return f"# noop {_gdb_location(operation)}"
+
+
+def _mi_succeeded(lines: tuple[str, ...]) -> bool:
+    return any("^done" in line or "^running" in line for line in lines)
+
+
+def _mi_error(lines: tuple[str, ...]) -> str:
+    joined = "\n".join(lines)
+    match = re.search(r'msg="([^"]+)"', joined)
+    return match.group(1).replace("\\n", " ") if match else ""

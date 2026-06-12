@@ -685,8 +685,8 @@ def run(output_dir: Path, width: int, height: int) -> int:
                 diag = _diagnostics(tab)
                 if diag.get("源码文件") != str(source_manifest.source_count):
                     issues.append(f"OpenOCD source diagnostics missing source rows: {diag!r}")
-                if diag.get("后端") != "OpenOCD / GDB" or "尚未接入" not in diag.get("状态", ""):
-                    issues.append(f"OpenOCD placeholder diagnostics mismatch: {diag!r}")
+                if diag.get("后端") != "OpenOCD / GDB" or "已接入" not in diag.get("状态", ""):
+                    issues.append(f"OpenOCD live diagnostics mismatch: {diag!r}")
                 if diag.get("本机档案") != "OpenOCD/GDB 只读发现":
                     issues.append(f"OpenOCD local profile diagnostics missing: {diag!r}")
                 if "openocd.exe" not in diag.get("OpenOCD", "") or "arm-none-eabi-gdb.exe" not in diag.get("GDB", ""):

@@ -8389,3 +8389,94 @@ and variable writes disabled until their UI contracts are finished.
   - reuse the smoke cleanup guarantees,
   - surface verified gutter markers,
   - keep variable writes disabled.
+
+## Milestone 102 - OpenOCD/GDB Persistent Breakpoint Sync
+
+### User Direction Captured
+
+- 调试和示波要保留可选采集源：
+  - 原 LoopMaster 的非/轻侵入式模式继续用于高频变量示波和 PID 曲线；
+  - Keil/UVSOCK、OpenOCD/GDB、后续 pyOCD/TI 可以作为调试接管模式；
+  - 调试链模式也要能作为示波数据源，但必须明确侵入性和写入边界。
+- Keil 基础断点能力做完后，继续补 OpenOCD/pyOCD/TI；TI 优先 MSPM0G3507，资料路径为 `D:\ti`。
+
+### Changed
+
+- Added a persistent `OpenOcdGdbLiveSession` path for the app backend.
+- OpenOCD/GDB backend now keeps a live OpenOCD + GDB/MI session while connected.
+- Enabled GDB MI async mode before target attach so the app can interrupt a running target and continue sending MI commands.
+- Preserved the last verified PC readback instead of overwriting it with an empty `$pc` read while the target is running.
+- Added temporary halt/resume guards around breakpoint mutations:
+  - add breakpoint,
+  - delete breakpoint,
+  - enable breakpoint,
+  - disable breakpoint.
+- `OpenOcdGdbBackendAdapter.sync_breakpoints()` now executes the existing breakpoint sync contract through GDB/MI.
+- Remote breakpoint readback now returns a `RemoteBreakpointSnapshot` for UI gutter verification.
+- Debug Workbench breakpoint sync is no longer hardcoded to Keil-only; it can use any backend exposing `sync_breakpoints()`.
+- OpenOCD/GDB toolchain metadata now reports `已接入` instead of `占位`.
+- UI idle diagnostics now describe live/placeholder/planned toolchains from shared metadata instead of hardcoded placeholder text.
+- Source preview diagnostics now avoid saying non-Keil backends are only placeholder previews.
+- Shutdown path now asks a generic debug backend to disconnect/request shutdown, preventing OpenOCD/GDB process residue.
+
+### Verified
+
+- Compile check:
+  - `src\core\openocd_gdb\readonly.py`
+  - `src\core\openocd_gdb\backend.py`
+  - `src\core\debug_toolchains.py`
+  - `src\ui\gui.py`
+  - PASS.
+- `python tools\openocd_gdb_backend_probe.py --json`
+  - PASS dry-run.
+  - Execution gate stayed closed.
+  - No OpenOCD/GDB process was started.
+- `python tools\openocd_gdb_backend_probe.py --execute --sync-breakpoint main.c:62 --json`
+  - PASS on the connected F401CCU6 + ST-Link.
+  - Connected through OpenOCD/GDB.
+  - Read verified PC evidence from GDB/MI stopped frame.
+  - Restored target to `running`.
+  - Added breakpoint at `main.c:62`.
+  - Read remote breakpoint mirror with address `0x08000164`.
+  - Deleted breakpoint `1`.
+  - Final remote breakpoint snapshot was empty.
+- `python tools\openocd_gdb_readonly_probe.py --execute --resume-after-halt --allow-halt --breakpoint main.c:62 --gdb-port 3334 --telnet-port 4445 --tcl-port 6667 --json`
+  - PASS.
+  - Breakpoint smoke inserted, listed, deleted, leak `False`.
+- `python tools\ui_debug_workbench_probe.py --output-dir tools\ui-debug-workbench-openocd-live-metadata --width 1440 --height 900`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+- `python tools\debug_transaction_shell_probe.py`
+  - PASS.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- Final process check:
+  - no `openocd.exe` process remains,
+  - no `arm-none-eabi-gdb.exe` process remains,
+  - no `UV4.exe` process remains.
+
+### Notes
+
+- OpenOCD/GDB is now a real backend for attach + PC evidence + breakpoint sync.
+- Variable read/write remains disabled for OpenOCD/GDB until the next stage.
+- Runtime control buttons (`halt/run/reset/step`) remain disabled for OpenOCD/GDB until the next stage.
+- GDB reports that `set target-async` is deprecated in favor of `set mi-async`; current command still succeeds, but the next cleanup can switch to `mi-async` to reduce warning noise.
+
+### Next Target
+
+- Add OpenOCD/GDB runtime controls:
+  - halt,
+  - run,
+  - reset,
+  - step,
+  - step over if supported cleanly.
+- Then add OpenOCD/GDB variable read/write through the shared variable access adapter.
+- Keep the acquisition source selector explicit:
+  - SWD/serial/Keil watch for non/轻侵入示波,
+  - Keil/OpenOCD/pyOCD/TI for调试接管模式,
+  - each mode shows whether it can read variables, write variables, sync breakpoints, and feed the scope.
