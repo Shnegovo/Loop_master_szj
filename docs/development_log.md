@@ -7896,3 +7896,84 @@ plan contract and explicit safety gates.
   - add pyOCD environment discovery without enumerating probes by default,
   - keep TI focused on MSPM0G3507 and validate command/profile shape before any
     hardware run.
+
+## Milestone 96 - OpenOCD/GDB Read-Only Profile Discovery
+
+### Goal
+
+Prepare the first non-Keil debugger path by discovering local OpenOCD/GDB tools
+without starting OpenOCD, connecting ST-Link, enumerating probes, or writing the
+target. Also preserve the user requirement that scope/debug sources remain
+selectable between original non/light-intrusive mode, debugger-backed modes, and
+serial active-report waveform mode.
+
+### Completed
+
+- Added `src\core\openocd_gdb\profile.py`.
+- Added `src\core\openocd_gdb\__init__.py`.
+- Added read-only OpenOCD/GDB profile discovery for:
+  - local `openocd.exe`,
+  - local `arm-none-eabi-gdb.exe`,
+  - OpenOCD scripts directory,
+  - `interface/stlink.cfg`,
+  - `target/stm32f4x.cfg`,
+  - GDB/telnet/TCL port defaults.
+- Added command previews for:
+  - OpenOCD server launch shape,
+  - GDB/MI launch shape,
+  - source-line breakpoint insertion,
+  - halt/run/step commands,
+  - expression evaluation.
+- Tightened `ready_for_preview` so it requires OpenOCD, GDB, scripts, interface
+  cfg, and target cfg to all exist.
+- Kept the safety boundary explicit:
+  - no OpenOCD process launch,
+  - no GDB connection,
+  - no probe enumeration,
+  - no target write.
+- Confirmed the acquisition source contract already represents the requested
+  mode split:
+  - `SWD 内存` as original non/light-intrusive scope,
+  - `Keil Watch` as implemented debugger-backed scope/debug path,
+  - `OpenOCD/GDB`, `pyOCD`, and `TI MSPM0G3507` as planned debugger-backed
+    scope/debug paths,
+  - `串口波形` as serial active-report waveform path.
+
+### Verified
+
+- `python -m py_compile src\core\openocd_gdb\__init__.py src\core\openocd_gdb\profile.py tools\openocd_gdb_profile_probe.py`
+  - PASS.
+- `python tools\openocd_gdb_profile_probe.py --json`
+  - PASS.
+  - Found `D:\openocd\xpack-openocd-0.12.0-7\bin\openocd.exe`.
+  - Found `C:\ST\STM32CubeCLT_1.18.0\GNU-tools-for-STM32\bin\arm-none-eabi-gdb.exe`.
+  - Found `D:\openocd\xpack-openocd-0.12.0-7\openocd\scripts\interface\stlink.cfg`.
+  - Found `D:\openocd\xpack-openocd-0.12.0-7\openocd\scripts\target\stm32f4x.cfg`.
+  - `ready_for_preview=true`.
+- `python tools\acquisition_sources_probe.py`
+  - PASS.
+- `python tools\debug_toolchain_plan_probe.py`
+  - PASS.
+- `python tools\debug_backend_registry_probe.py`
+  - PASS.
+- `python tools\debug_session_controller_probe.py`
+  - PASS.
+
+### Notes
+
+- This milestone is deliberately read-only. It proves the local OpenOCD/GDB
+  path is discoverable and commandable, but does not yet open a live debug
+  session.
+- Keil remains the only live backend with proven variable write and breakpoint
+  sync at this point.
+
+### Next Target
+
+- Add pyOCD environment discovery without probe enumeration by default.
+- Surface the OpenOCD/GDB profile diagnostics in the Debug Workbench.
+- Then start the first live OpenOCD/GDB read-only session path:
+  - launch OpenOCD under an explicit execution gate,
+  - connect GDB/MI,
+  - read target status/PC,
+  - insert/remove a source-line breakpoint,
+  - only after that enable variable read/write.
